@@ -47,7 +47,9 @@ export interface Department {
 }
 
 export interface ShiftPlan {
-  year: number;
+  year: number;                // start year for the plan (backwards compatible)
+  startMonth?: number;         // 0 = Januar — optional, present when plan had start month selected
+  months?: number;             // number of months included in the plan (typically 12)
   assignments: ShiftAssignment[];
 }
 

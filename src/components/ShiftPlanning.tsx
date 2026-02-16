@@ -34,8 +34,8 @@ export function ShiftPlanning() {
       try {
         const assignments = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12);
         
-        // Remove any existing plan for the selected start year, then store new assignments
-        createShiftPlan(selectedYear);
+        // Remove any existing plan for the selected start year/month, then store new assignments
+        createShiftPlan(selectedYear, selectedMonth, 12);
         assignments.forEach(assignment => updateShiftAssignment(assignment));
 
         const end = new Date(selectedYear, selectedMonth + 12, 0); // last day of 12-month period

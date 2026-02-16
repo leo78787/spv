@@ -15,7 +15,7 @@ interface EmployeeShiftStats {
 }
 
 export function FairnessKPIs() {
-  const { employees, departments, shiftPlan, currentYear } = useStore();
+  const { employees, departments, shiftPlan } = useStore();
   const [selectedShiftType, setSelectedShiftType] = useState<ShiftType | 'all'>('all');
   
   // Determine if an employee can work a specific shift
@@ -157,7 +157,11 @@ export function FairnessKPIs() {
     <div className="p-6">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Fairness KPIs</h2>
-        <p className="text-gray-600">Echtzeit-Analyse der Schichtverteilung für {currentYear}</p>
+        <p className="text-gray-600">Echtzeit-Analyse der Schichtverteilung für {shiftPlan?.startMonth !== undefined && shiftPlan?.months ? (
+          `${new Date(shiftPlan.year, shiftPlan.startMonth!).toLocaleString('de-DE', { month: 'long' })} ${shiftPlan.year} — ${new Date(shiftPlan.year, (shiftPlan.startMonth! + shiftPlan.months!) - 1).toLocaleString('de-DE', { month: 'long' })} ${new Date(shiftPlan.year, shiftPlan.startMonth!).getFullYear() + Math.floor((shiftPlan.startMonth! + shiftPlan.months! - 1) / 12)}`
+        ) : (
+          `${shiftPlan?.year}`
+        )}</p>
       </div>
       
       {/* Filter */}

@@ -19,7 +19,7 @@ interface AppState {
   
   // Shift plan actions
   setCurrentYear: (year: number) => void;
-  createShiftPlan: (year: number) => void;
+  createShiftPlan: (year: number, startMonth?: number, months?: number) => void;
   updateShiftAssignment: (assignment: ShiftAssignment) => void;
   deleteShiftAssignment: (id: string) => void;
   confirmShiftAssignment: (id: string) => void;
@@ -126,10 +126,10 @@ export const useStore = create<AppState>((set) => {
       return newState;
     }),
     
-    createShiftPlan: (year: number) => set((state) => {
+    createShiftPlan: (year: number, startMonth = 0, months = 12) => set((state) => {
       const newState = {
         ...state,
-        shiftPlan: { year, assignments: [] }
+        shiftPlan: { year, startMonth, months, assignments: [] }
       };
       saveToLocalStorage('schichtplan-storage', newState);
       return newState;
