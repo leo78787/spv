@@ -249,11 +249,15 @@ export function generateShiftPeriods(year: number): Map<ShiftType, { startDate: 
   const yearStart = startOfYear(new Date(year, 0, 1));
   const yearEnd = endOfYear(new Date(year, 11, 31));
   
+  // Reuse range-based generator for a full calendar year
+  const fullYearStart = yearStart;
+  const fullYearEnd = yearEnd;
+
   // Nachtbereitschaft: Saturday to Saturday (weekly)
   const nightShifts: { startDate: Date; endDate: Date }[] = [];
-  let currentDate = startOfWeek(yearStart, { weekStartsOn: 6 }); // Start on Saturday
+  let currentDate = startOfWeek(fullYearStart, { weekStartsOn: 6 }); // Start on Saturday
   
-  while (currentDate <= yearEnd) {
+  while (currentDate <= fullYearEnd) {
     const shiftEnd = addDays(currentDate, 6); // Saturday to Saturday (7 days)
     nightShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
     currentDate = addDays(currentDate, 7);
@@ -262,9 +266,9 @@ export function generateShiftPeriods(year: number): Map<ShiftType, { startDate: 
   
   // Verschobene Schicht: Monday to Friday (weekly)
   const lateShifts: { startDate: Date; endDate: Date }[] = [];
-  currentDate = startOfWeek(yearStart, { weekStartsOn: 1 }); // Start on Monday
+  currentDate = startOfWeek(fullYearStart, { weekStartsOn: 1 }); // Start on Monday
   
-  while (currentDate <= yearEnd) {
+  while (currentDate <= fullYearEnd) {
     const shiftEnd = addDays(currentDate, 4); // Monday to Friday
     lateShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
     currentDate = addWeeks(currentDate, 1);
@@ -273,9 +277,9 @@ export function generateShiftPeriods(year: number): Map<ShiftType, { startDate: 
   
   // Frühschicht (Weekend): Saturday to Sunday
   const earlyShifts: { startDate: Date; endDate: Date }[] = [];
-  currentDate = startOfWeek(yearStart, { weekStartsOn: 6 }); // Start on Saturday
+  currentDate = startOfWeek(fullYearStart, { weekStartsOn: 6 }); // Start on Saturday
   
-  while (currentDate <= yearEnd) {
+  while (currentDate <= fullYearEnd) {
     const shiftEnd = addDays(currentDate, 1); // Saturday to Sunday
     earlyShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
     currentDate = addWeeks(currentDate, 1);
@@ -286,15 +290,66 @@ export function generateShiftPeriods(year: number): Map<ShiftType, { startDate: 
 }
 
 /**
+ * Generate shift periods for an arbitrary start date and month range (e.g. 12 months)
+ */
+export function generateShiftPeriodsForRange(startDate: Date, months: number): Map<ShiftType, { startDate: Date; endDate: Date }[]> {
+  const periods = new Map<ShiftType, { startDate: Date; endDate: Date }[]>();
+  const rangeStart = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  const rangeEnd = addDays(new Date(rangeStart.getFullYear(), rangeStart.getMonth() + months, 1), -1);
+
+  // Nachtbereitschaft: Saturday to Saturday
+  const nightShifts: { startDate: Date; endDate: Date }[] = [];
+  let currentDate = startOfWeek(rangeStart, { weekStartsOn: 6 }); // nearest Saturday on or before rangeStart
+  while (currentDate <= rangeEnd) {
+    const shiftEnd = addDays(currentDate, 6);
+    // include if overlaps range
+    if (shiftEnd >= rangeStart && currentDate <= rangeEnd) {
+      nightShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
+    }
+    currentDate = addDays(currentDate, 7);
+  }
+  periods.set('nachtbereitschaft', nightShifts);
+
+  // Verschobene Schicht: Monday to Friday
+  const lateShifts: { startDate: Date; endDate: Date }[] = [];
+  currentDate = startOfWeek(rangeStart, { weekStartsOn: 1 }); // Monday on or before rangeStart
+  while (currentDate <= rangeEnd) {
+    const shiftEnd = addDays(currentDate, 4);
+    if (shiftEnd >= rangeStart && currentDate <= rangeEnd) {
+      lateShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
+    }
+    currentDate = addWeeks(currentDate, 1);
+  }
+  periods.set('verschieben', lateShifts);
+
+  // Frühschicht: Saturday to Sunday
+  const earlyShifts: { startDate: Date; endDate: Date }[] = [];
+  currentDate = startOfWeek(rangeStart, { weekStartsOn: 6 });
+  while (currentDate <= rangeEnd) {
+    const shiftEnd = addDays(currentDate, 1);
+    if (shiftEnd >= rangeStart && currentDate <= rangeEnd) {
+      earlyShifts.push({ startDate: new Date(currentDate), endDate: shiftEnd });
+    }
+    currentDate = addWeeks(currentDate, 1);
+  }
+  periods.set('fruehschicht', earlyShifts);
+
+  return periods;
+}
+
+/**
  * Automatically generate complete shift plan for the entire year
  * Order: 1. Night shifts, 2. Late shifts, 3. Early (weekend) shifts
  */
 export function generateAutomaticShiftPlan(
   employees: Employee[],
-  year: number
+  startYear: number,
+  startMonth = 0, // 0 = Januar
+  months = 12
 ): ShiftAssignment[] {
   const assignments: ShiftAssignment[] = [];
-  const periods = generateShiftPeriods(year);
+  const startDate = new Date(startYear, startMonth, 1);
+  const periods = generateShiftPeriodsForRange(startDate, months);
   
   // Priority order adjusted so `verschieben` is assigned before `nachtbereitschaft`
   // (prevents Nacht immediately after a Verschobene Woche)

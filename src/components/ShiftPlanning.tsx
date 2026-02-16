@@ -3,10 +3,12 @@ import { Calendar, Users, AlertCircle, Sparkles } from 'lucide-react';
 import { useStore } from '../store';
 import { generateAutomaticShiftPlan } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
+import { getMonthName } from '../utils/helpers';
 
 export function ShiftPlanning() {
   const { employees, shiftPlan, createShiftPlan, updateShiftAssignment } = useStore();
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(0); // 0 = Januar
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationResult, setGenerationResult] = useState<{
     success: boolean;
@@ -30,15 +32,17 @@ export function ShiftPlanning() {
     // Simulate async operation for better UX
     setTimeout(() => {
       try {
-        const assignments = generateAutomaticShiftPlan(employees, selectedYear);
+        const assignments = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12);
         
-        // Remove any existing plan for the selected year, then store new assignments
+        // Remove any existing plan for the selected start year, then store new assignments
         createShiftPlan(selectedYear);
         assignments.forEach(assignment => updateShiftAssignment(assignment));
 
+        const end = new Date(selectedYear, selectedMonth + 12, 0); // last day of 12-month period
+
         setGenerationResult({
           success: true,
-          message: `Schichtplan erfolgreich generiert!`,
+          message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
           assignmentCount: assignments.length
         });
       } catch (error) {
@@ -53,9 +57,12 @@ export function ShiftPlanning() {
     }, 500);
   };
 
+  const planStart = new Date(selectedYear, selectedMonth, 1);
+  const planEnd = new Date(selectedYear, selectedMonth + 12, 0); // last day of the 12-month range
+
   const currentYearAssignments = shiftPlan?.assignments.filter((assignment) => {
-    const assignmentYear = new Date(assignment.startDate).getFullYear();
-    return assignmentYear === selectedYear;
+    const aStart = new Date(assignment.startDate);
+    return aStart >= planStart && aStart <= planEnd;
   }) || [];
 
   const assignmentsByType = {
@@ -82,21 +89,34 @@ export function ShiftPlanning() {
       {/* Year Selection & Generate */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Jahr auswählen
-            </label>
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(Number(e.target.value))}
-              className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              {[2024, 2025, 2026, 2027, 2028].map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Startjahr</label>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                {[2024, 2025, 2026, 2027, 2028].map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Startmonat</label>
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                className="w-full md:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <option key={i} value={i}>{getMonthName(i)}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <button
@@ -158,7 +178,7 @@ export function ShiftPlanning() {
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
             <Users className="h-5 w-5" />
-            Aktueller Schichtplan für {selectedYear}
+            Aktueller Schichtplan für {getMonthName(selectedMonth)} {selectedYear} — {getMonthName(planEnd.getMonth())} {planEnd.getFullYear()}
           </h3>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
