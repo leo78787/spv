@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
 import { generateId, parseDateInput, formatDateForInput } from '../utils/helpers';
 import { UserPlus, Trash2, Edit2, Save, X } from 'lucide-react';
+import { differenceInCalendarDays } from 'date-fns';
 
 export function EmployeeManagement() {
   const { employees, departments, addEmployee, updateEmployee, deleteEmployee } = useStore();
@@ -79,6 +80,16 @@ export function EmployeeManagement() {
       ...prev,
       preferences: [...(prev.preferences || []), newPref]
     }));
+  };
+
+  const calcTotalVacationDays = (emp: Partial<Employee> | Employee) => {
+    const single = (emp.vacationDays || []).length;
+    const ranges = (emp.vacationRanges || []).reduce((sum, r) => {
+      const s = new Date(r.startDate);
+      const e = new Date(r.endDate);
+      return sum + (differenceInCalendarDays(e, s) + 1);
+    }, 0);
+    return single + ranges;
   };
 
   // Vacation ranges (multi-day)
@@ -192,7 +203,8 @@ export function EmployeeManagement() {
           <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-700">Urlaubszeiträume</label>
-              <div>
+              <div className="flex items-center gap-3">
+                <div className="text-sm text-gray-600">Bisher genommen: {calcTotalVacationDays(formData)} Tag(e)</div>
                 <button
                   type="button"
                   onClick={addVacationRange}
@@ -368,16 +380,17 @@ export function EmployeeManagement() {
                 {(employee.vacationDays.length > 0 || (employee.vacationRanges?.length || 0) > 0) && (
                   <div className="text-gray-600">
                     <span className="font-medium">Urlaub:</span>
+                    <span className="ml-2 font-semibold">{calcTotalVacationDays(employee)} Tag(e)</span>
                     <div className="text-sm mt-1">
-                      {employee.vacationDays.length > 0 && (
-                        <div>{employee.vacationDays.length} Tag(e)</div>
-                      )}
                       {employee.vacationRanges && employee.vacationRanges.length > 0 && (
                         <div className="mt-1 space-y-1">
                           {employee.vacationRanges.map((r, i) => (
                             <div key={i} className="text-xs text-gray-600">{new Date(r.startDate).toLocaleDateString('de-DE')} — {new Date(r.endDate).toLocaleDateString('de-DE')}</div>
                           ))}
                         </div>
+                      )}
+                      {employee.vacationDays && employee.vacationDays.length > 0 && (
+                        <div className="mt-1 text-xs text-gray-600">(Einzeltage: {employee.vacationDays.length})</div>
                       )}
                     </div>
                   </div>
