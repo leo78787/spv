@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../store';
 import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, parseDateInput, formatDateForInput } from '../utils/helpers';
 import { UserPlus, Trash2, Edit2, Save, X } from 'lucide-react';
 
 export function EmployeeManagement() {
@@ -84,7 +84,7 @@ export function EmployeeManagement() {
   const updateVacationDay = (index: number, date: string) => {
     setFormData(prev => {
       const newVacationDays = [...(prev.vacationDays || [])];
-      newVacationDays[index] = new Date(date);
+      newVacationDays[index] = parseDateInput(date);
       return { ...prev, vacationDays: newVacationDays };
     });
   };
@@ -236,7 +236,7 @@ export function EmployeeManagement() {
                 <div key={`d-${index}`} className="flex gap-2 items-center">
                   <input
                     type="date"
-                    value={date instanceof Date ? date.toISOString().split('T')[0] : ''}
+                        value={date instanceof Date ? formatDateForInput(date) : ''}
                     onChange={e => updateVacationDay(index, e.target.value)}
                     className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
@@ -257,8 +257,8 @@ export function EmployeeManagement() {
                       <label className="block text-xs text-gray-500">Von</label>
                       <input
                         type="date"
-                        value={r.startDate instanceof Date ? r.startDate.toISOString().split('T')[0] : ''}
-                        onChange={e => updateVacationRange(index, { startDate: new Date(e.target.value) })}
+                        value={r.startDate instanceof Date ? formatDateForInput(r.startDate) : ''}
+                        onChange={e => updateVacationRange(index, { startDate: parseDateInput(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
                       />
                     </div>
@@ -266,8 +266,8 @@ export function EmployeeManagement() {
                       <label className="block text-xs text-gray-500">Bis</label>
                       <input
                         type="date"
-                        value={r.endDate instanceof Date ? r.endDate.toISOString().split('T')[0] : ''}
-                        onChange={e => updateVacationRange(index, { endDate: new Date(e.target.value) })}
+                        value={r.endDate instanceof Date ? formatDateForInput(r.endDate) : ''}
+                        onChange={e => updateVacationRange(index, { endDate: parseDateInput(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
                       />
                     </div>
@@ -326,8 +326,8 @@ export function EmployeeManagement() {
                       <label className="block text-xs text-gray-600 mb-1">Von</label>
                       <input
                         type="date"
-                        value={pref.startDate instanceof Date ? pref.startDate.toISOString().split('T')[0] : ''}
-                        onChange={e => updatePreference(index, { startDate: new Date(e.target.value) })}
+                        value={pref.startDate instanceof Date ? formatDateForInput(pref.startDate) : ''}
+                        onChange={e => updatePreference(index, { startDate: parseDateInput(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
                       />
                     </div>
@@ -335,8 +335,8 @@ export function EmployeeManagement() {
                       <label className="block text-xs text-gray-600 mb-1">Bis</label>
                       <input
                         type="date"
-                        value={pref.endDate instanceof Date ? pref.endDate.toISOString().split('T')[0] : ''}
-                        onChange={e => updatePreference(index, { endDate: new Date(e.target.value) })}
+                        value={pref.endDate instanceof Date ? formatDateForInput(pref.endDate) : ''}
+                        onChange={e => updatePreference(index, { endDate: parseDateInput(e.target.value) })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
                       />
                     </div>

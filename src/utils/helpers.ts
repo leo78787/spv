@@ -26,3 +26,18 @@ export function getMonthName(monthIndex: number): string {
   ];
   return months[monthIndex];
 }
+
+// Parse a date string from an <input type="date"> (YYYY-MM-DD) into a local Date at midnight
+export function parseDateInput(value: string): Date {
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// Format a Date for <input type="date"> value (YYYY-MM-DD) using local date components
+export function formatDateForInput(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
