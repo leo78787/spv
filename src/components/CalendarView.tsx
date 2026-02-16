@@ -11,7 +11,10 @@ import {
   format,
   isSameDay,
   getDay,
-  addDays
+  addDays,
+  startOfDay,
+  endOfDay,
+  isWithinInterval
 } from 'date-fns';
 
 export function CalendarView() {
@@ -116,14 +119,18 @@ export function CalendarView() {
     const emp = employees.find(e => e.id === employeeId);
     if (!emp) return false;
 
-    const dayString = date.toDateString();
-    const single = (emp.vacationDays || []).some(v => new Date(v).toDateString() === dayString);
+    // normalize date
+    const d = startOfDay(date);
+
+    // single-day vacation check
+    const single = (emp.vacationDays || []).some(v => startOfDay(new Date(v)).getTime() === d.getTime());
     if (single) return true;
 
+    // range check (inclusive)
     const inRange = (emp.vacationRanges || []).some(r => {
-      const s = new Date(r.startDate);
-      const e = new Date(r.endDate);
-      return date >= s && date <= e;
+      const s = startOfDay(new Date(r.startDate));
+      const e = endOfDay(new Date(r.endDate));
+      return isWithinInterval(d, { start: s, end: e });
     });
 
     return inRange;
@@ -229,18 +236,18 @@ export function CalendarView() {
 
     // Vacation always blocks
     const isEmpOnVacation = (() => {
-      const start = new Date(editingShift.assignment.startDate);
-      const end = new Date(editingShift.assignment.endDate);
+      const start = startOfDay(new Date(editingShift.assignment.startDate));
+      const end = endOfDay(new Date(editingShift.assignment.endDate));
       // single days overlapping range
-      const singleOverlap = empObj.vacationDays.some(vacDay => {
-        const vac = new Date(vacDay);
-        return vac >= start && vac <= end;
+      const singleOverlap = (empObj.vacationDays || []).some(vacDay => {
+        const vac = startOfDay(new Date(vacDay));
+        return isWithinInterval(vac, { start, end });
       });
       if (singleOverlap) return true;
       // ranges overlapping
       const rangeOverlap = (empObj.vacationRanges || []).some(r => {
-        const s = new Date(r.startDate);
-        const e = new Date(r.endDate);
+        const s = startOfDay(new Date(r.startDate));
+        const e = endOfDay(new Date(r.endDate));
         return s <= end && e >= start;
       });
       return rangeOverlap;
@@ -703,23 +710,25 @@ export function CalendarView() {
                   const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification;
 
                   const eligibleEmployees = employees.filter(e => {
-                    const start = new Date(editingShift.assignment.startDate);
-                    const end = new Date(editingShift.assignment.endDate);
+                    const start = startOfDay(new Date(editingShift.assignment.startDate));
+                    const end = endOfDay(new Date(editingShift.assignment.endDate));
 
                     const singleVacOverlap = (e.vacationDays || []).some(vacDay => {
-                      const v = new Date(vacDay);
-                      return v >= start && v <= end;
+                      const v = startOfDay(new Date(vacDay));
+                      return isWithinInterval(v, { start, end });
                     });
                     if (singleVacOverlap) return false;
 
                     const rangeVacOverlap = (e.vacationRanges || []).some(r => {
-                      const s = new Date(r.startDate);
-                      const en = new Date(r.endDate);
+                      const s = startOfDay(new Date(r.startDate));
+                      const en = endOfDay(new Date(r.endDate));
                       return s <= end && en >= start;
                     });
                     if (rangeVacOverlap) return false;
+
                     const qual = editingShift.assignment.shiftType !== 'verschieben' && (e.isOver55 || !e.hasL2);
                     if (qual) return false;
+
                     const adj = editingShift.assignment.shiftType === 'fruehschicht'
                       ? isBlockedFromFruehschichtDueToAdjacency(e, editingShift.date, shiftPlan?.assignments || [])
                       : editingShift.assignment.shiftType === 'verschieben'

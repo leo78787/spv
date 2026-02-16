@@ -12,7 +12,9 @@ import {
   addDays,
   subDays,
   isWeekend,
-  isSameDay
+  isSameDay,
+  startOfDay,
+  endOfDay
 } from 'date-fns';
 
 /**
@@ -20,21 +22,25 @@ import {
  * Rule: No weekend work before or after vacation
  */
 function canWorkOnDate(employee: Employee, date: Date): boolean {
-  // helper: check single-day + ranges
-  const hasVacationOn = (d: Date) => {
-    const dayString = d.toDateString();
-    const single = (employee.vacationDays || []).some(vacDay => new Date(vacDay).toDateString() === dayString);
+  // helper: check single-day + ranges using normalized day boundaries
+  const d = startOfDay(date);
+
+  const hasVacationOn = (day: Date) => {
+    const dayStart = startOfDay(day);
+    // single-day entries
+    const single = (employee.vacationDays || []).some(vacDay => startOfDay(new Date(vacDay)).getTime() === dayStart.getTime());
     if (single) return true;
+    // ranges
     const ranges = (employee.vacationRanges || []).some(r => {
-      const start = new Date(r.startDate);
-      const end = new Date(r.endDate);
-      return d >= start && d <= end;
+      const s = startOfDay(new Date(r.startDate));
+      const e = endOfDay(new Date(r.endDate));
+      return isWithinInterval(dayStart, { start: s, end: e });
     });
     return ranges;
   };
 
   // Check if on vacation (single day or inside a range)
-  if (hasVacationOn(date)) return false;
+  if (hasVacationOn(d)) return false;
 
   // Check if weekend work is allowed (considering vacation boundaries)
   if (isWeekend(date)) {
