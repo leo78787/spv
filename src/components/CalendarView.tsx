@@ -205,7 +205,18 @@ export function CalendarView() {
     });
     if (isEmpOnVacation) return;
 
-    if (blocked || blockedByQualification) {
+    // Check: does the employee already have a different/overlapping assignment in this period?
+    const assignmentStart = new Date(editingShift.assignment.startDate);
+    const assignmentEnd = new Date(editingShift.assignment.endDate);
+    const hasOverlappingAssignment = (shiftPlan?.assignments || []).some(a => {
+      if (a.id === editingShift.assignment.id) return false; // ignore current assignment
+      if (!a.employees.includes(empObj.id)) return false;
+      const aStart = new Date(a.startDate);
+      const aEnd = new Date(a.endDate);
+      return aStart <= assignmentEnd && aEnd >= assignmentStart;
+    });
+
+    if (blocked || blockedByQualification || hasOverlappingAssignment) {
       const reasons: string[] = [];
 
       // Specific adjacency reasons
@@ -252,6 +263,11 @@ export function CalendarView() {
         } else {
           reasons.push('Qualifikationsregel verletzt');
         }
+      }
+
+      // Existing/overlapping assignment reason
+      if (hasOverlappingAssignment) {
+        reasons.push('Mitarbeiter hat bereits eine andere Schicht in diesem Zeitraum');
       }
 
       setOverrideConfirm({ employeeId, reasons });
@@ -599,6 +615,17 @@ export function CalendarView() {
                   // Qualification rule: Ü55 or no L2 may only be assigned to 'verschieben'
                   const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
 
+                  // Check whether employee already has another overlapping assignment (exclude current assignment)
+                  const assignmentStart = new Date(editingShift.assignment.startDate);
+                  const assignmentEnd = new Date(editingShift.assignment.endDate);
+                  const hasOtherOverlapping = (shiftPlan?.assignments || []).some(a => {
+                    if (a.id === editingShift.assignment.id) return false;
+                    if (!a.employees.includes(emp.id)) return false;
+                    const aStart = new Date(a.startDate);
+                    const aEnd = new Date(a.endDate);
+                    return aStart <= assignmentEnd && aEnd >= assignmentStart;
+                  });
+
                   // Calculate recommendation indicators
                   const shiftCount = (shiftPlan?.assignments || []).filter(a => 
                     a.shiftType === editingShift.assignment.shiftType && 
@@ -606,8 +633,6 @@ export function CalendarView() {
                   ).length;
 
                   // Check if employee's department needs this shift in this period
-                  const assignmentStart = new Date(editingShift.assignment.startDate);
-                  const assignmentEnd = new Date(editingShift.assignment.endDate);
                   const deptHasShiftInPeriod = (shiftPlan?.assignments || []).some(a => {
                     if (a.shiftType !== editingShift.assignment.shiftType) return false;
                     const aStart = new Date(a.startDate);
@@ -710,8 +735,13 @@ onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
                             {blockedByQualification && (
                               <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>
                             )}
+
+                            {hasOtherOverlapping && !isAssigned && (
+                              <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Andere Schicht vorhanden</span>
+                            )}
+
                             {/* Recommendation indicators */}
-                            {isEligible && !deptHasShiftInPeriod && (
+                            {isEligible && !deptHasShiftInPeriod && !hasOtherOverlapping && (
                               <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">
                                 🎯 Abteilung benötigt
                               </span>
