@@ -19,9 +19,12 @@ export function FairnessKPIs() {
   const [selectedShiftType, setSelectedShiftType] = useState<ShiftType | 'all'>('all');
   
   // Determine if an employee can work a specific shift
-  const canEmployeeWorkShift = (_employee: Employee, _shiftType: ShiftType): boolean => {
-    // In a real system, you might have more rules here
-    // For now, all employees can potentially work all shifts unless explicitly unavailable
+  // - Mitarbeiter Ü55 dürfen nur "verschieben"
+  // - Mitarbeiter ohne L2 dürfen nur "verschieben"
+  const canEmployeeWorkShift = (employee: Employee, shiftType: ShiftType): boolean => {
+    if (employee.isOver55 || !employee.hasL2) {
+      return shiftType === 'verschieben';
+    }
     return true;
   };
   
@@ -220,7 +223,7 @@ export function FairnessKPIs() {
           <p className="text-sm text-gray-600 mt-1">
             {selectedShiftType === 'all' 
               ? `Zeigt alle ${employeeStats.length} Mitarbeiter`
-              : `Zeigt ${filteredStats.length} Mitarbeiter die ${SHIFT_LABELS[selectedShiftType]} machen können`
+              : `Zeigt ${filteredStats.length} Mitarbeiter, die ${SHIFT_LABELS[selectedShiftType]} machen können (Ü55 / ohne L2 werden für diese Kategorie nicht berücksichtigt)`
             }
           </p>
         </div>
