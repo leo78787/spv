@@ -66,28 +66,7 @@ export function EmployeeManagement() {
     setShowAddForm(true);
   };
   
-  const addVacationDay = () => {
-    const newDate = new Date();
-    setFormData(prev => ({
-      ...prev,
-      vacationDays: [...(prev.vacationDays || []), newDate]
-    }));
-  };
-  
-  const removeVacationDay = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      vacationDays: (prev.vacationDays || []).filter((_, i) => i !== index)
-    }));
-  };
-  
-  const updateVacationDay = (index: number, date: string) => {
-    setFormData(prev => {
-      const newVacationDays = [...(prev.vacationDays || [])];
-      newVacationDays[index] = parseDateInput(date);
-      return { ...prev, vacationDays: newVacationDays };
-    });
-  };
+
   
   const addPreference = () => {
     const newPref: ShiftPreference = {
@@ -209,18 +188,11 @@ export function EmployeeManagement() {
             </label>
           </div>
           
-          {/* Vacation Days + Ranges */}
+{/* Urlaubszeiträume (inkl. eintägiger Bereiche) */}
           <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-medium text-gray-700">Urlaubstage</label>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={addVacationDay}
-                  className="text-sm text-primary-600 hover:text-primary-700"
-                >
-                  + Tag
-                </button>
+              <label className="block text-sm font-medium text-gray-700">Urlaubszeiträume</label>
+              <div>
                 <button
                   type="button"
                   onClick={addVacationRange}
@@ -232,24 +204,6 @@ export function EmployeeManagement() {
             </div>
 
             <div className="space-y-2">
-              {(formData.vacationDays || []).map((date, index) => (
-                <div key={`d-${index}`} className="flex gap-2 items-center">
-                  <input
-                    type="date"
-                        value={date instanceof Date ? formatDateForInput(date) : ''}
-                    onChange={e => updateVacationDay(index, e.target.value)}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeVacationDay(index)}
-                    className="px-3 py-2 text-red-600 hover:bg-red-50 rounded-md"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              ))}
-
               {(formData.vacationRanges || []).map((r, index) => (
                 <div key={`r-${index}`} className="flex gap-2 items-center">
                   <div className="flex-1 grid grid-cols-2 gap-2">
@@ -281,8 +235,9 @@ export function EmployeeManagement() {
                   </button>
                 </div>
               ))}
-
             </div>
+
+            <div className="mt-2 text-xs text-gray-500">Einzelne Tage bitte als Zeitraum mit gleichem Start‑ und Enddatum eingeben (z. B. 20.–20.).</div>
           </div>
           
           {/* Preferences */}
