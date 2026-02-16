@@ -207,8 +207,52 @@ export function CalendarView() {
 
     if (blocked || blockedByQualification) {
       const reasons: string[] = [];
-      if (blocked) reasons.push('Regelverletzung (Adjacency)');
-      if (blockedByQualification) reasons.push('Qualifikation/Alter');
+
+      // Specific adjacency reasons
+      if (blocked) {
+        if (editingShift.assignment.shiftType === 'fruehschicht') {
+          // determine whether it's adjacency to verschieben or recent night-week
+          const saturday = new Date(editingShift.assignment.startDate);
+          const hasVerschAdj = (shiftPlan?.assignments || []).some(a => {
+            if (a.shiftType !== 'verschieben') return false;
+            if (!a.employees.includes(empObj.id)) return false;
+            const vStart = new Date(a.startDate);
+            const vEnd = new Date(a.endDate);
+            const saturdayBefore = addDays(vStart, -2);
+            const saturdayAfter = addDays(vEnd, 1);
+            return isSameDay(saturday, saturdayBefore) || isSameDay(saturday, saturdayAfter);
+          });
+          const hasRecentNight = (shiftPlan?.assignments || []).some(a => {
+            if (a.shiftType !== 'nachtbereitschaft') return false;
+            if (!a.employees.includes(empObj.id)) return false;
+            const end = new Date(a.endDate);
+            return isSameDay(saturday, end) || isSameDay(saturday, addDays(end, 1));
+          });
+
+          if (hasVerschAdj) reasons.push('Keine Wochenend‑Frühschicht — angrenzende verschobene Schicht');
+          else if (hasRecentNight) reasons.push('Keine Wochenend‑Frühschicht direkt nach Nachtwoche');
+          else reasons.push('Zeitliche Nähe zu anderen Schichten');
+        } else if (editingShift.assignment.shiftType === 'verschieben') {
+          reasons.push('Konflikt: Frühschicht am angrenzenden Wochenende');
+        } else if (editingShift.assignment.shiftType === 'nachtbereitschaft') {
+          reasons.push('Keine Nachtwoche direkt nach einer Verschobenen (Mo–Fr) Woche');
+        } else {
+          reasons.push('Regelkonflikt (zeitliche Nähe)');
+        }
+      }
+
+      // Qualification reasons (clear messages)
+      if (blockedByQualification) {
+        if (empObj.isOver55 && !empObj.hasL2) {
+          reasons.push('Ü55 und kein L2 — nur verschobene Schichten erlaubt');
+        } else if (empObj.isOver55) {
+          reasons.push('Ü55 — nur verschobene Schichten erlaubt');
+        } else if (!empObj.hasL2) {
+          reasons.push('Keine L2 — nur verschobene Schichten erlaubt');
+        } else {
+          reasons.push('Qualifikationsregel verletzt');
+        }
+      }
 
       setOverrideConfirm({ employeeId, reasons });
       return; // wait for in-modal confirmation
@@ -554,6 +598,60 @@ export function CalendarView() {
 
                   // Qualification rule: Ü55 or no L2 may only be assigned to 'verschieben'
                   const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
+
+                  // Calculate recommendation indicators
+                  const shiftCount = (shiftPlan?.assignments || []).filter(a => 
+                    a.shiftType === editingShift.assignment.shiftType && 
+                    a.employees.includes(emp.id)
+                  ).length;
+
+                  // Check if employee's department needs this shift in this period
+                  const assignmentStart = new Date(editingShift.assignment.startDate);
+                  const assignmentEnd = new Date(editingShift.assignment.endDate);
+                  const deptHasShiftInPeriod = (shiftPlan?.assignments || []).some(a => {
+                    if (a.id === editingShift.assignment.id) return false; // Exclude current assignment
+                    if (a.shiftType !== editingShift.assignment.shiftType) return false;
+                    const aStart = new Date(a.startDate);
+                    const aEnd = new Date(a.endDate);
+                    const overlaps = aStart <= assignmentEnd && aEnd >= assignmentStart;
+                    return overlaps && a.employees.some(empId => {
+                      const e = employees.find(e => e.id === empId);
+                      return e?.department === emp.department;
+                    });
+                  });
+
+                  // Determine if this is a good candidate (eligible + low shift count)
+                  const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification;
+                  const eligibleEmployees = employees.filter(e => {
+                    const vac = e.vacationDays.some(vacDay => {
+                      const v = new Date(vacDay);
+                      const start = new Date(editingShift.assignment.startDate);
+                      const end = new Date(editingShift.assignment.endDate);
+                      return v >= start && v <= end;
+                    });
+                    if (vac) return false;
+                    const qual = editingShift.assignment.shiftType !== 'verschieben' && (e.isOver55 || !e.hasL2);
+                    if (qual) return false;
+                    const adj = editingShift.assignment.shiftType === 'fruehschicht'
+                      ? isBlockedFromFruehschichtDueToAdjacency(e, editingShift.date, shiftPlan?.assignments || [])
+                      : editingShift.assignment.shiftType === 'verschieben'
+                        ? isBlockedByAdjacentVerschieben(e.id)
+                        : editingShift.assignment.shiftType === 'nachtbereitschaft'
+                          ? isBlockedFromNachtAfterVerschieben(e, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
+                          : false;
+                    return !adj;
+                  });
+                  
+                  const minShiftCount = eligibleEmployees.length > 0 
+                    ? Math.min(...eligibleEmployees.map(e => 
+                        (shiftPlan?.assignments || []).filter(a => 
+                          a.shiftType === editingShift.assignment.shiftType && 
+                          a.employees.includes(e.id)
+                        ).length
+                      ))
+                    : 0;
+                  
+                  const hasLowShiftCount = isEligible && shiftCount === minShiftCount;
                   
                   return (
                     <div
@@ -575,7 +673,7 @@ onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
                           <div className="text-sm text-gray-600">
                             {getDepartmentName(emp.department)}
                           </div>
-                          <div className="flex gap-1 mt-1">
+                          <div className="flex flex-wrap gap-1 mt-1">
                             {emp.isOver55 && (
                               <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>
                             )}
@@ -586,12 +684,29 @@ onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
                               <span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded text-xs">Im Urlaub</span>
                             )}
                             {blockedByAdjacency && (
-                              <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Regel verhindert</span>
+                              <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">
+                                {editingShift.assignment.shiftType === 'fruehschicht' ? 'Gesperrt: angrenzende Schicht' : editingShift.assignment.shiftType === 'verschieben' ? 'Konflikt: Wochenende' : 'Konflikt: zeitliche Nähe'}
+                              </span>
                             )}
                             {blockedByQualification && (
                               <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>
                             )}
-
+                            {/* Recommendation indicators */}
+                            {isEligible && !deptHasShiftInPeriod && (
+                              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">
+                                🎯 Abteilung benötigt
+                              </span>
+                            )}
+                            {isEligible && (
+                              <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs">
+                                {shiftCount} {editingShift.assignment.shiftType === 'fruehschicht' ? 'Früh' : editingShift.assignment.shiftType === 'verschieben' ? 'Versch.' : 'Nacht'}
+                              </span>
+                            )}
+                            {hasLowShiftCount && eligibleEmployees.length > 1 && (
+                              <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded text-xs font-medium">
+                                ⭐ Empfohlen
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div>
