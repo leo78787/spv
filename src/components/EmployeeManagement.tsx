@@ -15,6 +15,7 @@ export function EmployeeManagement() {
     isOver55: false,
     hasL2: false,
     vacationDays: [],
+    vacationRanges: [],
     preferences: []
   });
   
@@ -22,7 +23,12 @@ export function EmployeeManagement() {
     e.preventDefault();
     
     if (editingId) {
-      updateEmployee(editingId, formData);
+      updateEmployee(editingId, {
+        ...formData,
+        vacationDays: formData.vacationDays || [],
+        vacationRanges: formData.vacationRanges || [],
+        preferences: formData.preferences || []
+      });
       setEditingId(null);
     } else {
       const newEmployee: Employee = {
@@ -32,6 +38,7 @@ export function EmployeeManagement() {
         isOver55: formData.isOver55 || false,
         hasL2: formData.hasL2 || false,
         vacationDays: formData.vacationDays || [],
+        vacationRanges: formData.vacationRanges || [],
         preferences: formData.preferences || []
       };
       addEmployee(newEmployee);
@@ -93,6 +100,30 @@ export function EmployeeManagement() {
       ...prev,
       preferences: [...(prev.preferences || []), newPref]
     }));
+  };
+
+  // Vacation ranges (multi-day)
+  const addVacationRange = () => {
+    const newRange = { startDate: new Date(), endDate: new Date() };
+    setFormData(prev => ({
+      ...prev,
+      vacationRanges: [...(prev.vacationRanges || []), newRange]
+    }));
+  };
+
+  const removeVacationRange = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      vacationRanges: (prev.vacationRanges || []).filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateVacationRange = (index: number, updates: Partial<{ startDate: Date; endDate: Date }>) => {
+    setFormData(prev => {
+      const newRanges = [...(prev.vacationRanges || [])];
+      newRanges[index] = { ...newRanges[index], ...updates } as any;
+      return { ...prev, vacationRanges: newRanges };
+    });
   };
   
   const removePreference = (index: number) => {
@@ -178,21 +209,31 @@ export function EmployeeManagement() {
             </label>
           </div>
           
-          {/* Vacation Days */}
+          {/* Vacation Days + Ranges */}
           <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-700">Urlaubstage</label>
-              <button
-                type="button"
-                onClick={addVacationDay}
-                className="text-sm text-primary-600 hover:text-primary-700"
-              >
-                + Urlaubstag hinzufügen
-              </button>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={addVacationDay}
+                  className="text-sm text-primary-600 hover:text-primary-700"
+                >
+                  + Tag
+                </button>
+                <button
+                  type="button"
+                  onClick={addVacationRange}
+                  className="text-sm text-primary-600 hover:text-primary-700"
+                >
+                  + Zeitraum
+                </button>
+              </div>
             </div>
+
             <div className="space-y-2">
               {(formData.vacationDays || []).map((date, index) => (
-                <div key={index} className="flex gap-2">
+                <div key={`d-${index}`} className="flex gap-2 items-center">
                   <input
                     type="date"
                     value={date instanceof Date ? date.toISOString().split('T')[0] : ''}
@@ -208,6 +249,39 @@ export function EmployeeManagement() {
                   </button>
                 </div>
               ))}
+
+              {(formData.vacationRanges || []).map((r, index) => (
+                <div key={`r-${index}`} className="flex gap-2 items-center">
+                  <div className="flex-1 grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs text-gray-500">Von</label>
+                      <input
+                        type="date"
+                        value={r.startDate instanceof Date ? r.startDate.toISOString().split('T')[0] : ''}
+                        onChange={e => updateVacationRange(index, { startDate: new Date(e.target.value) })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500">Bis</label>
+                      <input
+                        type="date"
+                        value={r.endDate instanceof Date ? r.endDate.toISOString().split('T')[0] : ''}
+                        onChange={e => updateVacationRange(index, { endDate: new Date(e.target.value) })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeVacationRange(index)}
+                    className="px-3 py-2 text-red-600 hover:bg-red-50 rounded-md"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+
             </div>
           </div>
           
@@ -336,10 +410,22 @@ export function EmployeeManagement() {
                   )}
                 </div>
                 
-                {employee.vacationDays.length > 0 && (
-                  <p className="text-gray-600">
-                    <span className="font-medium">Urlaub:</span> {employee.vacationDays.length} Tag(e)
-                  </p>
+                {(employee.vacationDays.length > 0 || (employee.vacationRanges?.length || 0) > 0) && (
+                  <div className="text-gray-600">
+                    <span className="font-medium">Urlaub:</span>
+                    <div className="text-sm mt-1">
+                      {employee.vacationDays.length > 0 && (
+                        <div>{employee.vacationDays.length} Tag(e)</div>
+                      )}
+                      {employee.vacationRanges && employee.vacationRanges.length > 0 && (
+                        <div className="mt-1 space-y-1">
+                          {employee.vacationRanges.map((r, i) => (
+                            <div key={i} className="text-xs text-gray-600">{new Date(r.startDate).toLocaleDateString('de-DE')} — {new Date(r.endDate).toLocaleDateString('de-DE')}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
                 
                 {employee.preferences.length > 0 && (

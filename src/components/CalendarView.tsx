@@ -110,6 +110,24 @@ export function CalendarView() {
     
     return assignment || null;
   };
+
+  // Helper: check if a date falls into employee's vacation (single days or ranges)
+  const isDateInVacation = (employeeId: string, date: Date) => {
+    const emp = employees.find(e => e.id === employeeId);
+    if (!emp) return false;
+
+    const dayString = date.toDateString();
+    const single = (emp.vacationDays || []).some(v => new Date(v).toDateString() === dayString);
+    if (single) return true;
+
+    const inRange = (emp.vacationRanges || []).some(r => {
+      const s = new Date(r.startDate);
+      const e = new Date(r.endDate);
+      return date >= s && date <= e;
+    });
+
+    return inRange;
+  };
   
   // Handle clicking on a shift to edit it
   const handleShiftClick = (_employeeId: string, date: Date, shiftType: ShiftType) => {
@@ -210,12 +228,23 @@ export function CalendarView() {
     const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (empObj.isOver55 || !empObj.hasL2);
 
     // Vacation always blocks
-    const isEmpOnVacation = empObj.vacationDays.some(vacDay => {
-      const vac = new Date(vacDay);
+    const isEmpOnVacation = (() => {
       const start = new Date(editingShift.assignment.startDate);
       const end = new Date(editingShift.assignment.endDate);
-      return vac >= start && vac <= end;
-    });
+      // single days overlapping range
+      const singleOverlap = empObj.vacationDays.some(vacDay => {
+        const vac = new Date(vacDay);
+        return vac >= start && vac <= end;
+      });
+      if (singleOverlap) return true;
+      // ranges overlapping
+      const rangeOverlap = (empObj.vacationRanges || []).some(r => {
+        const s = new Date(r.startDate);
+        const e = new Date(r.endDate);
+        return s <= end && e >= start;
+      });
+      return rangeOverlap;
+    })();
     if (isEmpOnVacation) return;
 
     // Check: does the employee already have a different/overlapping assignment in this period?
@@ -462,9 +491,7 @@ export function CalendarView() {
                       const shifts = getShiftsForEmployeeOnDay(employee.id, day);
                       const dayOfWeek = getDay(day);
                       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                      const isVacation = employee.vacationDays.some(vacDay => 
-                        isSameDay(new Date(vacDay), day)
-                      );
+                      const isVacation = isDateInVacation(employee.id, day);
                       
                       return (
                         <td 
@@ -610,12 +637,21 @@ export function CalendarView() {
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {employees.map(emp => {
                   const isAssigned = editingShift.assignment.employees.includes(emp.id);
-                  const isOnVacation = emp.vacationDays.some(vacDay => {
-                    const vac = new Date(vacDay);
+                  const isOnVacation = (() => {
                     const start = new Date(editingShift.assignment.startDate);
                     const end = new Date(editingShift.assignment.endDate);
-                    return vac >= start && vac <= end;
-                  });
+                    const singleOverlap = (emp.vacationDays || []).some(v => {
+                      const vac = new Date(v);
+                      return vac >= start && vac <= end;
+                    });
+                    if (singleOverlap) return true;
+                    const rangeOverlap = (emp.vacationRanges || []).some(r => {
+                      const s = new Date(r.startDate);
+                      const e = new Date(r.endDate);
+                      return s <= end && e >= start;
+                    });
+                    return rangeOverlap;
+                  })();
 
                   const blockedByAdjacency = editingShift.assignment.shiftType === 'fruehschicht'
                     ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, shiftPlan?.assignments || [])
@@ -667,13 +703,21 @@ export function CalendarView() {
                   const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification;
 
                   const eligibleEmployees = employees.filter(e => {
-                    const vac = e.vacationDays.some(vacDay => {
+                    const start = new Date(editingShift.assignment.startDate);
+                    const end = new Date(editingShift.assignment.endDate);
+
+                    const singleVacOverlap = (e.vacationDays || []).some(vacDay => {
                       const v = new Date(vacDay);
-                      const start = new Date(editingShift.assignment.startDate);
-                      const end = new Date(editingShift.assignment.endDate);
                       return v >= start && v <= end;
                     });
-                    if (vac) return false;
+                    if (singleVacOverlap) return false;
+
+                    const rangeVacOverlap = (e.vacationRanges || []).some(r => {
+                      const s = new Date(r.startDate);
+                      const en = new Date(r.endDate);
+                      return s <= end && en >= start;
+                    });
+                    if (rangeVacOverlap) return false;
                     const qual = editingShift.assignment.shiftType !== 'verschieben' && (e.isOver55 || !e.hasL2);
                     if (qual) return false;
                     const adj = editingShift.assignment.shiftType === 'fruehschicht'

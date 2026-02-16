@@ -20,41 +20,39 @@ import {
  * Rule: No weekend work before or after vacation
  */
 function canWorkOnDate(employee: Employee, date: Date): boolean {
-  // Check if on vacation
-  const isOnVacation = employee.vacationDays.some(vacDay => {
-    const vac = new Date(vacDay);
-    return vac.toDateString() === date.toDateString();
-  });
-  
-  if (isOnVacation) return false;
-  
+  // helper: check single-day + ranges
+  const hasVacationOn = (d: Date) => {
+    const dayString = d.toDateString();
+    const single = (employee.vacationDays || []).some(vacDay => new Date(vacDay).toDateString() === dayString);
+    if (single) return true;
+    const ranges = (employee.vacationRanges || []).some(r => {
+      const start = new Date(r.startDate);
+      const end = new Date(r.endDate);
+      return d >= start && d <= end;
+    });
+    return ranges;
+  };
+
+  // Check if on vacation (single day or inside a range)
+  if (hasVacationOn(date)) return false;
+
   // Check if weekend work is allowed (considering vacation boundaries)
   if (isWeekend(date)) {
     // Check day before vacation
     const nextDay = addDays(date, 1);
     const dayAfterNext = addDays(date, 2);
-    
-    const hasVacationAfter = employee.vacationDays.some(vacDay => {
-      const vac = new Date(vacDay);
-      return vac.toDateString() === nextDay.toDateString() || 
-             vac.toDateString() === dayAfterNext.toDateString();
-    });
-    
+
+    const hasVacationAfter = hasVacationOn(nextDay) || hasVacationOn(dayAfterNext);
     if (hasVacationAfter) return false;
-    
+
     // Check day after vacation
     const prevDay = subDays(date, 1);
     const dayBeforePrev = subDays(date, 2);
-    
-    const hasVacationBefore = employee.vacationDays.some(vacDay => {
-      const vac = new Date(vacDay);
-      return vac.toDateString() === prevDay.toDateString() || 
-             vac.toDateString() === dayBeforePrev.toDateString();
-    });
-    
+
+    const hasVacationBefore = hasVacationOn(prevDay) || hasVacationOn(dayBeforePrev);
     if (hasVacationBefore) return false;
   }
-  
+
   return true;
 }
 

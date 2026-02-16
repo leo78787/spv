@@ -2,13 +2,19 @@
 
 export type ShiftType = 'fruehschicht' | 'verschieben' | 'nachtbereitschaft';
 
+export interface VacationRange {
+  startDate: Date;
+  endDate: Date;
+}
+
 export interface Employee {
   id: string;
   name: string;
   department: string;
   isOver55: boolean;
   hasL2: boolean;
-  vacationDays: Date[];
+  vacationDays: Date[]; // single-day entries for backward compatibility
+  vacationRanges?: VacationRange[]; // new: multi‑day ranges
   preferences: ShiftPreference[];
 }
 
