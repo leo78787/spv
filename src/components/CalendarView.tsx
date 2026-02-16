@@ -19,6 +19,7 @@ export function CalendarView() {
     employees, 
     departments, 
     currentYear, 
+    setCurrentYear,
     shiftPlan,
     updateShiftAssignment,
     deleteShiftAssignment
@@ -38,11 +39,23 @@ export function CalendarView() {
   } | null>(null);
   
   const handlePreviousMonth = () => {
-    setCurrentMonth(prev => (prev === 0 ? 11 : prev - 1));
+    setCurrentMonth(prev => {
+      if (prev === 0) {
+        setCurrentYear(currentYear - 1);
+        return 11;
+      }
+      return prev - 1;
+    });
   };
   
   const handleNextMonth = () => {
-    setCurrentMonth(prev => (prev === 11 ? 0 : prev + 1));
+    setCurrentMonth(prev => {
+      if (prev === 11) {
+        setCurrentYear(currentYear + 1);
+        return 0;
+      }
+      return prev + 1;
+    });
   };
   
   const getDepartmentName = (deptId: string) => {
