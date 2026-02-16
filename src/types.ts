@@ -59,7 +59,7 @@ export interface ShiftPlan {
   assignments: ShiftAssignment[];
 }
 
-export type ViewTab = 'employees' | 'matrix' | 'departments' | 'planning' | 'calendar' | 'kpis';
+export type ViewTab = 'employees' | 'departments' | 'planning' | 'calendar' | 'kpis';
 
 // Shift requirements
 export const SHIFT_REQUIREMENTS: Record<ShiftType, { count: number; duration: string; days: string }> = {

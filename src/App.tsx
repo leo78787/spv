@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { EmployeeManagement } from './components/EmployeeManagement';
 import { DepartmentManagement } from './components/DepartmentManagement';
-import { EmployeeShiftMatrix } from './components/EmployeeShiftMatrix';
 import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
 import { ViewTab } from './types';
-import { Users, Calendar, ClipboardList, Building2, Grid3x3, BarChart3 } from 'lucide-react';
+import { Users, Calendar, ClipboardList, Building2, BarChart3 } from 'lucide-react';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('employees');
@@ -14,7 +13,6 @@ function App() {
   const tabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
     { id: 'departments' as ViewTab, label: 'Abteilungen', icon: Building2 },
-    { id: 'matrix' as ViewTab, label: 'Matrix', icon: Grid3x3 },
     { id: 'planning' as ViewTab, label: 'Planung', icon: ClipboardList },
     { id: 'calendar' as ViewTab, label: 'Kalender', icon: Calendar },
     { id: 'kpis' as ViewTab, label: 'Fairness KPIs', icon: BarChart3 },
@@ -75,7 +73,7 @@ function App() {
       <main className="max-w-7xl mx-auto">
         {activeTab === 'employees' && <EmployeeManagement />}
         {activeTab === 'departments' && <DepartmentManagement />}
-        {activeTab === 'matrix' && <EmployeeShiftMatrix />}
+
         {activeTab === 'planning' && <ShiftPlanning />}
         {activeTab === 'calendar' && <CalendarView />}
         {activeTab === 'kpis' && <FairnessKPIs />}

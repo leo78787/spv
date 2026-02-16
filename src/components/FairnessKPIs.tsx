@@ -354,7 +354,7 @@ export function FairnessKPIs() {
               <ul className="text-sm text-yellow-700 list-disc list-inside space-y-1">
                 <li>Überprüfen Sie die Schichtzuweisung für Mitarbeiter mit überdurchschnittlich vielen Schichten</li>
                 <li>Berücksichtigen Sie die Umverteilung von Schichten an weniger ausgelastete Mitarbeiter</li>
-                <li>Nutzen Sie die Mitarbeiter-Präferenzen in der Matrix-Ansicht zur besseren Planung</li>
+                <li>Nutzen Sie die Mitarbeiter-Präferenzen in der Mitarbeiterverwaltung zur besseren Planung</li>
               </ul>
             </div>
           </div>
