@@ -9,6 +9,7 @@ export function EmployeeManagement() {
   const { employees, departments, addEmployee, updateEmployee, deleteEmployee } = useStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   
   const [formData, setFormData] = useState<Partial<Employee>>({
     name: '',
@@ -341,8 +342,26 @@ export function EmployeeManagement() {
       )}
       
       {/* Employee List */}
+
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-700">Abteilung:</label>
+          <select
+            value={selectedDepartment}
+            onChange={e => setSelectedDepartment(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+          >
+            <option value="all">Alle Abteilungen</option>
+            {departments.map(d => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="text-sm text-gray-600">Angezeigt: {selectedDepartment === 'all' ? employees.length : employees.filter(emp => emp.department === selectedDepartment).length}</div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {employees.map(employee => {
+        { (selectedDepartment === 'all' ? employees : employees.filter(emp => emp.department === selectedDepartment)).map(employee => {
           const dept = departments.find(d => d.id === employee.department);
           return (
             <div key={employee.id} className="bg-white p-4 rounded-lg shadow-md hover:shadow-lg transition-shadow">
