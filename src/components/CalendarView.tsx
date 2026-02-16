@@ -609,7 +609,6 @@ export function CalendarView() {
                   const assignmentStart = new Date(editingShift.assignment.startDate);
                   const assignmentEnd = new Date(editingShift.assignment.endDate);
                   const deptHasShiftInPeriod = (shiftPlan?.assignments || []).some(a => {
-                    if (a.id === editingShift.assignment.id) return false; // Exclude current assignment
                     if (a.shiftType !== editingShift.assignment.shiftType) return false;
                     const aStart = new Date(a.startDate);
                     const aEnd = new Date(a.endDate);
@@ -652,7 +651,6 @@ export function CalendarView() {
                   // Helper: does department already have coverage for this shift type in the period?
                   const departmentHasCoverage = (deptId: string) => {
                     return (shiftPlan?.assignments || []).some(a => {
-                      if (a.id === editingShift.assignment.id) return false; // exclude current assignment
                       if (a.shiftType !== editingShift.assignment.shiftType) return false;
                       const aStart = new Date(a.startDate);
                       const aEnd = new Date(a.endDate);
