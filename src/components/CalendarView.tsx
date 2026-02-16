@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { ShiftType, ShiftAssignment, SHIFT_LABELS } from '../types';
 import { getMonthName } from '../utils/helpers';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X } from 'lucide-react';
-import { isBlockedFromFruehschichtDueToAdjacency } from '../utils/scheduler';
+import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben } from '../utils/scheduler';
 import { 
   startOfMonth, 
   endOfMonth,
@@ -29,6 +29,12 @@ export function CalendarView() {
   const [editingShift, setEditingShift] = useState<{
     assignment: ShiftAssignment;
     date: Date;
+  } | null>(null);
+
+  // State for in-modal override confirmation (replaces browser confirm)
+  const [overrideConfirm, setOverrideConfirm] = useState<{
+    employeeId: string;
+    reasons: string[];
   } | null>(null);
   
   const handlePreviousMonth = () => {
@@ -145,33 +151,71 @@ export function CalendarView() {
   };
   
   // Toggle employee in shift assignment
-  const handleToggleEmployee = (employeeId: string) => {
+  // perform toggle (assign/unassign) for an employee on the open assignment
+  const applyAssignmentChange = (employeeId: string) => {
     if (!editingShift) return;
-    
     const currentEmployees = editingShift.assignment.employees;
     const isAssigned = currentEmployees.includes(employeeId);
 
-    // Prevent adding if blocked by adjacency rules
-    if (!isAssigned) {
-      const empObj = employees.find(e => e.id === employeeId);
-      if (!empObj) return;
-      const blocked = editingShift.assignment.shiftType === 'fruehschicht'
-        ? isBlockedFromFruehschichtDueToAdjacency(empObj, editingShift.date, shiftPlan?.assignments || [])
-        : editingShift.assignment.shiftType === 'verschieben' && isBlockedByAdjacentVerschieben(employeeId);
-      if (blocked) return;
-    }
-    
     const updatedEmployees = isAssigned
       ? currentEmployees.filter(id => id !== employeeId)
       : [...currentEmployees, employeeId];
-    
+
     const updatedAssignment: ShiftAssignment = {
       ...editingShift.assignment,
       employees: updatedEmployees
     };
-    
+
     updateShiftAssignment(updatedAssignment);
     setEditingShift({ ...editingShift, assignment: updatedAssignment });
+  };
+
+  const handleToggleEmployee = (employeeId: string) => {
+    if (!editingShift) return;
+
+    const currentEmployees = editingShift.assignment.employees;
+    const isAssigned = currentEmployees.includes(employeeId);
+
+    // Unassign immediately
+    if (isAssigned) {
+      applyAssignmentChange(employeeId);
+      return;
+    }
+
+    // Check rules before assigning
+    const empObj = employees.find(e => e.id === employeeId);
+    if (!empObj) return;
+
+    const blocked = editingShift.assignment.shiftType === 'fruehschicht'
+      ? isBlockedFromFruehschichtDueToAdjacency(empObj, editingShift.date, shiftPlan?.assignments || [])
+      : editingShift.assignment.shiftType === 'verschieben'
+        ? isBlockedByAdjacentVerschieben(employeeId)
+        : editingShift.assignment.shiftType === 'nachtbereitschaft'
+          ? isBlockedFromNachtAfterVerschieben(empObj, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
+          : false;
+
+    const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (empObj.isOver55 || !empObj.hasL2);
+
+    // Vacation always blocks
+    const isEmpOnVacation = empObj.vacationDays.some(vacDay => {
+      const vac = new Date(vacDay);
+      const start = new Date(editingShift.assignment.startDate);
+      const end = new Date(editingShift.assignment.endDate);
+      return vac >= start && vac <= end;
+    });
+    if (isEmpOnVacation) return;
+
+    if (blocked || blockedByQualification) {
+      const reasons: string[] = [];
+      if (blocked) reasons.push('Regelverletzung (Adjacency)');
+      if (blockedByQualification) reasons.push('Qualifikation/Alter');
+
+      setOverrideConfirm({ employeeId, reasons });
+      return; // wait for in-modal confirmation
+    }
+
+    // No block — assign
+    applyAssignmentChange(employeeId);
   };
   
   // Delete entire shift assignment
@@ -461,6 +505,35 @@ export function CalendarView() {
             
             <div className="p-6">
               <h3 className="font-semibold text-gray-900 mb-4">Mitarbeiter zuweisen/entfernen</h3>
+
+              {/* In-modal override confirmation (replaces browser confirm) */}
+              {overrideConfirm && (
+                <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="font-semibold text-yellow-800">Warnung — Regelverletzung</div>
+                      <div className="text-sm text-gray-700 mt-1">
+                        {`Diese Zuweisung verstößt gegen: ${overrideConfirm.reasons.join(', ')}.`}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">Sie können die Regel ignorieren und die Zuweisung trotzdem durchführen.</div>
+                    </div>
+                    <div className="flex-shrink-0 flex items-center gap-2">
+                      <button
+                        onClick={() => setOverrideConfirm(null)}
+                        className="px-3 py-1 border rounded-md text-sm"
+                      >Abbrechen</button>
+                      <button
+                        onClick={() => {
+                          applyAssignmentChange(overrideConfirm.employeeId);
+                          setOverrideConfirm(null);
+                        }}
+                        className="px-3 py-1 bg-primary-600 text-white rounded-md text-sm"
+                      >Trotzdem zuweisen</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {employees.map(emp => {
                   const isAssigned = editingShift.assignment.employees.includes(emp.id);
@@ -475,15 +548,22 @@ export function CalendarView() {
                     ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, shiftPlan?.assignments || [])
                     : editingShift.assignment.shiftType === 'verschieben'
                       ? isBlockedByAdjacentVerschieben(emp.id)
-                      : false;
+                      : editingShift.assignment.shiftType === 'nachtbereitschaft'
+                        ? isBlockedFromNachtAfterVerschieben(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
+                        : false;
+
+                  // Qualification rule: Ü55 or no L2 may only be assigned to 'verschieben'
+                  const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
                   
                   return (
                     <div
                       key={emp.id}
-                      onClick={() => !isOnVacation && !blockedByAdjacency && handleToggleEmployee(emp.id)}
+onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
                       className={`p-3 rounded-lg border-2 transition-all ${
                         isOnVacation
                           ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-50'
+                          : (blockedByAdjacency || blockedByQualification)
+                          ? 'bg-yellow-50 border-yellow-200 cursor-pointer opacity-80'
                           : isAssigned
                           ? 'bg-primary-50 border-primary-500 cursor-pointer hover:bg-primary-100'
                           : 'bg-white border-gray-200 cursor-pointer hover:border-primary-300 hover:bg-gray-50'
@@ -507,6 +587,9 @@ export function CalendarView() {
                             )}
                             {blockedByAdjacency && (
                               <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Regel verhindert</span>
+                            )}
+                            {blockedByQualification && (
+                              <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>
                             )}
 
                           </div>

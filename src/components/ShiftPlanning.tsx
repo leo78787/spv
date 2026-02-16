@@ -207,11 +207,11 @@ export function ShiftPlanning() {
         <ul className="space-y-2 text-sm text-gray-700">
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">1.</span>
-            <span><strong>Nachtschichten</strong> werden zuerst verteilt - <strong>exakt 2 Personen</strong> pro Woche (Sa-Sa)</span>
+            <span><strong>Verschobene Schichten</strong> werden zuerst verteilt - <strong>exakt 4 Personen</strong> pro Woche (Mo-Fr); dadurch wird verhindert, dass danach direkt eine Nachtwoche folgt.</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">2.</span>
-            <span><strong>Verschobene Schichten</strong> werden als nächstes verteilt - <strong>exakt 4 Personen</strong> pro Woche (Mo-Fr)</span>
+            <span><strong>Nachtschichten</strong> werden danach verteilt - <strong>exakt 2 Personen</strong> pro Woche (Sa-Sa)</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">3.</span>
@@ -228,6 +228,14 @@ export function ShiftPlanning() {
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
             <span>Nachtschichtwoche → keine `Frühschicht` direkt am folgenden Wochenende</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary-600 font-bold">•</span>
+            <span>Nach einer `Verschobene Schicht`-Woche darf nicht direkt im Anschluss eine `Nachtbereitschaft` folgen</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary-600 font-bold">•</span>
+            <span>Mitarbeiter Ü55 und Mitarbeiter ohne L2-Zertifikat dürfen nur <strong>verschobene Schichten</strong> (Mo–Fr) erhalten</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>

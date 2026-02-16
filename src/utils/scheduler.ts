@@ -124,6 +124,25 @@ export function isBlockedFromFruehschichtDueToAdjacency(
 }
 
 /**
+ * Block Nachtbereitschaft when a 'verschieben' week ends immediately before the night-week
+ * Rule: if employee has a 'verschieben' assignment that ends on the Friday directly
+ * before the Nachtbereitschaft start (Saturday), they must not be assigned to that Nachtwoche.
+ */
+export function isBlockedFromNachtAfterVerschieben(
+  employee: Employee,
+  nachtStartDate: Date,
+  assignments: ShiftAssignment[]
+): boolean {
+  // Find any verschieben assignment whose endDate + 1 day === nachtStartDate
+  return assignments.some(a => {
+    if (a.shiftType !== 'verschieben') return false;
+    if (!a.employees.includes(employee.id)) return false;
+    const vEnd = new Date(a.endDate);
+    return isSameDay(addDays(vEnd, 1), nachtStartDate);
+  });
+}
+
+/**
  * Get available employees for a shift, sorted by workload for that shift type
  */
 function getAvailableEmployeesSorted(
@@ -148,6 +167,10 @@ function getAvailableEmployeesSorted(
     // Must not have avoidance preference
     const wantsToAvoid = days.some(day => hasAvoidancePreference(emp, shiftType, day));
     if (wantsToAvoid) return false;
+
+    // Qualification / age rule: Mitarbeiter Ü55 und Mitarbeiter ohne L2 dürfen
+    // ausschließlich 'verschieben' (Mo–Fr) zugewiesen werden.
+    if ((emp.isOver55 || !emp.hasL2) && shiftType !== 'verschieben') return false;
     
     // CRITICAL: Must not already have a shift on any of these days
     const hasConflictingShift = existingAssignments.some(assignment => {
@@ -166,6 +189,12 @@ function getAvailableEmployeesSorted(
     if (shiftType === 'fruehschicht') {
       const blockedByAdjacency = days.some(day => isBlockedFromFruehschichtDueToAdjacency(emp, day, existingAssignments));
       if (blockedByAdjacency) return false;
+    }
+
+    // Nachtbereitschaft: forbid if employee had a verschobene Woche that ends the day before nacht start
+    if (shiftType === 'nachtbereitschaft') {
+      const blockedByVerschieben = isBlockedFromNachtAfterVerschieben(emp, startDate, existingAssignments);
+      if (blockedByVerschieben) return false;
     }
 
     return true;
@@ -267,10 +296,11 @@ export function generateAutomaticShiftPlan(
   const assignments: ShiftAssignment[] = [];
   const periods = generateShiftPeriods(year);
   
-  // Priority order as requested
+  // Priority order adjusted so `verschieben` is assigned before `nachtbereitschaft`
+  // (prevents Nacht immediately after a Verschobene Woche)
   const shiftOrder: [ShiftType, number][] = [
-    ['nachtbereitschaft', 2],  // First: Night shifts (exactly 2 people)
-    ['verschieben', 4],        // Second: Late shifts (exactly 4 people)
+    ['verschieben', 4],        // First: Late shifts (exactly 4 people)
+    ['nachtbereitschaft', 2],  // Second: Night shifts (exactly 2 people)
     ['fruehschicht', 3]        // Third: Weekend shifts (exactly 3 people)
   ];
   
