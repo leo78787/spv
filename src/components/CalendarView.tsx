@@ -621,7 +621,14 @@ export function CalendarView() {
                   });
 
                   // Determine if this is a good candidate (eligible + low shift count)
+                  const shiftCountForEmployee = (employeeId: string) =>
+                    (shiftPlan?.assignments || []).filter(a =>
+                      a.shiftType === editingShift.assignment.shiftType &&
+                      a.employees.includes(employeeId)
+                    ).length;
+
                   const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification;
+
                   const eligibleEmployees = employees.filter(e => {
                     const vac = e.vacationDays.some(vacDay => {
                       const v = new Date(vacDay);
@@ -641,18 +648,32 @@ export function CalendarView() {
                           : false;
                     return !adj;
                   });
-                  
-                  const minShiftCount = eligibleEmployees.length > 0 
-                    ? Math.min(...eligibleEmployees.map(e => 
-                        (shiftPlan?.assignments || []).filter(a => 
-                          a.shiftType === editingShift.assignment.shiftType && 
-                          a.employees.includes(e.id)
-                        ).length
-                      ))
+
+                  // Helper: does department already have coverage for this shift type in the period?
+                  const departmentHasCoverage = (deptId: string) => {
+                    return (shiftPlan?.assignments || []).some(a => {
+                      if (a.id === editingShift.assignment.id) return false; // exclude current assignment
+                      if (a.shiftType !== editingShift.assignment.shiftType) return false;
+                      const aStart = new Date(a.startDate);
+                      const aEnd = new Date(a.endDate);
+                      const overlaps = aStart <= assignmentEnd && aEnd >= assignmentStart;
+                      return overlaps && a.employees.some(empId => {
+                        const e = employees.find(x => x.id === empId);
+                        return e?.department === deptId;
+                      });
+                    });
+                  };
+
+                  // Prefer candidates from departments that DO NOT yet have coverage in the period
+                  const candidatesNoDeptCoverage = eligibleEmployees.filter(e => !departmentHasCoverage(e.department));
+                  const recommendationPool = candidatesNoDeptCoverage.length > 0 ? candidatesNoDeptCoverage : eligibleEmployees;
+
+                  const minShiftCount = recommendationPool.length > 0
+                    ? Math.min(...recommendationPool.map(e => shiftCountForEmployee(e.id)))
                     : 0;
-                  
-                  const hasLowShiftCount = isEligible && shiftCount === minShiftCount;
-                  
+
+                  const hasLowShiftCount = isEligible && shiftCount === minShiftCount && recommendationPool.some(r => r.id === emp.id);
+
                   return (
                     <div
                       key={emp.id}
