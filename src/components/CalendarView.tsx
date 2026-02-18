@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useStore } from '../store';
-import { ShiftType, ShiftAssignment, SHIFT_LABELS } from '../types';
-import { getMonthName } from '../utils/helpers';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X } from 'lucide-react';
+import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS } from '../types';
+import { getMonthName, getBerlinHolidays } from '../utils/helpers';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download } from 'lucide-react';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben } from '../utils/scheduler';
+import { LabelModal } from './LabelModal';
+import * as XLSX from 'xlsx';
 import { 
   startOfMonth, 
   endOfMonth,
@@ -24,8 +26,10 @@ export function CalendarView() {
     currentYear, 
     setCurrentYear,
     shiftPlan,
+    customHolidays,
     updateShiftAssignment,
-    deleteShiftAssignment
+    labels,
+    calendarLabels,
   } = useStore();
   
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
@@ -39,6 +43,13 @@ export function CalendarView() {
   const [overrideConfirm, setOverrideConfirm] = useState<{
     employeeId: string;
     reasons: string[];
+  } | null>(null);
+
+  // State for label modal
+  const [labelModalData, setLabelModalData] = useState<{
+    employeeId: string;
+    employeeName: string;
+    date: Date;
   } | null>(null);
   
   const handlePreviousMonth = () => {
@@ -327,15 +338,7 @@ export function CalendarView() {
     applyAssignmentChange(employeeId);
   };
   
-  // Delete entire shift assignment
-  const handleDeleteShift = () => {
-    if (!editingShift) return;
-    
-    if (confirm('Möchten Sie diese Schicht wirklich löschen?')) {
-      deleteShiftAssignment(editingShift.assignment.id);
-      setEditingShift(null);
-    }
-  };
+
   
   // Get background color for shift type
   const getShiftColor = (shiftType: ShiftType) => {
@@ -364,9 +367,113 @@ export function CalendarView() {
         return '';
     }
   };
+
+  // --- Export helpers (JSON + XLSX) ---
+  const downloadPlanJSON = () => {
+    if (!shiftPlan) return;
+    const payload = { shiftPlan, employees, departments, labels, calendarLabels };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const start = shiftPlan.startMonth !== undefined ? `${shiftPlan.startMonth + 1}` : 'full';
+    a.download = `schichtplan_${shiftPlan.year}_${start}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadPlanXLSX = () => {
+    if (!shiftPlan) return;
+    const wb = XLSX.utils.book_new();
+    const startMonth = shiftPlan.startMonth ?? 0;
+    const monthsCount = shiftPlan.months ?? 12;
+
+    // helper to decide cell color based on content
+    const cellStyleForValue = (val: string | undefined) => {
+      if (!val) return undefined;
+      if (val === 'Urlaub') return { fill: { fgColor: { rgb: 'DDDDDD' } } };
+      if (val.includes('F')) return { fill: { fgColor: { rgb: 'FFF2CC' } } };
+      if (val.includes('V')) return { fill: { fgColor: { rgb: 'DDEEFF' } } };
+      if (val.includes('N')) return { fill: { fgColor: { rgb: 'DDFFDD' } } };
+      return undefined;
+    };
+
+    for (let m = 0; m < monthsCount; m++) {
+      const absoluteMonth = startMonth + m;
+      const year = shiftPlan.year + Math.floor(absoluteMonth / 12);
+      const monthIndex = absoluteMonth % 12;
+      const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+      // header row
+      const header = ['Mitarbeiter', ...Array.from({ length: daysInMonth }).map((_, i) => `${i + 1}`)];
+      const rows: any[] = [];
+
+      employees.forEach(emp => {
+        const row: any[] = [emp.name];
+        for (let d = 1; d <= daysInMonth; d++) {
+          const date = new Date(year, monthIndex, d);
+          const iso = format(date, 'yyyy-MM-dd');
+          
+          // vacation check
+          const isVac = isDateInVacation(emp.id, date);
+          if (isVac) {
+            row.push('Urlaub');
+            continue;
+          }
+          
+          // Get shifts and labels
+          const shifts = getShiftsForEmployeeOnDay(emp.id, date);
+          const cellLabels = calendarLabels
+            .filter(cl => cl.employeeId === emp.id && cl.date === iso)
+            .map(cl => labels.find(l => l.id === cl.labelId))
+            .filter(Boolean);
+          
+          const parts: string[] = [];
+          if (shifts.length > 0) {
+            parts.push(...shifts.map(s => getShiftLabel(s)));
+          }
+          if (cellLabels.length > 0) {
+            parts.push(...cellLabels.map((l: any) => l.letter));
+          }
+          
+          row.push(parts.length > 0 ? parts.join(', ') : '');
+        }
+        rows.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+
+      // apply simple styling per cell (fill)
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+      for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+        for (let C = range.s.c + 1; C <= range.e.c; ++C) {
+          const cell_address = { c: C, r: R };
+          const cell_ref = XLSX.utils.encode_cell(cell_address);
+          const cell = ws[cell_ref];
+          if (!cell) continue;
+          const style = cellStyleForValue(String(cell.v || ''));
+          if (style) cell.s = { fill: style.fill } as any;
+        }
+      }
+
+      // set first column width
+      ws['!cols'] = [{ wch: 25 }, ...Array.from({ length: daysInMonth }).map(() => ({ wch: 4 }))];
+      const sheetName = `${getMonthName(monthIndex)} ${year}`;
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    }
+
+    const fname = `schichtplan_${shiftPlan.year}_${startMonth + 1}.xlsx`;
+    XLSX.writeFile(wb, fname);
+  };
   
   const days = getDaysInMonth();
-  const weekDayLabels = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const weekDayLabelsMon = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+  // Berlin holidays for the visible year + custom holidays from store (custom overrides/additions)
+  const berlinHolidays = getBerlinHolidays(currentYear);
+  // customHolidays with disabled=true hide the builtin holiday on that date
+  const customHolidayMap = Object.fromEntries((customHolidays || []).filter((h: any) => !h.disabled).map((h: any) => [h.date, h.name]));
+  const holidayMap: Record<string,string> = { ...berlinHolidays, ...customHolidayMap };
   
   if (!shiftPlan) {
     return (
@@ -402,7 +509,23 @@ export function CalendarView() {
               <ChevronRight size={24} />
             </button>
           </div>
-          <div className="w-[100px]"></div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => downloadPlanJSON()}
+              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
+              title="Schichtplan (.json) herunterladen"
+            >
+              <Download size={14} /> Plan (.json)
+            </button>
+            <button
+              onClick={() => downloadPlanXLSX()}
+              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
+              title="Schichtplan (.xlsx) herunterladen"
+            >
+              <Download size={14} /> Excel (.xlsx)
+            </button>
+          </div>
         </div>
         
         {/* Department Filter */}
@@ -460,77 +583,314 @@ export function CalendarView() {
                     Mitarbeiter
                   </th>
                   {days.map((day, index) => {
-                    const dayOfWeek = getDay(day);
+                    const dayOfWeek = getDay(day); // 0=So .. 6=Sa
                     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                    const iso = format(day, 'yyyy-MM-dd');
+                    const holidayName = holidayMap[iso];
+                    const dowIndexMonFirst = (dayOfWeek + 6) % 7; // map 1->0 (Mo), 0->6 (So)
+
+                    // detect assignment coverage mismatches (too few / too many assigned)
+                    const assignmentsCovering = (shiftPlan?.assignments || []).filter(a => {
+                      const aStart = new Date(a.startDate);
+                      const aEnd = new Date(a.endDate);
+                      return day >= aStart && day <= aEnd;
+                    });
+
+                    const mismatches = assignmentsCovering.map(a => {
+                      const required = SHIFT_REQUIREMENTS[a.shiftType]?.count ?? 0;
+                      const actual = (a.employees || []).length;
+                      const diff = required - actual; // positive => missing, negative => excess
+                      return { assignment: a, required, actual, diff };
+                    }).filter(m => m.diff !== 0);
+
+                    const hasMismatch = mismatches.length > 0;
+
                     return (
                       <th 
                         key={index} 
                         className={`px-2 py-2 text-center font-semibold text-gray-700 border-b-2 border-gray-300 min-w-[50px] ${
-                          isWeekend ? 'bg-blue-50' : ''
-                        }`}
+                          isWeekend ? 'bg-blue-100' : ''
+                        } ${holidayName ? 'bg-rose-100' : ''}`}
                       >
-                        <div className="text-xs">{weekDayLabels[dayOfWeek]}</div>
+                        <div className="text-xs">{weekDayLabelsMon[dowIndexMonFirst]}</div>
                         <div className="text-sm">{format(day, 'd')}</div>
+
+                        {/* Mismatch indicator under the day (click opens the first mismatched assignment) */}
+                        {hasMismatch && (
+                          <div className="mt-1 flex items-center justify-center gap-2">
+                            <button
+                              title={mismatches.map(m => `${m.assignment.shiftType}: ${m.diff > 0 ? `fehlend ${m.diff}` : `zu viel ${-m.diff}`}`).join('\n')}
+                              onClick={() => {
+                                // open first mismatched assignment in editor
+                                const target = mismatches[0].assignment as ShiftAssignment;
+                                setEditingShift({ assignment: target, date: day });
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-800 text-xs rounded border border-amber-100 hover:bg-amber-100"
+                            >
+                              <span className="font-semibold">!</span>
+                              <span>{mismatches.reduce((acc, m) => acc + Math.abs(m.diff), 0)}</span>
+                            </button>
+
+                            {/* quick auto action: + to add when missing, - to remove when too many */}
+                            {mismatches[0].diff > 0 ? (
+                              <button
+                                title="Automatisch ergänzen (empfohlene Mitarbeiter)"
+                                onClick={() => {
+                                  const m = mismatches[0];
+                                  if (!m) return;
+                                  const a = m.assignment;
+
+                                  // compute eligible candidates (same rules as modal)
+                                  const start = startOfDay(new Date(a.startDate));
+                                  const end = endOfDay(new Date(a.endDate));
+
+                                  const eligible = employees.filter(e => {
+                                    const singleVac = (e.vacationDays || []).some(v => startOfDay(new Date(v)) >= start && startOfDay(new Date(v)) <= end);
+                                    if (singleVac) return false;
+                                    const rangeVac = (e.vacationRanges || []).some(r => {
+                                      const s = startOfDay(new Date(r.startDate));
+                                      const en = endOfDay(new Date(r.endDate));
+                                      return s <= end && en >= start;
+                                    });
+                                    if (rangeVac) return false;
+                                    if (a.shiftType !== 'verschieben' && (e.isOver55 || !e.hasL2)) return false;
+
+                                    const adj = a.shiftType === 'fruehschicht'
+                                      ? isBlockedFromFruehschichtDueToAdjacency(e, day, shiftPlan?.assignments || [])
+                                      : a.shiftType === 'verschieben'
+                                        ? isBlockedByAdjacentVerschieben(e.id)
+                                        : isBlockedFromNachtAfterVerschieben(e, new Date(a.startDate), shiftPlan?.assignments || []);
+                                    if (adj) return false;
+
+                                    const hasOverlap = (shiftPlan?.assignments || []).some(x => {
+                                      if (x.id === a.id) return false;
+                                      if (!x.employees.includes(e.id)) return false;
+                                      const xs = new Date(x.startDate);
+                                      const xe = new Date(x.endDate);
+                                      return xs <= end && xe >= start;
+                                    });
+                                    if (hasOverlap) return false;
+
+                                    return true;
+                                  });
+
+                                  const deptNeeds = (empId: string) => {
+                                    const emp = employees.find(x => x.id === empId);
+                                    if (!emp) return false;
+                                    return !(shiftPlan?.assignments || []).some(x => {
+                                      if (x.shiftType !== a.shiftType) return false;
+                                      const xs = new Date(x.startDate);
+                                      const xe = new Date(x.endDate);
+                                      const overlaps = xs <= end && xe >= start;
+                                      return overlaps && x.employees.some(id => employees.find(e => e.id === id)?.department === emp.department);
+                                    });
+                                  };
+
+                                  const ranked = eligible.sort((x, y) => {
+                                    const xCount = (shiftPlan?.assignments || []).filter(z => z.shiftType === a.shiftType && z.employees.includes(x.id)).length;
+                                    const yCount = (shiftPlan?.assignments || []).filter(z => z.shiftType === a.shiftType && z.employees.includes(y.id)).length;
+                                    const xDept = deptNeeds(x.id) ? 0 : 1;
+                                    const yDept = deptNeeds(y.id) ? 0 : 1;
+                                    if (xDept !== yDept) return xDept - yDept;
+                                    if (xCount !== yCount) return xCount - yCount;
+                                    return x.name.localeCompare(y.name, 'de');
+                                  });
+
+                                  const need = Math.max(0, m.required - m.actual);
+                                  const toAdd = ranked.slice(0, need).map(e => e.id);
+
+                                  if (toAdd.length === 0) {
+                                    alert('Keine geeigneten Kandidaten gefunden, öffne Schicht‑Editor.');
+                                    setEditingShift({ assignment: a, date: day });
+                                    return;
+                                  }
+
+                                  const updated = { ...a, employees: Array.from(new Set([...(a.employees || []), ...toAdd])) } as ShiftAssignment;
+                                  updateShiftAssignment(updated);
+                                  if (editingShift?.assignment.id === a.id) setEditingShift({ assignment: updated, date: day });
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary-50 text-primary-700 text-xs rounded border border-primary-100 hover:bg-primary-100"
+                              >
+                                +
+                              </button>
+                            ) : (
+                              <button
+                                title="Automatisch entfernen (Mitarbeiter mit den meisten Schichten abziehen)"
+                                onClick={() => {
+                                  const m = mismatches[0];
+                                  if (!m) return;
+                                  const a = m.assignment;
+                                  const excess = Math.abs(m.diff);
+                                  const assigned = (a.employees || []).slice();
+                                  if (assigned.length === 0) { alert('Keine zu entfernenden Mitarbeiter gefunden.'); return; }
+
+                                  // compute shift count per assigned employee and remove those with highest counts
+                                  const empCounts = assigned.map(id => ({ id, count: (shiftPlan?.assignments || []).filter(z => z.shiftType === a.shiftType && z.employees.includes(id)).length }));
+                                  empCounts.sort((x, y) => y.count - x.count || (employees.find(e => e.id === x.id)?.name || '').localeCompare(employees.find(e => e.id === y.id)?.name || '', 'de'));
+                                  const toRemove = empCounts.slice(0, excess).map(e => e.id);
+
+                                  const updated = { ...a, employees: (a.employees || []).filter(id => !toRemove.includes(id)) } as ShiftAssignment;
+                                  updateShiftAssignment(updated);
+                                  if (editingShift?.assignment.id === a.id) setEditingShift({ assignment: updated, date: day });
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-700 text-xs rounded border border-rose-100 hover:bg-rose-100"
+                              >
+                                -
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </th>
                     );
                   })}
                 </tr>
               </thead>
               <tbody>
-                {filteredEmployees.map((employee, empIndex) => (
-                  <tr 
-                    key={employee.id}
-                    className={empIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
-                  >
-                    <td className="px-3 py-2 border-b border-gray-200 sticky left-0 z-10 bg-inherit">
-                      <div className="font-medium text-gray-800 text-sm">{employee.name}</div>
-                      <div className="text-xs text-gray-600">{getDepartmentName(employee.department)}</div>
-                      <div className="flex gap-1 mt-1">
-                        {employee.isOver55 && (
-                          <span className="px-1 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>
-                        )}
-                        {employee.hasL2 && (
-                          <span className="px-1 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>
-                        )}
-                      </div>
-                    </td>
-                    {days.map((day, dayIndex) => {
-                      const shifts = getShiftsForEmployeeOnDay(employee.id, day);
-                      const dayOfWeek = getDay(day);
-                      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                      const isVacation = isDateInVacation(employee.id, day);
-                      
-                      return (
-                        <td 
-                          key={dayIndex} 
-                          className={`border-b border-gray-200 p-1 ${isWeekend ? 'bg-blue-50/30' : ''}`}
-                        >
-                          <div className="flex flex-col gap-0.5 min-h-[40px]">
-                            {isVacation ? (
-                              <div className="bg-orange-200 text-orange-800 text-xs px-1 py-0.5 rounded text-center font-medium">
-                                U
-                              </div>
-                            ) : shifts.length > 0 ? (
-                              shifts.map((shift, shiftIndex) => (
-                                <div 
-                                  key={shiftIndex}
-                                  onClick={() => handleShiftClick(employee.id, day, shift)}
-                                  className={`${getShiftColor(shift)} text-xs px-1 py-0.5 rounded text-center font-semibold cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center gap-0.5`}
-                                  title={`${shift} - Klicken zum Bearbeiten`}
-                                >
-                                  {getShiftLabel(shift)}
-                                  <Edit2 size={8} className="opacity-60" />
-                                </div>
-                              ))
-                            ) : (
-                              <div className="text-xs text-gray-300 text-center py-0.5">-</div>
-                            )}
-                          </div>
+                {(() => {
+                  // group filtered employees by department (sorted)
+                  const groups: Array<{ id: string; name: string; employees: typeof filteredEmployees }> = [];
+
+                  if (selectedDepartment === 'all') {
+                    const deptMap = new Map<string, { id: string; name: string; employees: typeof filteredEmployees }>();
+                    departments.forEach(d => deptMap.set(d.id, { id: d.id, name: d.name, employees: [] as any }));
+
+                    const unknownGroup = { id: 'unknown', name: 'Unbekannt', employees: [] as any };
+
+                    filteredEmployees.forEach(emp => {
+                      const g = deptMap.get(emp.department);
+                      if (g) g.employees.push(emp);
+                      else unknownGroup.employees.push(emp);
+                    });
+
+                    deptMap.forEach(g => {
+                      if (g.employees.length > 0) {
+                        g.employees.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+                        groups.push(g);
+                      }
+                    });
+
+                    if (unknownGroup.employees.length > 0) {
+                      unknownGroup.employees.sort((a: any, b: any) => a.name.localeCompare(b.name, 'de'));
+                      groups.push(unknownGroup);
+                    }
+
+                    // sort groups by department name
+                    groups.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+                  } else {
+                    const dept = departments.find(d => d.id === selectedDepartment);
+                    const name = dept ? dept.name : 'Unbekannt';
+                    const emps = filteredEmployees.slice().sort((a, b) => a.name.localeCompare(b.name, 'de'));
+                    groups.push({ id: selectedDepartment, name, employees: emps as any });
+                  }
+
+                  // render grouped rows with department header
+                  let rowCounter = 0;
+                  return groups.map(group => (
+                    <React.Fragment key={`grp-${group.id}`}>
+                      <tr className="bg-gray-50">
+                        <td className="sticky left-0 z-30 px-3 py-3 font-semibold text-gray-800 border-t-4 border-b-2 border-gray-200 bg-gradient-to-r from-white via-gray-50 to-white">
+                          {group.name}
                         </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                        <td colSpan={days.length} className="border-t-4 border-b-2 border-gray-200 bg-gradient-to-r from-white via-gray-50 to-white" />
+                      </tr>
+
+                      {group.employees.map((employee: any) => {
+                        const rowClass = rowCounter % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                        rowCounter++;
+                        return (
+                          <tr key={employee.id} className={rowClass}>
+                            <td className="px-3 py-2 border-b border-gray-200 sticky left-0 z-10 bg-inherit">
+                              <div className="font-medium text-gray-800 text-sm">{employee.name}</div>
+                              <div className="text-xs text-gray-600">{getDepartmentName(employee.department)}</div>
+                              <div className="flex gap-1 mt-1">
+                                {employee.isOver55 && (
+                                  <span className="px-1 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>
+                                )}
+                                {employee.hasL2 && (
+                                  <span className="px-1 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {days.map((day, dayIndex) => {
+                              const shifts = getShiftsForEmployeeOnDay(employee.id, day);
+                              const dayOfWeek = getDay(day);
+                              const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                              const isVacation = isDateInVacation(employee.id, day);
+                              const iso = format(day, 'yyyy-MM-dd');
+                              const holidayName = holidayMap[iso];
+                              
+                              // Get labels for this cell
+                              const cellLabels = calendarLabels
+                                .filter(cl => cl.employeeId === employee.id && cl.date === iso)
+                                .map(cl => labels.find(l => l.id === cl.labelId))
+                                .filter(Boolean);
+
+                              return (
+                                <td 
+                                  key={dayIndex} 
+                                  className={`border-b border-gray-200 p-1 ${isWeekend ? 'bg-blue-100/40' : ''} ${holidayName ? 'bg-rose-100/30' : ''}`}
+                                >
+                                  <div className="flex flex-col gap-0.5 min-h-[40px]">
+                                    {isVacation ? (
+                                      <div className="bg-orange-200 text-orange-800 text-xs px-1 py-0.5 rounded text-center font-medium">U</div>
+                                    ) : (
+                                      <>
+                                        {/* Shifts */}
+                                        {shifts.length > 0 && shifts.map((shift, shiftIndex) => (
+                                          <div 
+                                            key={shiftIndex}
+                                            onClick={() => handleShiftClick(employee.id, day, shift)}
+                                            className={`${getShiftColor(shift)} text-xs px-1 py-0.5 rounded text-center font-semibold cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center gap-0.5`}
+                                            title={`${shift} - Klicken zum Bearbeiten`}
+                                          >
+                                            {getShiftLabel(shift)}
+                                            <Edit2 size={8} className="opacity-60" />
+                                          </div>
+                                        ))}
+                                        
+                                        {/* Labels */}
+                                        {cellLabels.length > 0 && cellLabels.map((label: any) => (
+                                          <div
+                                            key={label.id}
+                                            onClick={() => setLabelModalData({ employeeId: employee.id, employeeName: employee.name, date: day })}
+                                            className="text-xs px-1 py-0.5 rounded text-center font-semibold cursor-pointer hover:opacity-80 transition-opacity text-white flex items-center justify-center gap-0.5"
+                                            style={{ backgroundColor: label.color }}
+                                            title={`${label.name}${label.text ? ': ' + label.text : ''} - Klicken zum Bearbeiten`}
+                                          >
+                                            {label.letter}
+                                            <Edit2 size={8} className="opacity-60" />
+                                          </div>
+                                        ))}
+                                        
+                                        {/* Empty placeholder */}
+                                        {shifts.length === 0 && cellLabels.length === 0 && (
+                                          <div 
+                                            onClick={() => setLabelModalData({ employeeId: employee.id, employeeName: employee.name, date: day })}
+                                            className="text-xs text-gray-300 text-center py-0.5 cursor-pointer hover:bg-gray-100 rounded transition-colors"
+                                            title="Label hinzufügen"
+                                          >
+                                            -
+                                          </div>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+
+                      {/* subtle spacer after group to increase horizontal separation */}
+                      <tr>
+                        <td className="sticky left-0 z-20 bg-gray-50 h-2" />
+                        <td colSpan={days.length} className="h-2 bg-gray-50" />
+                      </tr>
+                    </React.Fragment>
+                  ));
+                })()}
               </tbody>
             </table>
           </div>
@@ -577,6 +937,10 @@ export function CalendarView() {
                 <div className="w-5 h-5 bg-orange-200 rounded"></div>
                 <span className="text-gray-600">U = Urlaub</span>
               </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 bg-rose-200 rounded"></div>
+                <span className="text-gray-600">Feiertag (Berlin)</span>
+              </div>
             </div>
           </div>
           
@@ -592,7 +956,7 @@ export function CalendarView() {
       {/* Edit Shift Modal */}
       {editingShift && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex justify-between items-center">
               <div>
                 <h2 className="text-2xl font-bold text-gray-900">Schicht bearbeiten</h2>
@@ -641,209 +1005,192 @@ export function CalendarView() {
                 </div>
               )}
 
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {employees.map(emp => {
-                  const isAssigned = editingShift.assignment.employees.includes(emp.id);
-                  const isOnVacation = (() => {
-                    const start = new Date(editingShift.assignment.startDate);
-                    const end = new Date(editingShift.assignment.endDate);
-                    const singleOverlap = (emp.vacationDays || []).some(v => {
-                      const vac = new Date(v);
-                      return vac >= start && vac <= end;
+              {/* Grouped, more readable employee selector: available / violators / excluded */}
+              <div className="max-h-[60vh] overflow-auto pr-6">
+                {(() => {
+                  const assignmentStart = startOfDay(new Date(editingShift.assignment.startDate));
+                  const assignmentEnd = endOfDay(new Date(editingShift.assignment.endDate));
+
+                  // enrich employees with metadata used for sorting/display
+                  const enriched = employees.map(emp => {
+                    const isAssigned = editingShift.assignment.employees.includes(emp.id);
+
+                    const isOnVacation = (emp.vacationDays || []).some(v => {
+                      const vac = startOfDay(new Date(v));
+                      return isWithinInterval(vac, { start: assignmentStart, end: assignmentEnd });
+                    }) || (emp.vacationRanges || []).some(r => {
+                      const s = startOfDay(new Date(r.startDate));
+                      const e = endOfDay(new Date(r.endDate));
+                      return s <= assignmentEnd && e >= assignmentStart;
                     });
-                    if (singleOverlap) return true;
-                    const rangeOverlap = (emp.vacationRanges || []).some(r => {
-                      const s = new Date(r.startDate);
-                      const e = new Date(r.endDate);
-                      return s <= end && e >= start;
+
+                    const blockedByAdjacency = editingShift.assignment.shiftType === 'fruehschicht'
+                      ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, shiftPlan?.assignments || [])
+                      : editingShift.assignment.shiftType === 'verschieben'
+                        ? isBlockedByAdjacentVerschieben(emp.id)
+                        : editingShift.assignment.shiftType === 'nachtbereitschaft'
+                          ? isBlockedFromNachtAfterVerschieben(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
+                          : false;
+
+                    const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
+
+                    const hasOtherOverlapping = (shiftPlan?.assignments || []).some(a => {
+                      if (a.id === editingShift.assignment.id) return false;
+                      if (!a.employees.includes(emp.id)) return false;
+                      const aStart = new Date(a.startDate);
+                      const aEnd = new Date(a.endDate);
+                      return aStart <= assignmentEnd && aEnd >= assignmentStart;
                     });
-                    return rangeOverlap;
-                  })();
 
-                  const blockedByAdjacency = editingShift.assignment.shiftType === 'fruehschicht'
-                    ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, shiftPlan?.assignments || [])
-                    : editingShift.assignment.shiftType === 'verschieben'
-                      ? isBlockedByAdjacentVerschieben(emp.id)
-                      : editingShift.assignment.shiftType === 'nachtbereitschaft'
-                        ? isBlockedFromNachtAfterVerschieben(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-                        : false;
-
-                  // Qualification rule: Ü55 or no L2 may only be assigned to 'verschieben'
-                  const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
-
-                  // Check whether employee already has another overlapping assignment (exclude current assignment)
-                  const assignmentStart = new Date(editingShift.assignment.startDate);
-                  const assignmentEnd = new Date(editingShift.assignment.endDate);
-                  const hasOtherOverlapping = (shiftPlan?.assignments || []).some(a => {
-                    if (a.id === editingShift.assignment.id) return false;
-                    if (!a.employees.includes(emp.id)) return false;
-                    const aStart = new Date(a.startDate);
-                    const aEnd = new Date(a.endDate);
-                    return aStart <= assignmentEnd && aEnd >= assignmentStart;
-                  });
-
-                  // Calculate recommendation indicators
-                  const shiftCount = (shiftPlan?.assignments || []).filter(a => 
-                    a.shiftType === editingShift.assignment.shiftType && 
-                    a.employees.includes(emp.id)
-                  ).length;
-
-                  // Check if employee's department needs this shift in this period
-                  const deptHasShiftInPeriod = (shiftPlan?.assignments || []).some(a => {
-                    if (a.shiftType !== editingShift.assignment.shiftType) return false;
-                    const aStart = new Date(a.startDate);
-                    const aEnd = new Date(a.endDate);
-                    const overlaps = aStart <= assignmentEnd && aEnd >= assignmentStart;
-                    return overlaps && a.employees.some(empId => {
-                      const e = employees.find(e => e.id === empId);
-                      return e?.department === emp.department;
-                    });
-                  });
-
-                  // Determine if this is a good candidate (eligible + low shift count)
-                  const shiftCountForEmployee = (employeeId: string) =>
-                    (shiftPlan?.assignments || []).filter(a =>
-                      a.shiftType === editingShift.assignment.shiftType &&
-                      a.employees.includes(employeeId)
+                    const shiftCount = (shiftPlan?.assignments || []).filter(a => 
+                      a.shiftType === editingShift.assignment.shiftType && 
+                      a.employees.includes(emp.id)
                     ).length;
 
-                  const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification;
+                    // determine eligibility and recommendation flag
+                    const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification && !hasOtherOverlapping;
 
-                  const eligibleEmployees = employees.filter(e => {
-                    const start = startOfDay(new Date(editingShift.assignment.startDate));
-                    const end = endOfDay(new Date(editingShift.assignment.endDate));
-
-                    const singleVacOverlap = (e.vacationDays || []).some(vacDay => {
-                      const v = startOfDay(new Date(vacDay));
-                      return isWithinInterval(v, { start, end });
-                    });
-                    if (singleVacOverlap) return false;
-
-                    const rangeVacOverlap = (e.vacationRanges || []).some(r => {
-                      const s = startOfDay(new Date(r.startDate));
-                      const en = endOfDay(new Date(r.endDate));
-                      return s <= end && en >= start;
-                    });
-                    if (rangeVacOverlap) return false;
-
-                    const qual = editingShift.assignment.shiftType !== 'verschieben' && (e.isOver55 || !e.hasL2);
-                    if (qual) return false;
-
-                    const adj = editingShift.assignment.shiftType === 'fruehschicht'
-                      ? isBlockedFromFruehschichtDueToAdjacency(e, editingShift.date, shiftPlan?.assignments || [])
-                      : editingShift.assignment.shiftType === 'verschieben'
-                        ? isBlockedByAdjacentVerschieben(e.id)
-                        : editingShift.assignment.shiftType === 'nachtbereitschaft'
-                          ? isBlockedFromNachtAfterVerschieben(e, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-                          : false;
-                    return !adj;
-                  });
-
-                  // Helper: does department already have coverage for this shift type in the period?
-                  const departmentHasCoverage = (deptId: string) => {
-                    return (shiftPlan?.assignments || []).some(a => {
+                    const departmentHasCoverage = (shiftPlan?.assignments || []).some(a => {
                       if (a.shiftType !== editingShift.assignment.shiftType) return false;
                       const aStart = new Date(a.startDate);
                       const aEnd = new Date(a.endDate);
                       const overlaps = aStart <= assignmentEnd && aEnd >= assignmentStart;
-                      return overlaps && a.employees.some(empId => {
-                        const e = employees.find(x => x.id === empId);
-                        return e?.department === deptId;
-                      });
+                      return overlaps && a.employees.some(empId => employees.find(e => e.id === empId)?.department === emp.department);
                     });
-                  };
 
-                  // Prefer candidates from departments that DO NOT yet have coverage in the period
-                  const candidatesNoDeptCoverage = eligibleEmployees.filter(e => !departmentHasCoverage(e.department));
-                  const recommendationPool = candidatesNoDeptCoverage.length > 0 ? candidatesNoDeptCoverage : eligibleEmployees;
+                    return {
+                      emp,
+                      isAssigned,
+                      isOnVacation,
+                      blockedByAdjacency,
+                      blockedByQualification,
+                      hasOtherOverlapping,
+                      shiftCount,
+                      isEligible,
+                      needsDept: !departmentHasCoverage,
+                      recommended: false
+                    };
+                  });
 
-                  const minShiftCount = recommendationPool.length > 0
-                    ? Math.min(...recommendationPool.map(e => shiftCountForEmployee(e.id)))
-                    : 0;
+                  // compute recommendation pool and min shift count
+                  const recommendationPool = enriched.filter(e => e.isEligible && e.needsDept).length > 0
+                    ? enriched.filter(e => e.isEligible && e.needsDept)
+                    : enriched.filter(e => e.isEligible);
 
-                  const hasLowShiftCount = isEligible && shiftCount === minShiftCount && recommendationPool.some(r => r.id === emp.id);
+                  const minShiftCount = recommendationPool.length > 0 ? Math.min(...recommendationPool.map(e => e.shiftCount)) : 0;
 
-                  return (
-                    <div
-                      key={emp.id}
-onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
-                      className={`p-3 rounded-lg border-2 transition-all ${
-                        isOnVacation
-                          ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-50'
-                          : (blockedByAdjacency || blockedByQualification)
-                          ? 'bg-yellow-50 border-yellow-200 cursor-pointer opacity-80'
-                          : isAssigned
-                          ? 'bg-primary-50 border-primary-500 cursor-pointer hover:bg-primary-100'
-                          : 'bg-white border-gray-200 cursor-pointer hover:border-primary-300 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium text-gray-900">{emp.name}</div>
-                          <div className="text-sm text-gray-600">
-                            {getDepartmentName(emp.department)}
-                          </div>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {emp.isOver55 && (
-                              <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>
-                            )}
-                            {emp.hasL2 && (
-                              <span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>
-                            )}
-                            {isOnVacation && (
-                              <span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded text-xs">Im Urlaub</span>
-                            )}
-                            {blockedByAdjacency && (
-                              <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">
-                                {editingShift.assignment.shiftType === 'fruehschicht' ? 'Gesperrt: angrenzende Schicht' : editingShift.assignment.shiftType === 'verschieben' ? 'Konflikt: Wochenende' : 'Konflikt: zeitliche Nähe'}
-                              </span>
-                            )}
-                            {blockedByQualification && (
-                              <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>
-                            )}
+                  // annotate recommended flag
+                  enriched.forEach(e => { (e as any).recommended = e.isEligible && e.shiftCount === minShiftCount && recommendationPool.some(r => r.emp.id === e.emp.id); });
 
-                            {hasOtherOverlapping && !isAssigned && (
-                              <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Andere Schicht vorhanden</span>
-                            )}
+                  // sort the enriched list (keeps recommended at top within eligible)
+                  enriched.sort((a, b) => {
+                    const score = (x: any) => (x.recommended ? 0 : x.isAssigned ? 1 : x.isEligible ? 2 : x.blockedByQualification || x.blockedByAdjacency || x.hasOtherOverlapping ? 3 : 4);
+                    const sa = score(a), sb = score(b);
+                    if (sa !== sb) return sa - sb;
+                    if (a.recommended !== b.recommended) return (a.recommended ? -1 : 1);
+                    if (a.shiftCount !== b.shiftCount) return a.shiftCount - b.shiftCount;
+                    return a.emp.name.localeCompare(b.emp.name, 'de');
+                  });
 
-                            {/* Recommendation indicators */}
-                            {isEligible && !deptHasShiftInPeriod && !hasOtherOverlapping && (
-                              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">
-                                🎯 Abteilung benötigt
-                              </span>
-                            )}
-                            {isEligible && (
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs">
-                                {shiftCount} {editingShift.assignment.shiftType === 'fruehschicht' ? 'Früh' : editingShift.assignment.shiftType === 'verschieben' ? 'Versch.' : 'Nacht'}
-                              </span>
-                            )}
-                            {hasLowShiftCount && eligibleEmployees.length > 1 && (
-                              <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded text-xs font-medium">
-                                ⭐ Empfohlen
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div>
-                          {isAssigned && !isOnVacation && (
-                            <div className="bg-primary-600 text-white px-3 py-1 rounded-full text-sm font-medium">
-                              Zugewiesen
+                  // split into three clear groups for display
+                  const available = enriched.filter(e => e.isEligible);
+                  const violators = enriched.filter(e => !e.isOnVacation && !e.isEligible);
+                  const excluded = enriched.filter(e => e.isOnVacation);
+
+                  const renderCard = (item: any) => {
+                    const { emp, isAssigned, isOnVacation, blockedByAdjacency, blockedByQualification, hasOtherOverlapping, shiftCount, isEligible, needsDept } = item;
+                    const hasLowShiftCount = item.recommended;
+
+                    return (
+                      <div
+                        key={emp.id}
+                        onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
+                        className={`p-3 rounded-lg border-2 transition-all ${
+                          isOnVacation
+                            ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-60'
+                            : (blockedByAdjacency || blockedByQualification || hasOtherOverlapping)
+                            ? 'bg-yellow-50 border-yellow-200 cursor-pointer opacity-90'
+                            : isAssigned
+                            ? 'bg-primary-50 border-primary-500 cursor-pointer hover:bg-primary-100'
+                            : 'bg-white border-gray-200 cursor-pointer hover:border-primary-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium text-gray-900">{emp.name}</div>
+                            <div className="text-sm text-gray-600">{getDepartmentName(emp.department)}</div>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {emp.isOver55 && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>)}
+                              {emp.hasL2 && (<span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>)}
+                              {isOnVacation && (<span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded text-xs">Im Urlaub</span>)}
+                              {blockedByAdjacency && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">{editingShift.assignment.shiftType === 'fruehschicht' ? 'Gesperrt: angrenzende Schicht' : editingShift.assignment.shiftType === 'verschieben' ? 'Konflikt: Wochenende' : 'Konflikt: zeitliche Nähe'}</span>)}
+                              {blockedByQualification && (<span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>)}
+
+                              {hasOtherOverlapping && !isAssigned && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Andere Schicht vorhanden</span>)}
+
+                              {isEligible && needsDept && !hasOtherOverlapping && (<span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">Abteilung verfügbar</span>)}
+
+                              {isEligible && (<span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs">{shiftCount} {editingShift.assignment.shiftType === 'fruehschicht' ? 'Früh' : editingShift.assignment.shiftType === 'verschieben' ? 'Versch.' : 'Nacht'}</span>)}
+
+                              {hasLowShiftCount && (employees.filter(e => e.id !== emp.id).length > 0) && (<span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded text-xs font-medium">⭐ Empfohlen</span>)}
                             </div>
-                          )}
+                          </div>
+                          <div>
+                            {isAssigned && !isOnVacation && (<div className="bg-primary-600 text-white px-3 py-1 rounded-full text-sm font-medium">Zugewiesen</div>)}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  };
+
+                // render grouped columns
+                return (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <section>
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-sm font-semibold">Verfügbare Mitarbeiter</div>
+                          <div className="text-xs text-gray-500">Direkt zuweisbar</div>
+                        </div>
+                        <div className="text-xs text-gray-400">{available.length}</div>
+                      </div>
+                      <div className="space-y-3">
+                        {available.length > 0 ? available.map(item => renderCard(item)) : <div className="text-xs text-gray-400">Keine verfügbaren Mitarbeiter.</div>}
+                      </div>
+                    </section>
+
+                    <section>
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-sm font-semibold">Regelverletzer (override möglich)</div>
+                          <div className="text-xs text-gray-500">Können zugewiesen werden — Warnung sichtbar</div>
+                        </div>
+                        <div className="text-xs text-gray-400">{violators.length}</div>
+                      </div>
+                      <div className="space-y-3">
+                        {violators.length > 0 ? violators.map(item => renderCard(item)) : <div className="text-xs text-gray-400">Keine Regelverletzer.</div>}
+                      </div>
+                    </section>
+
+                    <section>
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-sm font-semibold">Nicht verfügbar</div>
+                          <div className="text-xs text-gray-500">Im Urlaub oder ausgeschlossen</div>
+                        </div>
+                        <div className="text-xs text-gray-400">{excluded.length}</div>
+                      </div>
+                      <div className="space-y-3">
+                        {excluded.length > 0 ? excluded.map(item => renderCard(item)) : <div className="text-xs text-gray-400">Keine ausgeschlossenen Mitarbeiter.</div>}
+                      </div>
+                    </section>
+                  </div>
+                );
+
+                })()}
               </div>
               
-              <div className="mt-6 flex justify-between items-center pt-4 border-t">
-                <button
-                  onClick={handleDeleteShift}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
-                >
-                  Schicht löschen
-                </button>
+              <div className="mt-6 flex justify-end items-center pt-4 border-t">
                 <div className="flex gap-3">
                   <button
                     onClick={() => setEditingShift(null)}
@@ -862,6 +1209,16 @@ onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
             </div>
           </div>
         </div>
+      )}
+
+      {/* Label Modal */}
+      {labelModalData && (
+        <LabelModal
+          employeeId={labelModalData.employeeId}
+          employeeName={labelModalData.employeeName}
+          date={labelModalData.date}
+          onClose={() => setLabelModalData(null)}
+        />
       )}
     </div>
   );

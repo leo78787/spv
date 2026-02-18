@@ -18,6 +18,13 @@ export interface Employee {
   preferences: ShiftPreference[];
 }
 
+export interface Holiday {
+  id: string;
+  date: string; // ISO yyyy-MM-dd
+  name: string;
+  disabled?: boolean; // if true, hide this date (used to suppress built-in holidays)
+}
+
 export interface ShiftPreference {
   shiftType: ShiftType;
   startDate: Date;
@@ -57,6 +64,22 @@ export interface ShiftPlan {
   startMonth?: number;         // 0 = Januar — optional, present when plan had start month selected
   months?: number;             // number of months included in the plan (typically 12)
   assignments: ShiftAssignment[];
+}
+
+// Label types for calendar markings (e.g., training, meetings, etc.)
+export interface Label {
+  id: string;
+  name: string;                // e.g., "Schulung"
+  letter: string;              // e.g., "S" - single character abbreviation
+  color: string;               // hex color e.g., "#3b82f6"
+  text?: string;               // optional additional text
+}
+
+export interface CalendarLabel {
+  id: string;
+  employeeId: string;
+  date: string;                // ISO date string YYYY-MM-DD
+  labelId: string;             // references Label.id
 }
 
 export type ViewTab = 'employees' | 'departments' | 'planning' | 'calendar' | 'kpis';

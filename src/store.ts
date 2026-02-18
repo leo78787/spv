@@ -1,11 +1,14 @@
 import { create } from 'zustand';
-import { Employee, Department, ShiftAssignment, ShiftPlan } from './types';
+import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel } from './types';
 
 interface AppState {
   employees: Employee[];
   departments: Department[];
   currentYear: number;
   shiftPlan: ShiftPlan | null;
+  customHolidays: Holiday[];
+  labels: Label[];
+  calendarLabels: CalendarLabel[];
   
   // Employee actions
   addEmployee: (employee: Employee) => void;
@@ -17,9 +20,24 @@ interface AppState {
   updateDepartment: (id: string, updates: Partial<Department>) => void;
   deleteDepartment: (id: string) => void;
   
+  // Holiday actions
+  addCustomHoliday: (holiday: Holiday) => void;
+  updateCustomHoliday: (id: string, updates: Partial<Holiday>) => void;
+  deleteCustomHoliday: (id: string) => void;
+
+  // Label actions
+  addLabel: (label: Label) => void;
+  updateLabel: (id: string, updates: Partial<Label>) => void;
+  deleteLabel: (id: string) => void;
+
+  // Calendar label actions
+  addCalendarLabel: (calendarLabel: CalendarLabel) => void;
+  deleteCalendarLabel: (id: string) => void;
+
   // Shift plan actions
   setCurrentYear: (year: number) => void;
   createShiftPlan: (year: number, startMonth?: number, months?: number) => void;
+  setShiftPlan: (plan: ShiftPlan | null) => void;
   updateShiftAssignment: (assignment: ShiftAssignment) => void;
   deleteShiftAssignment: (id: string) => void;
   confirmShiftAssignment: (id: string) => void;
@@ -61,12 +79,74 @@ export const useStore = create<AppState>((set) => {
     ],
     currentYear: saved?.currentYear || new Date().getFullYear(),
     shiftPlan: saved?.shiftPlan || null,
+    customHolidays: saved?.customHolidays || [],
+    labels: saved?.labels || [],
+    calendarLabels: saved?.calendarLabels || [],
     
     addEmployee: (employee: Employee) => set((state) => {
       const newState = {
         ...state,
         employees: [...state.employees, employee]
       };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    // Holiday actions (user configurable)
+    addCustomHoliday: (holiday: Holiday) => set((state) => {
+      const newState = { ...state, customHolidays: [...state.customHolidays, holiday] };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    updateCustomHoliday: (id: string, updates: Partial<Holiday>) => set((state) => {
+      const newState = { ...state, customHolidays: state.customHolidays.map(h => h.id === id ? { ...h, ...updates } : h) };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    deleteCustomHoliday: (id: string) => set((state) => {
+      const newState = { ...state, customHolidays: state.customHolidays.filter(h => h.id !== id) };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    // Label actions
+    addLabel: (label: Label) => set((state) => {
+      const newState = { ...state, labels: [...state.labels, label] };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    updateLabel: (id: string, updates: Partial<Label>) => set((state) => {
+      const newState = { 
+        ...state, 
+        labels: state.labels.map(l => l.id === id ? { ...l, ...updates } : l) 
+      };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    deleteLabel: (id: string) => set((state) => {
+      const newState = { 
+        ...state, 
+        labels: state.labels.filter(l => l.id !== id),
+        // Also remove all calendar labels that reference this label
+        calendarLabels: state.calendarLabels.filter(cl => cl.labelId !== id)
+      };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    // Calendar label actions
+    addCalendarLabel: (calendarLabel: CalendarLabel) => set((state) => {
+      const newState = { ...state, calendarLabels: [...state.calendarLabels, calendarLabel] };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    deleteCalendarLabel: (id: string) => set((state) => {
+      const newState = { ...state, calendarLabels: state.calendarLabels.filter(cl => cl.id !== id) };
       saveToLocalStorage('schichtplan-storage', newState);
       return newState;
     }),
@@ -129,8 +209,16 @@ export const useStore = create<AppState>((set) => {
     createShiftPlan: (year: number, startMonth = 0, months = 12) => set((state) => {
       const newState = {
         ...state,
-        shiftPlan: { year, startMonth, months, assignments: [] }
+        shiftPlan: { year, startMonth, months, assignments: [] },
+        calendarLabels: [] // Clear all calendar labels when creating new shift plan
       };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    // Replace entire shiftPlan (used for JSON import)
+    setShiftPlan: (plan: ShiftPlan | null) => set((state) => {
+      const newState = { ...state, shiftPlan: plan };
       saveToLocalStorage('schichtplan-storage', newState);
       return newState;
     }),

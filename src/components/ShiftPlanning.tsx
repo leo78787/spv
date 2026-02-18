@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { Calendar, Users, AlertCircle, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { Calendar, Users, AlertCircle, Sparkles, Download } from 'lucide-react';
 import { useStore } from '../store';
 import { generateAutomaticShiftPlan } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
-import { getMonthName } from '../utils/helpers';
+import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 
 export function ShiftPlanning() {
-  const { employees, shiftPlan, createShiftPlan, updateShiftAssignment } = useStore();
+  const { employees, departments, shiftPlan, createShiftPlan, addEmployee, addDepartment, setShiftPlan, updateShiftAssignment, addLabel, addCalendarLabel } = useStore();
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number>(0); // 0 = Januar
   const [isGenerating, setIsGenerating] = useState(false);
@@ -71,8 +71,104 @@ export function ShiftPlanning() {
     fruehschicht: currentYearAssignments.filter((a) => a.shiftType === 'fruehschicht').length,
   };
 
+  const planFileRef = React.useRef<HTMLInputElement | null>(null);
+
+  const onPlanFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+
+    try {
+      const text = await f.text();
+      const parsed = JSON.parse(text);
+      const revived = reviveImportedPlan(parsed);
+      if (!revived) {
+        alert('Ungültige Plan‑Datei. Bitte eine zuvor exportierte Schichtplan‑JSON verwenden.');
+        return;
+      }
+
+      // departments: create if missing (match by name, case-insensitive)
+      const deptMap: Record<string, string> = {};
+      revived.departments.forEach((d: any) => {
+        const existing = departments.find(x => x.name.toLowerCase().trim() === d.name.toLowerCase().trim());
+        if (existing) deptMap[d.id] = existing.id;
+        else {
+          const newDept = { id: `dept-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name: d.name };
+          addDepartment(newDept);
+          deptMap[d.id] = newDept.id;
+        }
+      });
+
+      // employees: add missing, map imported id -> actual id (match by name)
+      const empMap: Record<string, string> = {};
+      revived.employees.forEach((ie: any) => {
+        const existingEmp = employees.find(e => e.name.toLowerCase().trim() === ie.name.toLowerCase().trim());
+        if (existingEmp) {
+          empMap[ie.id] = existingEmp.id;
+        } else {
+          const newEmp = {
+            id: generateId(),
+            name: ie.name,
+            department: deptMap[ie.department] || departments[0]?.id || '',
+            isOver55: !!ie.isOver55,
+            hasL2: !!ie.hasL2,
+            vacationDays: (ie.vacationDays || []).map((d: any) => new Date(d)),
+            vacationRanges: (ie.vacationRanges || []).map((r: any) => ({ startDate: new Date(r.startDate), endDate: new Date(r.endDate) })),
+            preferences: (ie.preferences || []).map((p: any) => ({ ...p, startDate: new Date(p.startDate), endDate: new Date(p.endDate) }))
+          } as any;
+          addEmployee(newEmp);
+          empMap[ie.id] = newEmp.id;
+        }
+      });
+
+      // assignments: remap employee ids and ensure dates are Date objects
+      const importedPlan = revived.shiftPlan;
+      const mappedAssignments = (importedPlan.assignments || []).map((a: any) => ({
+        ...a,
+        startDate: new Date(a.startDate),
+        endDate: new Date(a.endDate),
+        employees: (a.employees || []).map((id: string) => empMap[id] || id)
+      }));
+
+      const finalPlan = { ...importedPlan, assignments: mappedAssignments };
+
+      setShiftPlan(finalPlan as any);
+      
+      // Import labels if present
+      if (revived.labels && Array.isArray(revived.labels)) {
+        revived.labels.forEach((label: any) => {
+          addLabel({
+            id: label.id || `label-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            name: label.name || '',
+            letter: label.letter || '',
+            color: label.color || '#3b82f6',
+            text: label.text || ''
+          });
+        });
+      }
+      
+      // Import calendar labels if present (remap employee IDs)
+      if (revived.calendarLabels && Array.isArray(revived.calendarLabels)) {
+        revived.calendarLabels.forEach((cl: any) => {
+          addCalendarLabel({
+            id: cl.id || `clabel-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            employeeId: empMap[cl.employeeId] || cl.employeeId,
+            date: cl.date,
+            labelId: cl.labelId
+          });
+        });
+      }
+      
+      alert(`Schichtplan importiert: ${mappedAssignments.length} Zuweisungen, ${revived.employees.length} Mitarbeiter, ${revived.departments.length} Abteilungen (neu hinzugefügt falls nötig).`);
+    } catch (err) {
+      console.error(err);
+      alert('Fehler beim Einlesen der Datei. Bitte prüfen Sie das Format.');
+    } finally {
+      if (planFileRef.current) planFileRef.current.value = '';
+    }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="flex items-center justify-between">
@@ -82,7 +178,15 @@ export function ShiftPlanning() {
               Generieren Sie den kompletten Schichtplan für das Jahr mit einem Klick
             </p>
           </div>
-          <Calendar className="h-12 w-12 text-primary-600" />
+          <div className="flex items-center gap-3">
+            <Calendar className="h-12 w-12 text-primary-600" />
+            <div>
+              <button onClick={() => planFileRef.current?.click()} className="text-sm px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2">
+                <Download size={14} /> Plan importieren (.json)
+              </button>
+              <input ref={planFileRef} type="file" accept="application/json,.json" onChange={onPlanFileChange} className="hidden" />
+            </div>
+          </div>
         </div>
       </div>
 
