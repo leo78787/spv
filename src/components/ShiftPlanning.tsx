@@ -1,26 +1,251 @@
-import React, { useState } from 'react';
-import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2 } from 'lucide-react';
 import { useStore } from '../store';
 import { generateAutomaticShiftPlan, DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
+import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
+import type { WorkerResponse } from '../workers/fairnessWorker';
+
+// Module-level cache so preview survives component unmounts (tab switches)
+let moduleCachedImpactSnapshot: string | null = null;
+let moduleCachedImpactFactors: ImpactFactors | null = null;
+// Persist schedulerConfig edits while the user navigates away so the component
+// can restore the in-progress settings and continue computing when remounted.
+let moduleCachedSchedulerConfig: SchedulerConfig | null = null;
+
+// Module-level worker + helpers so background computations survive component
+// unmounts (tab switches). The worker is created lazily and kept for the page life.
+let moduleWorker: Worker | null = null;
+let moduleWorkerNextId = 0;
+const moduleWorkerPendingSnapshots: Record<number, string> = {};
+const moduleListeners = new Set<(msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => void>();
+
+function ensureModuleWorker() {
+  if (moduleWorker) return moduleWorker;
+  moduleWorker = new Worker(new URL('../workers/fairnessWorker.ts', import.meta.url), { type: 'module' });
+  moduleWorker.onmessage = (e: MessageEvent<{ id: number; result?: ImpactFactors; error?: string }>) => {
+    const { id, result, error } = e.data;
+    const snapshot = moduleWorkerPendingSnapshots[id];
+    // update module cache if we have a result
+    if (result) {
+      moduleCachedImpactFactors = result;
+      if (snapshot) moduleCachedImpactSnapshot = snapshot;
+    }
+    // notify listeners (component instances)
+    for (const l of moduleListeners) l({ id, result, error, snapshot });
+    delete moduleWorkerPendingSnapshots[id];
+  };
+  return moduleWorker;
+}
+
+function postModuleWorkerRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string) {
+  const worker = ensureModuleWorker();
+  const id = ++moduleWorkerNextId;
+  moduleWorkerPendingSnapshots[id] = snapshot;
+  worker.postMessage({ id, employees: payload.employees, config: payload.schedulerConfig, year: payload.year, startMonth: payload.startMonth });
+  return id;
+}
+
+function findModulePendingIdForSnapshot(snapshot: string): number | null {
+  for (const idStr of Object.keys(moduleWorkerPendingSnapshots)) {
+    const id = Number(idStr);
+    if (moduleWorkerPendingSnapshots[id] === snapshot) return id;
+  }
+  return null;
+}
+
+const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
+const badgeCls = (v: number) =>
+  v > 0.4  ? 'text-green-700 bg-green-50 border-green-200' :
+  v < -0.4 ? 'text-red-700 bg-red-50 border-red-200' :
+  'text-gray-500 bg-gray-50 border-gray-200';
+
+/** One row of 4 fairness delta badges, each showing “delta → result%” */
+function ImpactBadges({
+  d, baseline, loading,
+}: {
+  d: ImpactDelta | undefined;
+  baseline?: FairnessScores;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+        <Loader2 size={10} className="animate-spin" /> Berechne…
+      </span>
+    );
+  }
+  if (!d) return null;
+  const metrics: { label: string; key: keyof ImpactDelta & keyof FairnessScores }[] = [
+    { label: 'Gesamt',   key: 'overall' },
+    { label: 'Versetzt', key: 'verschieben' },
+    { label: 'Nacht',    key: 'nacht' },
+    { label: 'Früh/WE', key: 'frueh' },
+  ];
+  return (
+    <div className="flex gap-1 flex-wrap">
+      {metrics.map(({ label, key }) => {
+        const dv     = d[key];
+        const result = baseline != null ? baseline[key] + dv : null;
+        return (
+          <span key={key} className={`text-xs px-1.5 py-0.5 rounded border ${badgeCls(dv)}`}>
+            {label}: {fmt(dv)} %{result != null && (
+              <span className="opacity-60"> → {result.toFixed(1)} %</span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** +1 / -1 rows for count inputs */
+function CountImpactBadges({
+  ci, baseline, loading, unit = 'Person',
+}: {
+  ci: CountImpact | undefined;
+  baseline?: FairnessScores;
+  loading: boolean;
+  unit?: string;
+}) {
+  if (loading) {
+    return <span className="inline-flex items-center gap-1 text-xs text-gray-400"><Loader2 size={10} className="animate-spin" /> Berechne…</span>;
+  }
+  if (!ci) return null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs font-medium text-gray-500 whitespace-nowrap">+1 {unit}</span>
+        <ImpactBadges d={ci.plus}  baseline={baseline} loading={false} />
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs font-medium text-gray-500 whitespace-nowrap">−1 {unit}</span>
+        <ImpactBadges d={ci.minus} baseline={baseline} loading={false} />
+      </div>
+    </div>
+  );
+}
 
 export function ShiftPlanning() {
   const { employees, departments, shiftPlan, createShiftPlan, addEmployee, addDepartment, setShiftPlan, updateShiftAssignment, addLabel, addCalendarLabel, acknowledgeViolation } = useStore();
   const [selectedYear, setSelectedYear] = useState(() => shiftPlan?.year ?? new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number>(() => shiftPlan?.startMonth ?? 0);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showConfig, setShowConfig] = useState(false);
+  // Open the planning rules / shift‑counts panel by default
+  const [showConfig, setShowConfig] = useState(true);
   const [showPipeline, setShowPipeline] = useState(false);
   const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfig>(
-    () => shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG
+    () => moduleCachedSchedulerConfig ?? shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG
   );
   const [generationResult, setGenerationResult] = useState<{
     success: boolean;
     message: string;
     assignmentCount: number;
   } | null>(null);
+
+  // ── Impact factor state ───────────────────────────────────────────────────
+  const [impactFactors, setImpactFactors] = useState<ImpactFactors | null>(null);
+  const [isComputingImpact, setIsComputingImpact] = useState(false);
+
+  // Monotonically-increasing request counter; stale responses are ignored
+  const pendingIdRef = useRef<number>(0);
+  // Snapshot of last-computed inputs — used to avoid redundant recomputation
+  const lastSnapshotRef = useRef<string | null>(null);
+  // Which snapshot the currently-displayed `impactFactors` corresponds to
+  const computedSnapshotRef = useRef<string | null>(null);
+
+  // Subscribe to module-level worker notifications (worker itself is
+  // module-scoped and kept alive across mounts). We only register a
+  // listener here; the worker is NOT terminated on unmount so a running
+  // computation continues when the component is unmounted.
+  useEffect(() => {
+    const handler = (msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => {
+      const { id, result, error, snapshot } = msg;
+      // Component only cares about the latest request it issued
+      if (id !== pendingIdRef.current) return;
+      if (error) {
+        console.error('[fairnessWorker]', error);
+        setIsComputingImpact(false);
+        return;
+      }
+      if (result) {
+        setImpactFactors(result);
+        computedSnapshotRef.current = snapshot ?? lastSnapshotRef.current ?? null;
+        moduleCachedImpactFactors = result;
+        moduleCachedImpactSnapshot = snapshot ?? lastSnapshotRef.current ?? moduleCachedImpactSnapshot;
+      }
+      setIsComputingImpact(false);
+    };
+    moduleListeners.add(handler);
+    // ensure worker exists so in-flight background computations keep running
+    ensureModuleWorker();
+    return () => void moduleListeners.delete(handler);
+  }, []);
+
+  // Trigger a new background computation whenever relevant inputs change
+  // (cache the last computed inputs — opening/closing the panel does NOT force
+  // a recompute unless the inputs actually changed)
+  useEffect(() => {
+    // If panel closed: keep cached preview as-is
+    if (!showConfig) return;
+
+    // No employees → nothing to compute
+    if (employees.length === 0) {
+      lastSnapshotRef.current = null;
+      computedSnapshotRef.current = null;
+      moduleCachedImpactSnapshot = null;
+      moduleCachedImpactFactors = null;
+      setImpactFactors(null);
+      setIsComputingImpact(false);
+      return;
+    }
+
+    // Build a compact, stable snapshot of the inputs we care about
+    const empSummary = employees
+      .map(e => ({ id: e.id, isOver55: e.isOver55, hasL2: e.hasL2, department: e.department, prefs: e.preferences?.length ?? 0 }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const snapshot = JSON.stringify({ employees: empSummary, schedulerConfig, selectedYear, selectedMonth });
+
+    // If a module-level cache exists for this exact snapshot, reuse it and
+    // avoid any recomputation (this preserves the preview across unmounts)
+    if (moduleCachedImpactSnapshot === snapshot && moduleCachedImpactFactors) {
+      setImpactFactors(moduleCachedImpactFactors);
+      computedSnapshotRef.current = snapshot;
+      setIsComputingImpact(false);
+      return;
+    }
+
+    // If another (module-level) request for the same snapshot is in flight,
+    // attach to it instead of re-posting — show spinner while waiting.
+    const existingId = findModulePendingIdForSnapshot(snapshot);
+    if (existingId !== null) {
+      pendingIdRef.current = existingId;
+      lastSnapshotRef.current = snapshot;
+      setIsComputingImpact(true);
+      return;
+    }
+
+    // If nothing changed since the last computation within this mounted
+    // component and we already have results for that same snapshot, skip
+    // recompute as well.
+    if (lastSnapshotRef.current === snapshot && computedSnapshotRef.current === snapshot && impactFactors) {
+      return;
+    }
+
+    // Debounce then post to the worker — keep current preview visible while
+    // the new computation runs.
+    const timer = setTimeout(() => {
+      const id = postModuleWorkerRequest({ employees, schedulerConfig, year: selectedYear, startMonth: selectedMonth }, snapshot);
+      pendingIdRef.current = id;
+      lastSnapshotRef.current = snapshot; // mark which inputs we're computing for
+      setIsComputingImpact(true);
+    }, 200);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showConfig, employees, schedulerConfig, selectedYear, selectedMonth, impactFactors]);
 
   // Helpers for updating config
   const setShiftCount = (type: keyof SchedulerConfig['shiftCounts'], val: number) =>
@@ -31,6 +256,11 @@ export function ShiftPlanning() {
 
   const setOver55Slots = (val: number) =>
     setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: val }));
+
+  // Persist current schedulerConfig to module cache so edits survive unmounts
+  useEffect(() => {
+    moduleCachedSchedulerConfig = schedulerConfig;
+  }, [schedulerConfig]);
 
   const handleGenerateFullPlan = () => {
     if (employees.length === 0) {
@@ -230,54 +460,79 @@ export function ShiftPlanning() {
 
             {/* Shift Counts */}
             <div>
-              <h4 className="font-semibold text-gray-800 mt-4 mb-3">Gleichzeitige Schichtbesetzung</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-gray-700">Versetzte Schicht (Mo–Fr)</span>
-                  <input
-                    type="number" min={1} max={20}
-                    value={schedulerConfig.shiftCounts.verschieben}
-                    onChange={e => setShiftCount('verschieben', Math.max(1, Number(e.target.value)))}
-                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-gray-700">Nachtbereitschaft (Sa–Sa)</span>
-                  <input
-                    type="number" min={1} max={20}
-                    value={schedulerConfig.shiftCounts.nachtbereitschaft}
-                    onChange={e => setShiftCount('nachtbereitschaft', Math.max(1, Number(e.target.value)))}
-                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-gray-700">Frühschicht WE (Sa–So)</span>
-                  <input
-                    type="number" min={1} max={20}
-                    value={schedulerConfig.shiftCounts.fruehschicht}
-                    onChange={e => setShiftCount('fruehschicht', Math.max(1, Number(e.target.value)))}
-                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </label>
-              </div>
-              <div className="mt-3">
-                <label className="flex flex-col gap-1 inline-block">
-                  <span className="text-sm text-gray-700">Ü55-Slots in der Versetzten Schicht (reserviert)</span>
-                  <input
-                    type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
-                    value={schedulerConfig.over55VerschiebenSlots}
-                    onChange={e => setOver55Slots(Math.min(schedulerConfig.shiftCounts.verschieben, Math.max(0, Number(e.target.value))))}
-                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    disabled={!schedulerConfig.rules.reserveOver55SlotsForVerschieben}
-                  />
-                </label>
+              <h4 className="font-semibold text-gray-800 mt-4 mb-3">Gleichzeitige Schichtbesetzung
+                {isComputingImpact && <span className="ml-2 text-xs font-normal text-gray-400 inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" />Fairness-Vorschau…</span>}
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+                {/* Versetzte Schicht */}
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm font-medium text-gray-700">Versetzte Schicht (Mo–Fr)</span>
+                    <input
+                      type="number" min={1} max={20}
+                      value={schedulerConfig.shiftCounts.verschieben}
+                      onChange={e => setShiftCount('verschieben', Math.max(1, Number(e.target.value)))}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
+                  <CountImpactBadges ci={impactFactors?.counts.verschieben} baseline={impactFactors?.baseline} loading={isComputingImpact} />
+                </div>
+
+                {/* Nachtbereitschaft */}
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm font-medium text-gray-700">Nachtbereitschaft (Sa–Sa)</span>
+                    <input
+                      type="number" min={1} max={20}
+                      value={schedulerConfig.shiftCounts.nachtbereitschaft}
+                      onChange={e => setShiftCount('nachtbereitschaft', Math.max(1, Number(e.target.value)))}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
+                  <CountImpactBadges ci={impactFactors?.counts.nachtbereitschaft} baseline={impactFactors?.baseline} loading={isComputingImpact} />
+                </div>
+
+                {/* Frühschicht */}
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm font-medium text-gray-700">Frühschicht WE (Sa–So)</span>
+                    <input
+                      type="number" min={1} max={20}
+                      value={schedulerConfig.shiftCounts.fruehschicht}
+                      onChange={e => setShiftCount('fruehschicht', Math.max(1, Number(e.target.value)))}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
+                  <CountImpactBadges ci={impactFactors?.counts.fruehschicht} baseline={impactFactors?.baseline} loading={isComputingImpact} />
+                </div>
+
+                {/* Ü55-Slots */}
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm font-medium text-gray-700">Ü55-Slots (Versetzt reserviert)</span>
+                    <input
+                      type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
+                      value={schedulerConfig.over55VerschiebenSlots}
+                      onChange={e => setOver55Slots(Math.min(schedulerConfig.shiftCounts.verschieben, Math.max(0, Number(e.target.value))))}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      disabled={!schedulerConfig.rules.reserveOver55SlotsForVerschieben}
+                    />
+                  </label>
+                  <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
+                  <CountImpactBadges ci={impactFactors?.counts.over55Slots} baseline={impactFactors?.baseline} loading={isComputingImpact} unit="Slot" />
+                </div>
+
               </div>
             </div>
 
             {/* Rule Toggles */}
             <div>
               <h4 className="font-semibold text-gray-800 mb-3">Aktive Regeln</h4>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {([
                   { key: 'noWeekendAroundVacation',             label: 'Kein Wochenenddienst direkt vor/nach Urlaub' },
                   { key: 'noFruehschichtAdjacentToVerschieben', label: 'Keine Frühschicht am Wochenende angrenzend an Versetzt-Woche' },
@@ -289,21 +544,30 @@ export function ShiftPlanning() {
                   { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen' },
                   { key: 'departmentDiversity',                 label: 'Abteilungsvielfalt bei der Auswahl bevorzugen' },
                 ] as { key: keyof SchedulerConfig['rules']; label: string }[]).map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-3 cursor-pointer select-none">
-                    <div
-                      onClick={() => setRule(key, !schedulerConfig.rules[key])}
-                      className={`relative w-10 h-6 rounded-full transition-colors ${
-                        schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                          schedulerConfig.rules[key] ? 'translate-x-5' : 'translate-x-1'
+                  <div key={key} className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={schedulerConfig.rules[key]}
+                        onClick={() => setRule(key, !schedulerConfig.rules[key])}
+                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors ${
+                          schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'
                         }`}
-                      />
+                      >
+                        <span
+                          className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                            schedulerConfig.rules[key] ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                      <span className="text-sm text-gray-700 leading-tight">{label}</span>
                     </div>
-                    <span className="text-sm text-gray-700">{label}</span>
-                  </label>
+                    <div className="ml-13 pl-[52px] space-y-1">
+                      <p className="text-xs text-gray-400">Fairness bei {schedulerConfig.rules[key] ? 'Deaktivierung' : 'Aktivierung'}:</p>
+                      <ImpactBadges d={impactFactors?.rules[key]} baseline={impactFactors?.baseline} loading={isComputingImpact} />
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useStore } from '../store';
-import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS } from '../types';
+import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department } from '../types';
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download } from 'lucide-react';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { 
   startOfMonth, 
   endOfMonth,
@@ -16,7 +16,8 @@ import {
   addDays,
   startOfDay,
   endOfDay,
-  isWithinInterval
+  isWithinInterval,
+  getISOWeek
 } from 'date-fns';
 
 export function CalendarView() {
@@ -388,76 +389,191 @@ export function CalendarView() {
     const startMonth = shiftPlan.startMonth ?? 0;
     const monthsCount = shiftPlan.months ?? 12;
 
-    // helper to decide cell color based on content
-    const cellStyleForValue = (val: string | undefined) => {
-      if (!val) return undefined;
-      if (val === 'Urlaub') return { fill: { fgColor: { rgb: 'DDDDDD' } } };
-      if (val.includes('F')) return { fill: { fgColor: { rgb: 'FFF2CC' } } };
-      if (val.includes('V')) return { fill: { fgColor: { rgb: 'DDEEFF' } } };
-      if (val.includes('N')) return { fill: { fgColor: { rgb: 'DDFFDD' } } };
-      return undefined;
-    };
+    // ----- helper styles (xlsx-js-style format) -----
+    const mkFill = (rgb: string) => ({ patternType: 'solid' as const, fgColor: { rgb } });
+    const mkBorder = (style: string, rgb: string) => ({ style, color: { rgb } });
+    const centerAlign = { horizontal: 'center', vertical: 'center' };
+    const leftAlign   = { horizontal: 'left',   vertical: 'center' };
+
+    // Group employees by department (preserving departments order)
+    const grouped: { dept: Department | null; emps: typeof employees }[] = [];
+    const assignedDeptIds = new Set(employees.map(e => e.department));
+    for (const dept of departments) {
+      if (!assignedDeptIds.has(dept.id)) continue;
+      const emps = employees.filter(e => e.department === dept.id);
+      if (emps.length > 0) grouped.push({ dept, emps });
+    }
+    const noDeptEmps = employees.filter(e => !departments.some(d => d.id === e.department));
+    if (noDeptEmps.length > 0) grouped.push({ dept: null, emps: noDeptEmps });
 
     for (let m = 0; m < monthsCount; m++) {
       const absoluteMonth = startMonth + m;
       const year = shiftPlan.year + Math.floor(absoluteMonth / 12);
       const monthIndex = absoluteMonth % 12;
       const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+      const monthLabel = `${getMonthName(monthIndex)} ${year}`;
 
-      // header row
-      const header = ['Mitarbeiter', ...Array.from({ length: daysInMonth }).map((_, i) => `${i + 1}`)];
-      const rows: any[] = [];
+      // 3 fixed header rows
+      const rowMonth: any[] = [''];
+      const rowDays:  any[] = [''];
+      const rowWeeks: any[] = ['Mitarbeiter'];
+      for (let d = 1; d <= daysInMonth; d++) {
+        rowMonth.push(d === 1 ? monthLabel : '');
+        rowDays.push(String(d));
+        rowWeeks.push(`KW ${getISOWeek(new Date(year, monthIndex, d))}`);
+      }
 
-      employees.forEach(emp => {
-        const row: any[] = [emp.name];
-        for (let d = 1; d <= daysInMonth; d++) {
-          const date = new Date(year, monthIndex, d);
-          const iso = format(date, 'yyyy-MM-dd');
-          
-          // vacation check
-          const isVac = isDateInVacation(emp.id, date);
-          if (isVac) {
-            row.push('Urlaub');
-            continue;
-          }
-          
-          // Get shifts and labels
-          const shifts = getShiftsForEmployeeOnDay(emp.id, date);
-          const cellLabels = calendarLabels
-            .filter(cl => cl.employeeId === emp.id && cl.date === iso)
-            .map(cl => labels.find(l => l.id === cl.labelId))
-            .filter(Boolean);
-          
-          const parts: string[] = [];
-          if (shifts.length > 0) {
-            parts.push(...shifts.map(s => getShiftLabel(s)));
-          }
-          if (cellLabels.length > 0) {
-            parts.push(...cellLabels.map((l: any) => l.letter));
-          }
-          
-          row.push(parts.length > 0 ? parts.join(', ') : '');
+      // Build data rows (dept headers + employee rows) and a styleMap keyed by sheet row index
+      const dataRows: any[][] = [];
+      // sheetRowStyles: rowIndex (0-based in sheet) → Map of colIndex → cell style
+      const cellStyles: Map<string, any> = new Map(); // key: "r,c"
+
+      let sheetRow = 3; // first data row after 3 header rows
+
+      for (const { dept, emps } of grouped) {
+        // Department header row
+        const deptName = dept?.name ?? 'Sonstige';
+        const deptRow: any[] = [deptName, ...Array(daysInMonth).fill('')];
+        dataRows.push(deptRow);
+        for (let c = 0; c <= daysInMonth; c++) {
+          cellStyles.set(`${sheetRow},${c}`, {
+            fill: mkFill('3B4A5C'),
+            font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+            alignment: c === 0 ? leftAlign : centerAlign,
+            border: {
+              bottom: mkBorder('medium', '1E293B'),
+              right: c === 0 ? mkBorder('medium', '1E293B') : mkBorder('thin', '4B5563'),
+            },
+          });
         }
-        rows.push(row);
-      });
+        sheetRow++;
 
-      const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+        for (const emp of emps) {
+          const row: any[] = [emp.name];
+          // Style for name cell (col A)
+          cellStyles.set(`${sheetRow},0`, {
+            fill: mkFill('F9FAFB'),
+            alignment: leftAlign,
+            border: { right: mkBorder('medium', 'E5E7EB') },
+          });
 
-      // apply simple styling per cell (fill)
-      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-      for (let R = range.s.r + 1; R <= range.e.r; ++R) {
-        for (let C = range.s.c + 1; C <= range.e.c; ++C) {
-          const cell_address = { c: C, r: R };
-          const cell_ref = XLSX.utils.encode_cell(cell_address);
-          const cell = ws[cell_ref];
-          if (!cell) continue;
-          const style = cellStyleForValue(String(cell.v || ''));
-          if (style) cell.s = { fill: style.fill } as any;
+          for (let d = 1; d <= daysInMonth; d++) {
+            const date = new Date(year, monthIndex, d);
+            const iso  = format(date, 'yyyy-MM-dd');
+
+            // vacation
+            const isVac = isDateInVacation(emp.id, date);
+            if (isVac) {
+              row.push('U');
+              cellStyles.set(`${sheetRow},${d}`, {
+                fill: mkFill('DDDDDD'),
+                alignment: centerAlign,
+                border: {
+                  top:    mkBorder('thin', 'E5E7EB'),
+                  bottom: mkBorder('thin', 'E5E7EB'),
+                  left:   mkBorder('thin', 'E5E7EB'),
+                  right:  mkBorder('thin', 'E5E7EB'),
+                },
+              });
+              continue;
+            }
+
+            // shifts + labels
+            const shifts = getShiftsForEmployeeOnDay(emp.id, date);
+            const cellLabels = calendarLabels
+              .filter(cl => cl.employeeId === emp.id && cl.date === iso)
+              .map(cl => labels.find(l => l.id === cl.labelId))
+              .filter(Boolean) as any[];
+
+            const parts: string[] = [];
+            if (shifts.length > 0)     parts.push(...shifts.map(s => getShiftLabel(s)));
+            if (cellLabels.length > 0) parts.push(...cellLabels.map((l: any) => l.letter));
+            const cellValue = parts.join(', ');
+            row.push(cellValue);
+
+            // determine fill color
+            let fillRgb: string | null = null;
+            if (cellLabels.length > 0 && (cellLabels[0].color || '').startsWith('#')) {
+              fillRgb = (cellLabels[0].color as string).replace('#', '').toUpperCase();
+            } else if (cellValue.includes('F')) {
+              fillRgb = 'FFF2CC';
+            } else if (cellValue.includes('V')) {
+              fillRgb = 'DDEEFF';
+            } else if (cellValue.includes('N')) {
+              fillRgb = 'DDFFDD';
+            }
+
+            cellStyles.set(`${sheetRow},${d}`, {
+              ...(fillRgb ? { fill: mkFill(fillRgb) } : {}),
+              alignment: centerAlign,
+              border: {
+                top:    mkBorder('thin', 'E5E7EB'),
+                bottom: mkBorder('thin', 'E5E7EB'),
+                left:   mkBorder('thin', 'E5E7EB'),
+                right:  mkBorder('thin', 'E5E7EB'),
+              },
+            });
+          }
+
+          dataRows.push(row);
+          sheetRow++;
         }
       }
 
-      // set first column width
-      ws['!cols'] = [{ wch: 25 }, ...Array.from({ length: daysInMonth }).map(() => ({ wch: 4 }))];
+      // Assemble full AOA and create sheet
+      const aoa = [rowMonth, rowDays, rowWeeks, ...dataRows];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      // ---- Merges ----
+      const lastCol = daysInMonth;
+      ws['!merges'] = [];
+      // Merge month label across day columns
+      ws['!merges'].push({ s: { r: 0, c: 1 }, e: { r: 0, c: lastCol } });
+      // Merge consecutive equal KW values in row 2
+      let weekMergeStart = 1;
+      let currentWeekLabel = rowWeeks[1];
+      for (let i = 1; i <= daysInMonth; i++) {
+        const wk = rowWeeks[i];
+        const isLast = i === daysInMonth;
+        if (wk !== currentWeekLabel || isLast) {
+          const end = (isLast && wk === currentWeekLabel) ? i : i - 1;
+          ws['!merges'].push({ s: { r: 2, c: weekMergeStart }, e: { r: 2, c: end } });
+          // write the week label into the top-left cell of the merge
+          const ref = XLSX.utils.encode_cell({ r: 2, c: weekMergeStart });
+          ws[ref] = ws[ref] || { t: 's', v: currentWeekLabel };
+          currentWeekLabel = wk;
+          weekMergeStart = i;
+        }
+      }
+
+      // ---- Apply header row styles (rows 0-2) ----
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+      for (let R = 0; R <= 2; R++) {
+        for (let C = range.s.c; C <= range.e.c; C++) {
+          const ref = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+          ws[ref].s = {
+            fill: mkFill('F3F4F6'),
+            alignment: (R === 2 || R === 1 || C !== 0) ? centerAlign : leftAlign,
+            border: { bottom: mkBorder('medium', 'CCCCCC') },
+          };
+        }
+      }
+      // Row 0 col A has no content but should match header style
+      const a1 = XLSX.utils.encode_cell({ r: 0, c: 0 });
+      if (ws[a1]) ws[a1].s = { fill: mkFill('F3F4F6'), alignment: leftAlign };
+
+      // ---- Apply data-cell styles ----
+      for (const [key, style] of cellStyles) {
+        const [r, c] = key.split(',').map(Number);
+        const ref = XLSX.utils.encode_cell({ r, c });
+        if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+        ws[ref].s = style;
+      }
+
+      // ---- Column widths ----
+      ws['!cols'] = [{ wch: 22 }, ...Array.from({ length: daysInMonth }, () => ({ wch: 4.5 }))];
+
       const sheetName = `${getMonthName(monthIndex)} ${year}`;
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
     }

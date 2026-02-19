@@ -4,7 +4,7 @@ import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
 import { generateId, parseBoolean, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
 import { UserPlus, Trash2, Edit2, Save, X } from 'lucide-react';
 import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isSameDay } from 'date-fns';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 
 export function EmployeeManagement() {
   const { employees, departments, customHolidays, addEmployee, updateEmployee, deleteEmployee, addDepartment } = useStore();
