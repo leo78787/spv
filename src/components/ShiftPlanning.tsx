@@ -1,20 +1,36 @@
 import React, { useState } from 'react';
-import { Calendar, Users, AlertCircle, Sparkles, Download } from 'lucide-react';
+import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store';
-import { generateAutomaticShiftPlan } from '../utils/scheduler';
+import { generateAutomaticShiftPlan, DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
+import ViolationPipeline from './ViolationPipeline';
 
 export function ShiftPlanning() {
-  const { employees, departments, shiftPlan, createShiftPlan, addEmployee, addDepartment, setShiftPlan, updateShiftAssignment, addLabel, addCalendarLabel } = useStore();
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState<number>(0); // 0 = Januar
+  const { employees, departments, shiftPlan, createShiftPlan, addEmployee, addDepartment, setShiftPlan, updateShiftAssignment, addLabel, addCalendarLabel, acknowledgeViolation } = useStore();
+  const [selectedYear, setSelectedYear] = useState(() => shiftPlan?.year ?? new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => shiftPlan?.startMonth ?? 0);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [showPipeline, setShowPipeline] = useState(false);
+  const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfig>(
+    () => shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG
+  );
   const [generationResult, setGenerationResult] = useState<{
     success: boolean;
     message: string;
     assignmentCount: number;
   } | null>(null);
+
+  // Helpers for updating config
+  const setShiftCount = (type: keyof SchedulerConfig['shiftCounts'], val: number) =>
+    setSchedulerConfig(c => ({ ...c, shiftCounts: { ...c.shiftCounts, [type]: val } }));
+
+  const setRule = (rule: keyof SchedulerConfig['rules'], val: boolean) =>
+    setSchedulerConfig(c => ({ ...c, rules: { ...c.rules, [rule]: val } }));
+
+  const setOver55Slots = (val: number) =>
+    setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: val }));
 
   const handleGenerateFullPlan = () => {
     if (employees.length === 0) {
@@ -32,11 +48,16 @@ export function ShiftPlanning() {
     // Simulate async operation for better UX
     setTimeout(() => {
       try {
-        const assignments = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12);
+        const { assignments, violations } = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12, schedulerConfig);
         
         // Remove any existing plan for the selected start year/month, then store new assignments
-        createShiftPlan(selectedYear, selectedMonth, 12);
+        createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations);
         assignments.forEach(assignment => updateShiftAssignment(assignment));
+
+        // Open the pipeline automatically if there are unresolvable violations
+        if (violations.length > 0) {
+          setShowPipeline(true);
+        }
 
         const end = new Date(selectedYear, selectedMonth + 12, 0); // last day of 12-month period
 
@@ -168,6 +189,7 @@ export function ShiftPlanning() {
   };
 
   return (
+    <>
     <div className="space-y-6 p-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -188,6 +210,112 @@ export function ShiftPlanning() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Scheduler Configuration Panel */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <button
+          onClick={() => setShowConfig(v => !v)}
+          className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Settings className="h-5 w-5 text-gray-600" />
+            <span className="font-semibold text-gray-900">Planungsregeln &amp; Schichtbesetzung</span>
+          </div>
+          {showConfig ? <ChevronUp size={18} className="text-gray-500" /> : <ChevronDown size={18} className="text-gray-500" />}
+        </button>
+
+        {showConfig && (
+          <div className="px-6 pb-6 border-t border-gray-100 space-y-6">
+
+            {/* Shift Counts */}
+            <div>
+              <h4 className="font-semibold text-gray-800 mt-4 mb-3">Gleichzeitige Schichtbesetzung</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-gray-700">Versetzte Schicht (Mo–Fr)</span>
+                  <input
+                    type="number" min={1} max={20}
+                    value={schedulerConfig.shiftCounts.verschieben}
+                    onChange={e => setShiftCount('verschieben', Math.max(1, Number(e.target.value)))}
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-gray-700">Nachtbereitschaft (Sa–Sa)</span>
+                  <input
+                    type="number" min={1} max={20}
+                    value={schedulerConfig.shiftCounts.nachtbereitschaft}
+                    onChange={e => setShiftCount('nachtbereitschaft', Math.max(1, Number(e.target.value)))}
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-gray-700">Frühschicht WE (Sa–So)</span>
+                  <input
+                    type="number" min={1} max={20}
+                    value={schedulerConfig.shiftCounts.fruehschicht}
+                    onChange={e => setShiftCount('fruehschicht', Math.max(1, Number(e.target.value)))}
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </label>
+              </div>
+              <div className="mt-3">
+                <label className="flex flex-col gap-1 inline-block">
+                  <span className="text-sm text-gray-700">Ü55-Slots in der Versetzten Schicht (reserviert)</span>
+                  <input
+                    type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
+                    value={schedulerConfig.over55VerschiebenSlots}
+                    onChange={e => setOver55Slots(Math.min(schedulerConfig.shiftCounts.verschieben, Math.max(0, Number(e.target.value))))}
+                    className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    disabled={!schedulerConfig.rules.reserveOver55SlotsForVerschieben}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Rule Toggles */}
+            <div>
+              <h4 className="font-semibold text-gray-800 mb-3">Aktive Regeln</h4>
+              <div className="space-y-3">
+                {([
+                  { key: 'noWeekendAroundVacation',             label: 'Kein Wochenenddienst direkt vor/nach Urlaub' },
+                  { key: 'noFruehschichtAdjacentToVerschieben', label: 'Keine Frühschicht am Wochenende angrenzend an Versetzt-Woche' },
+                  { key: 'noNachtAfterVerschieben',             label: 'Keine Nacht in der Folgewoche nach Versetzt-Woche (7-Tage-Sperre)' },
+                  { key: 'noVerschiebenAfterNacht',             label: 'Kein Versetzt-Dienst in der Woche nach Nachtbereitschaft (7-Tage-Sperre)' },
+                  { key: 'noConsecutiveVerschieben',            label: 'Keine zwei Versetzt-Wochen hintereinander (für dieselbe Person)' },
+                  { key: 'over55AndNoL2OnlyVerschieben',        label: 'Ü55-Mitarbeiter und ohne L2 nur versetzte Schichten' },
+                  { key: 'reserveOver55SlotsForVerschieben',    label: 'Ü55-Slot-Reservierung in versetzter Schicht' },
+                  { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen' },
+                  { key: 'departmentDiversity',                 label: 'Abteilungsvielfalt bei der Auswahl bevorzugen' },
+                ] as { key: keyof SchedulerConfig['rules']; label: string }[]).map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-3 cursor-pointer select-none">
+                    <div
+                      onClick={() => setRule(key, !schedulerConfig.rules[key])}
+                      className={`relative w-10 h-6 rounded-full transition-colors ${
+                        schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          schedulerConfig.rules[key] ? 'translate-x-5' : 'translate-x-1'
+                        }`}
+                      />
+                    </div>
+                    <span className="text-sm text-gray-700">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setSchedulerConfig(DEFAULT_SCHEDULER_CONFIG)}
+              className="text-sm text-gray-500 underline hover:text-gray-700"
+            >
+              Auf Standardwerte zurücksetzen
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Year Selection & Generate */}
@@ -223,14 +351,27 @@ export function ShiftPlanning() {
             </div>
           </div>
 
-          <button
-            onClick={handleGenerateFullPlan}
-            disabled={isGenerating || employees.length === 0}
-            className="inline-flex items-center gap-2 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
-          >
-            <Sparkles className="h-5 w-5" />
-            {isGenerating ? 'Generiere Schichtplan...' : 'Schichtplan generieren'}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={handleGenerateFullPlan}
+              disabled={isGenerating || employees.length === 0}
+              className="inline-flex items-center gap-2 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
+            >
+              <Sparkles className="h-5 w-5" />
+              {isGenerating ? 'Generiere Schichtplan...' : 'Schichtplan generieren'}
+            </button>
+
+            {(shiftPlan?.violations?.length ?? 0) > 0 && (
+              <button
+                onClick={() => setShowPipeline(true)}
+                className="inline-flex items-center gap-2 px-4 py-3 bg-amber-500 text-white rounded-md hover:bg-amber-600 font-medium text-base transition-colors"
+                title="Regelprobleme anzeigen"
+              >
+                <AlertTriangle className="h-5 w-5" />
+                {shiftPlan!.violations!.length} Regelverstoß{shiftPlan!.violations!.length !== 1 ? 'e' : ''}
+              </button>
+            )}
+          </div>
 
           {employees.length === 0 && (
             <div className="flex items-start gap-2 text-amber-600 bg-amber-50 p-3 rounded-md">
@@ -331,7 +472,7 @@ export function ShiftPlanning() {
         <ul className="space-y-2 text-sm text-gray-700">
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">1.</span>
-            <span><strong>Verschobene Schichten</strong> werden zuerst verteilt - <strong>exakt 4 Personen</strong> pro Woche (Mo-Fr); dadurch wird verhindert, dass danach direkt eine Nachtwoche folgt.</span>
+            <span><strong>Verschobene Schichten</strong> werden zuerst verteilt - <strong>exakt 5 Personen</strong> pro Woche (Mo-Fr, davon 2 Mitarbeiter Ü55); dadurch wird verhindert, dass danach direkt eine Nachtwoche folgt.</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">2.</span>
@@ -355,11 +496,11 @@ export function ShiftPlanning() {
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
-            <span>Nach einer `Verschobene Schicht`-Woche darf nicht direkt im Anschluss eine `Nachtbereitschaft` folgen</span>
+            <span>Nach einer <strong>Verschobenen Schicht</strong>-Woche darf in der <strong>gesamten Folgewoche keine Nachtbereitschaft</strong> folgen (7-Tage-Sperrfenster)</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
-            <span>Mitarbeiter Ü55 und Mitarbeiter ohne L2-Zertifikat dürfen nur <strong>verschobene Schichten</strong> (Mo–Fr) erhalten</span>
+            <span>Mitarbeiter Ü55 und Mitarbeiter ohne L2-Zertifikat dürfen nur <strong>verschobene Schichten</strong> (Mo–Fr) erhalten; davon werden <strong>2 der 5 Plätze</strong> für Ü55-Mitarbeiter reserviert</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
@@ -384,5 +525,16 @@ export function ShiftPlanning() {
         </ul>
       </div>
     </div>
+
+    {/* Violation Pipeline slide-over */}
+    {showPipeline && (shiftPlan?.violations?.length ?? 0) > 0 && (
+      <ViolationPipeline
+        violations={shiftPlan!.violations!}
+        employees={employees}
+        onAcknowledge={(id) => acknowledgeViolation(id)}
+        onClose={() => setShowPipeline(false)}
+      />
+    )}
+    </>
   );
 }

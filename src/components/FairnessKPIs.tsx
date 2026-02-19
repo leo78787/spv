@@ -8,6 +8,8 @@ interface EmployeeShiftStats {
   employeeId: string;
   employeeName: string;
   department: string;
+  isOver55: boolean;
+  hasL2: boolean;
   totalShifts: number;
   shiftsByType: Record<ShiftType, number>;
   canWorkShifts: ShiftType[];
@@ -67,6 +69,8 @@ export function FairnessKPIs() {
         employeeId: employee.id,
         employeeName: employee.name,
         department: dept?.name || 'Unbekannt',
+        isOver55: employee.isOver55,
+        hasL2: employee.hasL2,
         totalShifts,
         shiftsByType,
         canWorkShifts,
@@ -270,7 +274,18 @@ export function FairnessKPIs() {
                       </div>
                     </td>
                     <td className="px-4 py-3 border-b border-gray-200 font-medium text-gray-800">
-                      {stat.employeeName}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span>{stat.employeeName}</span>
+                        {stat.isOver55 && (
+                          <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
+                        )}
+                        {!stat.hasL2 && (
+                          <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700 border border-red-300">kein L2</span>
+                        )}
+                        {stat.hasL2 && (
+                          <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-700 border border-green-300">L2</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 border-b border-gray-200 text-gray-600">
                       {stat.department}
@@ -328,7 +343,18 @@ export function FairnessKPIs() {
               return (
                 <div key={stat.employeeId}>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">{stat.employeeName}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium text-gray-700">{stat.employeeName}</span>
+                      {stat.isOver55 && (
+                        <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
+                      )}
+                      {!stat.hasL2 && (
+                        <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700 border border-red-300">kein L2</span>
+                      )}
+                      {stat.hasL2 && (
+                        <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-700 border border-green-300">L2</span>
+                      )}
+                    </div>
                     <span className="text-sm text-gray-600">{shiftCount} Schichten</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">

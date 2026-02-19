@@ -597,7 +597,11 @@ export function CalendarView() {
                     });
 
                     const mismatches = assignmentsCovering.map(a => {
-                      const required = SHIFT_REQUIREMENTS[a.shiftType]?.count ?? 0;
+                      // Use the config stored with the plan so warnings reflect the actual target counts
+                      const required =
+                        shiftPlan?.schedulerConfig?.shiftCounts[a.shiftType as keyof typeof shiftPlan.schedulerConfig.shiftCounts]
+                        ?? SHIFT_REQUIREMENTS[a.shiftType]?.count
+                        ?? 0;
                       const actual = (a.employees || []).length;
                       const diff = required - actual; // positive => missing, negative => excess
                       return { assignment: a, required, actual, diff };

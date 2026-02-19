@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel } from './types';
+import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel, SchedulerConfig, SchedulerViolation } from './types';
 
 interface AppState {
   employees: Employee[];
@@ -36,11 +36,12 @@ interface AppState {
 
   // Shift plan actions
   setCurrentYear: (year: number) => void;
-  createShiftPlan: (year: number, startMonth?: number, months?: number) => void;
+  createShiftPlan: (year: number, startMonth?: number, months?: number, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[]) => void;
   setShiftPlan: (plan: ShiftPlan | null) => void;
   updateShiftAssignment: (assignment: ShiftAssignment) => void;
   deleteShiftAssignment: (id: string) => void;
   confirmShiftAssignment: (id: string) => void;
+  acknowledgeViolation: (id: string) => void;
 }
 
 const saveToLocalStorage = (key: string, state: any) => {
@@ -206,11 +207,23 @@ export const useStore = create<AppState>((set) => {
       return newState;
     }),
     
-    createShiftPlan: (year: number, startMonth = 0, months = 12) => set((state) => {
+    createShiftPlan: (year: number, startMonth = 0, months = 12, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[]) => set((state) => {
       const newState = {
         ...state,
-        shiftPlan: { year, startMonth, months, assignments: [] },
-        calendarLabels: [] // Clear all calendar labels when creating new shift plan
+        shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [] }
+      };
+      saveToLocalStorage('schichtplan-storage', newState);
+      return newState;
+    }),
+
+    acknowledgeViolation: (id: string) => set((state) => {
+      if (!state.shiftPlan) return state;
+      const newState = {
+        ...state,
+        shiftPlan: {
+          ...state.shiftPlan,
+          violations: (state.shiftPlan.violations ?? []).filter(v => v.id !== id)
+        }
       };
       saveToLocalStorage('schichtplan-storage', newState);
       return newState;
