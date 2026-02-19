@@ -210,6 +210,9 @@ export const useStore = create<AppState>((set) => {
     createShiftPlan: (year: number, startMonth = 0, months = 12, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[]) => set((state) => {
       const newState = {
         ...state,
+        // When creating a fresh plan we remove any calendar label assignments
+        // so old per-day annotations do not carry over to the new schedule.
+        calendarLabels: [],
         shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [] }
       };
       saveToLocalStorage('schichtplan-storage', newState);
