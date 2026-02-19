@@ -491,7 +491,7 @@ export function CalendarView() {
             const cellValue = parts.join(', ');
             row.push(cellValue);
 
-            // determine fill color
+            // determine fill color for content cells (labels/shifts)
             let fillRgb: string | null = null;
             if (cellLabels.length > 0 && (cellLabels[0].color || '').startsWith('#')) {
               fillRgb = (cellLabels[0].color as string).replace('#', '').toUpperCase();
@@ -503,8 +503,16 @@ export function CalendarView() {
               fillRgb = 'DDFFDD';
             }
 
-            cellStyles.set(`${sheetRow},${d}`, {
-              ...(fillRgb ? { fill: mkFill(fillRgb) } : {}),
+            // weekend / holiday highlighting (only when the cell is otherwise empty)
+            const isEmptyCell = !cellValue || cellValue.trim() === '';
+            const isHoliday = !!holidayMap[iso];
+            const dow = getDay(date);
+            const isWeekend = dow === 0 || dow === 6;
+
+            const HOLIDAY_FILL = 'FFF1F2';
+            const WEEKEND_FILL = 'EEF2FF';
+
+            const style: any = {
               alignment: centerAlign,
               border: {
                 top:    mkBorder('thin', 'E5E7EB'),
@@ -512,7 +520,18 @@ export function CalendarView() {
                 left:   mkBorder('thin', 'E5E7EB'),
                 right:  mkBorder('thin', 'E5E7EB'),
               },
-            });
+            };
+
+            if (fillRgb) {
+              // explicit label/shift color wins
+              style.fill = mkFill(fillRgb);
+            } else if (isEmptyCell && isHoliday) {
+              style.fill = mkFill(HOLIDAY_FILL);
+            } else if (isEmptyCell && isWeekend) {
+              style.fill = mkFill(WEEKEND_FILL);
+            }
+
+            cellStyles.set(`${sheetRow},${d}`, style);
           }
 
           dataRows.push(row);
