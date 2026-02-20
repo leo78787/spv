@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { useStore } from '../store';
+import React, { useState, useEffect } from 'react';
+import { useStore, getAuthToken } from '../store';
 import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
 import { generateId, parseBoolean, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
-import { UserPlus, Trash2, Edit2, Save, X } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Save, X, Mail, Send, RefreshCw, CheckCircle, AlertCircle, Lock, Unlock } from 'lucide-react';
 import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isSameDay } from 'date-fns';
 import * as XLSX from 'xlsx-js-style';
 
@@ -15,9 +15,11 @@ export function EmployeeManagement() {
   // Import from Excel/CSV
   const [importPreview, setImportPreview] = useState<any[] | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const formRef = React.useRef<HTMLFormElement | null>(null);
   
   const [formData, setFormData] = useState<Partial<Employee>>({
     name: '',
+    email: '',
     department: departments[0]?.id || '',
     isOver55: false,
     hasL2: false,
@@ -25,6 +27,53 @@ export function EmployeeManagement() {
     vacationRanges: [],
     preferences: []
   });
+
+  // Portal credentials info
+  const [credentialInfo, setCredentialInfo] = useState<Record<string, { username: string; mustChangePassword: boolean }>>({});
+  const [invitingId, setInvitingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [employeesLocked, setEmployeesLocked] = useState(false);
+  const [lockLoading, setLockLoading] = useState(false);
+
+  const showToast = (type: 'success' | 'error', text: string) => {
+    setToast({ type, text });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    fetch('/api/portal/credentials', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(setCredentialInfo)
+      .catch(() => {});
+  }, [employees]);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    fetch('/api/employees/lock', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => setEmployeesLocked(!!d.employeesLocked))
+      .catch(() => {});
+  }, [employees]);
+
+  const toggleLock = async () => {
+    setLockLoading(true);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch('/api/employees/lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ locked: !employeesLocked }),
+      });
+      if (resp.ok) {
+        setEmployeesLocked(!employeesLocked);
+        showToast('success', !employeesLocked ? 'Mitarbeiteränderungen gesperrt' : 'Mitarbeiteränderungen freigegeben');
+      }
+    } catch { showToast('error', 'Fehler beim Sperren'); }
+    setLockLoading(false);
+  };
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,6 +90,7 @@ export function EmployeeManagement() {
       const newEmployee: Employee = {
         id: generateId(),
         name: formData.name || '',
+        email: formData.email || undefined,
         department: formData.department || departments[0]?.id || '',
         isOver55: formData.isOver55 || false,
         hasL2: formData.hasL2 || false,
@@ -57,6 +107,7 @@ export function EmployeeManagement() {
   const resetForm = () => {
     setFormData({
       name: '',
+      email: '',
       department: departments[0]?.id || '',
       isOver55: false,
       hasL2: false,
@@ -66,11 +117,82 @@ export function EmployeeManagement() {
     setShowAddForm(false);
     setEditingId(null);
   };
+
+  const handleInvite = async (empId: string) => {
+    setInvitingId(empId);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch('/api/portal/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ employeeId: empId }),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        showToast('success', `Einladung gesendet – Benutzername: ${data.username}`);
+        fetch('/api/portal/credentials', { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.json()).then(setCredentialInfo).catch(() => {});
+      } else {
+        showToast('error', data.error || 'Fehler beim Senden der Einladung');
+      }
+    } catch (err) {
+      showToast('error', 'Fehler: ' + err);
+    } finally {
+      setInvitingId(null);
+    }
+  };
+
+  const handleResend = async (empId: string) => {
+    setInvitingId(empId);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch('/api/portal/resend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ employeeId: empId }),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        showToast('success', `Neue Zugangsdaten gesendet – Benutzername: ${data.username}`);
+      } else {
+        showToast('error', data.error || 'Fehler beim Senden');
+      }
+    } catch (err) {
+      showToast('error', 'Fehler: ' + err);
+    } finally {
+      setInvitingId(null);
+    }
+  };
   
   const handleEdit = (employee: Employee) => {
     setFormData(employee);
     setEditingId(employee.id);
     setShowAddForm(true);
+    // Scroll to form after React renders it
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
+  const handleResetStatus = async (empId: string) => {
+    try {
+      const token = getAuthToken();
+      const resp = await fetch('/api/portal/reset-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ employeeId: empId }),
+      });
+      if (resp.ok) {
+        updateEmployee(empId, { portalStatus: 'draft' });
+        setFormData(prev => ({ ...prev, portalStatus: 'draft' }));
+        showToast('success', 'Status zurückgesetzt auf Entwurf');
+      } else {
+        const d = await resp.json().catch(() => ({}));
+        showToast('error', d.error || 'Fehler beim Zurücksetzen');
+      }
+    } catch {
+      showToast('error', 'Fehler beim Zurücksetzen');
+    }
   };
   
 
@@ -90,9 +212,10 @@ export function EmployeeManagement() {
 
   // --- Excel/CSV template + upload support ---
   const downloadTemplate = (type: 'csv' | 'xlsx' = 'xlsx') => {
-    const headers = ['name','department','isOver55','hasL2','vacationRanges'];
+    const headers = ['name','email','department','isOver55','hasL2','vacationRanges'];
     const sample = [{
       name: 'Max Mustermann',
+      email: 'max@example.de',
       department: departments[0]?.name || 'Abteilung A',
       isOver55: 'false',
       hasL2: 'true',
@@ -132,6 +255,7 @@ export function EmployeeManagement() {
       const errors: string[] = [];
       const name = String(row.name || row.Name || '').trim();
       const lowerName = name.toLowerCase().trim();
+      const email = String(row.email || row.Email || row['E-Mail'] || '').trim() || undefined;
       const departmentName = String(row.department || row.Department || '').trim();
       if (!name) errors.push('Name fehlt');
       if (!departmentName) errors.push('Abteilung fehlt');
@@ -139,7 +263,7 @@ export function EmployeeManagement() {
       const hasL2 = parseBoolean(row.hasL2 || row.HasL2 || row.L2);
       const vacationRanges = parseVacationRanges(row.vacationRanges || row.VacationRanges || row.vacations || row.Urlaub);
       const duplicateInExisting = existingNames.has(lowerName);
-      return { rowIndex: index + 2, name, lowerName, departmentName, isOver55, hasL2, vacationRanges, errors, duplicateInExisting };
+      return { rowIndex: index + 2, name, lowerName, email, departmentName, isOver55, hasL2, vacationRanges, errors, duplicateInExisting };
     });
 
     // mark duplicates within the import file
@@ -189,6 +313,7 @@ export function EmployeeManagement() {
       const newEmp: Employee = {
         id: generateId(),
         name: emp.name,
+        email: emp.email,
         department: deptObj ? deptObj.id : 'dept-unknown',
         isOver55: emp.isOver55,
         hasL2: emp.hasL2,
@@ -422,13 +547,27 @@ export function EmployeeManagement() {
           </div>
         </div>
 
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
-        >
-          {showAddForm ? <X size={20} /> : <UserPlus size={20} />}
-          {showAddForm ? 'Abbrechen' : 'Mitarbeiter hinzufügen'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleLock}
+            disabled={lockLoading}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              employeesLocked
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            {employeesLocked ? <Lock size={18} /> : <Unlock size={18} />}
+            {employeesLocked ? 'Änderungen gesperrt' : 'Änderungen sperren'}
+          </button>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            {showAddForm ? <X size={20} /> : <UserPlus size={20} />}
+            {showAddForm ? 'Abbrechen' : 'Mitarbeiter hinzufügen'}
+          </button>
+        </div>
       </div>
       
       {importPreview && (
@@ -479,12 +618,12 @@ export function EmployeeManagement() {
       )}
 
       {showAddForm && (
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md mb-6">
+        <form ref={formRef} onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md mb-6">
           <h3 className="text-lg font-semibold mb-4">
             {editingId ? 'Mitarbeiter bearbeiten' : 'Neuer Mitarbeiter'}
           </h3>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
               <input
@@ -492,6 +631,17 @@ export function EmployeeManagement() {
                 required
                 value={formData.name}
                 onChange={e => setFormData({ ...formData, name: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">E-Mail</label>
+              <input
+                type="email"
+                value={formData.email || ''}
+                onChange={e => setFormData({ ...formData, email: e.target.value || undefined })}
+                placeholder="max@example.de"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
               />
             </div>
@@ -755,6 +905,69 @@ export function EmployeeManagement() {
             </div>
           )}
 
+          {/* Portal-Zugang section – only when editing an existing employee who has an email */}
+          {editingId && formData.email && (
+            <div className="mb-6 border border-indigo-200 rounded-lg overflow-hidden">
+              <div className="bg-indigo-50 px-4 py-3 flex items-center gap-2 border-b border-indigo-200">
+                <Mail size={16} className="text-indigo-600" />
+                <h4 className="font-semibold text-indigo-900 text-sm">Portal-Zugang</h4>
+              </div>
+              <div className="p-4 space-y-3">
+                {credentialInfo[editingId] ? (
+                  <>
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <div className="text-xs text-gray-500 mb-1">Benutzername</div>
+                        <div className="font-mono text-sm bg-gray-50 px-3 py-2 rounded border border-gray-200">{credentialInfo[editingId].username}</div>
+                      </div>
+                      <div className="flex-shrink-0">
+                        <div className="text-xs text-gray-500 mb-1">Status</div>
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${
+                          credentialInfo[editingId].mustChangePassword
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {credentialInfo[editingId].mustChangePassword ? 'Passwort nicht gesetzt' : 'Aktiv'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleResend(editingId)}
+                      disabled={invitingId === editingId}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} className={invitingId === editingId ? 'animate-spin' : ''} />
+                      {invitingId === editingId ? 'Wird gesendet…' : 'Neue Zugangsdaten senden'}
+                    </button>
+                    {formData.portalStatus === 'submitted' && (
+                      <button
+                        type="button"
+                        onClick={() => handleResetStatus(editingId)}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-amber-400 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
+                      >
+                        Zurück in Entwurf
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-600">Dieser Mitarbeiter hat noch keinen Portal-Zugang. Senden Sie eine Einladung per E-Mail.</p>
+                    <button
+                      type="button"
+                      onClick={() => handleInvite(editingId)}
+                      disabled={invitingId === editingId}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-sm"
+                    >
+                      <Send size={14} className={invitingId === editingId ? 'animate-pulse' : ''} />
+                      {invitingId === editingId ? 'Wird gesendet…' : 'Einladung per E-Mail senden'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <button
               type="submit"
@@ -772,6 +985,17 @@ export function EmployeeManagement() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-all ${
+          toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          {toast.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+          {toast.text}
+          <button onClick={() => setToast(null)} className="ml-2 hover:opacity-80"><X size={16} /></button>
+        </div>
       )}
       
       {/* Employee List */}
@@ -820,14 +1044,25 @@ export function EmployeeManagement() {
               </div>
               
               <div className="space-y-1 text-sm">
-                <div className="flex gap-3">
+                <div className="flex flex-wrap gap-2">
                   {employee.isOver55 && (
                     <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs">Ü55</span>
                   )}
                   {employee.hasL2 && (
                     <span className="px-2 py-1 bg-green-100 text-green-800 rounded-md text-xs">L2</span>
                   )}
+                  {employee.portalStatus === 'invited' && (
+                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-xs">Eingeladen</span>
+                  )}
+                  {employee.portalStatus === 'draft' && (
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-md text-xs">Entwurf</span>
+                  )}
+                  {employee.portalStatus === 'submitted' && (
+                    <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md text-xs">Eingereicht</span>
+                  )}
                 </div>
+
+
                 
                 {(employee.vacationDays.length > 0 || (employee.vacationRanges?.length || 0) > 0) && (
                   <div className="text-gray-600">

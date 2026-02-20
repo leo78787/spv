@@ -329,9 +329,19 @@ export function ShiftPlanning() {
         endDate: new Date(v.endDate),
       }));
 
-      // Remove any existing plan for the selected start year/month, then store new assignments
-      createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations, 'automatisch generiert');
-      assignments.forEach((assignment: any) => updateShiftAssignment(assignment));
+      // Store the complete plan at once (avoids race condition with concurrent saveToServer calls)
+      const completePlan = {
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations,
+        assignments,
+        algorithm: 'automatisch generiert',
+      };
+      setShiftPlan(completePlan as any);
+      // Clear calendar labels for the new plan
+      // (createShiftPlan used to do this, but we bypass it now)
 
       // Open the pipeline automatically if there are unresolvable violations
       if (violations.length > 0) {

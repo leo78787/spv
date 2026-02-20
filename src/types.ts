@@ -66,12 +66,15 @@ export interface VacationRange {
 export interface Employee {
   id: string;
   name: string;
+  email?: string;
   department: string;
   isOver55: boolean;
   hasL2: boolean;
   vacationDays: Date[]; // single-day entries for backward compatibility
   vacationRanges?: VacationRange[]; // new: multi‑day ranges
   preferences: ShiftPreference[];
+  /** Employee portal status: 'none' | 'invited' | 'draft' | 'submitted' */
+  portalStatus?: 'none' | 'invited' | 'draft' | 'submitted';
 }
 
 export interface Holiday {
@@ -145,6 +148,7 @@ export interface Label {
   letter: string;              // e.g., "S" - single character abbreviation
   color: string;               // hex color e.g., "#3b82f6"
   text?: string;               // optional additional text
+  visibleToEmployee?: boolean; // whether this label is visible in the employee portal
 }
 
 export interface CalendarLabel {

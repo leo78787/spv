@@ -80,6 +80,10 @@ export function Login({ onSuccess }: Props) {
 
         <div className="mt-4 text-xs text-gray-400">Hinweis: Demo‑Anmeldung erforderlich, Username & Passwort sind vorab bekannt.</div>
       </form>
+      <div className="absolute bottom-6 left-0 right-0 text-center text-xs text-gray-400">
+        <p>Schichtplan Manager &copy; 2026</p>
+        <p className="mt-1"><a href="/portal/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
+      </div>
     </div>
   );
 }

@@ -23,6 +23,22 @@ export function clearAuthToken() {
 // Server persistence helpers (replace the old localStorage approach)
 // ═══════════════════════════════════════════════════════════════════════
 
+/**
+ * JSON replacer that serialises every Date as noon-UTC ISO string
+ * (YYYY-MM-DDT12:00:00.000Z) using LOCAL date components.
+ * This avoids off-by-one errors when dates cross a UTC day boundary.
+ */
+function dateNoonReplacer(this: any, key: string, value: any): any {
+  const raw = this[key];
+  if (raw instanceof Date) {
+    const y = raw.getFullYear();
+    const m = String(raw.getMonth() + 1).padStart(2, '0');
+    const d = String(raw.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}T12:00:00.000Z`;
+  }
+  return value;
+}
+
 /** Fire-and-forget save to the server (optimistic update). */
 const saveToServer = async (state: any) => {
   const token = getAuthToken();
@@ -42,7 +58,7 @@ const saveToServer = async (state: any) => {
         customHolidays: state.customHolidays,
         labels: state.labels,
         calendarLabels: state.calendarLabels,
-      }),
+      }, dateNoonReplacer),
     });
   } catch (err) {
     console.error('Error saving to server:', err);
@@ -305,7 +321,7 @@ export const useStore = create<AppState>((set) => {
 
     // Replace entire shiftPlan (used for JSON import)
     setShiftPlan: (plan: ShiftPlan | null) => set((state) => {
-      const newState = { ...state, shiftPlan: plan };
+      const newState = { ...state, shiftPlan: plan, calendarLabels: plan ? [] : state.calendarLabels };
       saveToServer(newState);
       return newState;
     }),

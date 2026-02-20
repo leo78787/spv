@@ -210,17 +210,24 @@ export function startOptimisation(
             state.progress = null;
             state.isOptimising = false;
 
-            // Apply result to Zustand store
+            // Apply result to Zustand store — atomic via setShiftPlan
+            // (avoids race condition from concurrent saveToServer calls)
             const ctx = applyContext;
             if (ctx) {
               const store = useStore.getState();
-              store.createShiftPlan(ctx.year, ctx.startMonth, 12, ctx.schedulerConfig, [], 'fairness-optimiert');
-              result.assignments.forEach((a: any) => {
-                store.updateShiftAssignment({
-                  ...a,
-                  startDate: new Date(a.startDate),
-                  endDate: new Date(a.endDate),
-                });
+              const revivedAssignments = result.assignments.map((a: any) => ({
+                ...a,
+                startDate: new Date(a.startDate),
+                endDate: new Date(a.endDate),
+              }));
+              store.setShiftPlan({
+                year: ctx.year,
+                startMonth: ctx.startMonth,
+                months: 12,
+                schedulerConfig: ctx.schedulerConfig,
+                violations: [],
+                assignments: revivedAssignments,
+                algorithm: 'fairness-optimiert',
               });
             }
 

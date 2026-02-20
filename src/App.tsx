@@ -25,6 +25,24 @@ function App() {
     }
   }, [authenticated]);
 
+  // Real-time polling: watch for state changes made by employees / other tabs
+  useEffect(() => {
+    if (!authenticated) return;
+    let lastVersion: string | null = null;
+    const poll = async () => {
+      try {
+        const resp = await fetch('/api/state/version');
+        const { version } = await resp.json();
+        if (lastVersion !== null && version !== lastVersion) {
+          await loadFromServer();
+        }
+        lastVersion = version;
+      } catch {}
+    };
+    const timer = setInterval(poll, 3000);
+    return () => clearInterval(timer);
+  }, [authenticated]);
+
   
   const tabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
@@ -142,7 +160,8 @@ function App() {
 
       {/* Footer */}
       <footer className="mt-12 py-6 text-center text-sm text-gray-600 border-t border-gray-200">
-        <p>Schichtplan Manager © {new Date().getFullYear()}</p>
+        <p>Schichtplan Manager &copy; 2026</p>
+        <p className="mt-1"><a href="/portal/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
       </footer>
     </div>
   );

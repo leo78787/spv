@@ -1,11 +1,15 @@
-import React, { useState } from 'react';
-import { useStore } from '../store';
+import React, { useState, useEffect } from 'react';
+import { useStore, getAuthToken } from '../store';
 import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department } from '../types';
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Send, Lock, Unlock } from 'lucide-react';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
 import * as XLSX from 'xlsx-js-style';
+
+// Module-level variable to persist the selected month across tab switches
+let _persistedMonth: number | null = null;
+
 import { 
   startOfMonth, 
   endOfMonth,
@@ -33,7 +37,10 @@ export function CalendarView() {
     calendarLabels,
   } = useStore();
   
-  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+  const [currentMonth, setCurrentMonth] = useState(_persistedMonth ?? new Date().getMonth());
+
+  // Keep module-level variable in sync so the month survives tab switches
+  useEffect(() => { _persistedMonth = currentMonth; }, [currentMonth]);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [editingShift, setEditingShift] = useState<{
     assignment: ShiftAssignment;
@@ -52,6 +59,32 @@ export function CalendarView() {
     employeeName: string;
     date: Date;
   } | null>(null);
+
+  // Plan release state
+  const [planReleased, setPlanReleased] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json()).then(d => setPlanReleased(!!d.released)).catch(() => {});
+  }, []);
+
+  const togglePlanRelease = async () => {
+    const token = getAuthToken();
+    if (!token) return;
+    setReleasing(true);
+    try {
+      const resp = await fetch('/api/plan/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ released: !planReleased }),
+      });
+      if (resp.ok) setPlanReleased(!planReleased);
+    } catch {}
+    setReleasing(false);
+  };
   
   const handlePreviousMonth = () => {
     setCurrentMonth(prev => {
@@ -661,6 +694,18 @@ export function CalendarView() {
               title="Schichtplan (.xlsx) herunterladen"
             >
               <Download size={14} /> Excel (.xlsx)
+            </button>
+            <button
+              onClick={togglePlanRelease}
+              disabled={releasing}
+              className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${
+                planReleased
+                  ? 'bg-green-100 text-green-700 border border-green-300 hover:bg-green-200'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
+              title={planReleased ? 'Freigabe aufheben' : 'Plan an Mitarbeitende freigeben'}
+            >
+              {planReleased ? <><Unlock size={14} /> Freigabe aufheben</> : <><Lock size={14} /> Freigeben</>}
             </button>
           </div>
         </div>

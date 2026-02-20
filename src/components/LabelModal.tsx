@@ -22,7 +22,8 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
     name: '',
     letter: '',
     color: '#3b82f6',
-    text: ''
+    text: '',
+    visibleToEmployee: true,
   });
 
   const dateStr = format(date, 'yyyy-MM-dd'); // YYYY-MM-DD (consistent with CalendarView)
@@ -40,7 +41,8 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
       name: formData.name.trim(),
       letter: formData.letter.trim().charAt(0).toUpperCase(),
       color: formData.color,
-      text: formData.text.trim()
+      text: formData.text.trim(),
+      visibleToEmployee: formData.visibleToEmployee,
     };
     
     addLabel(newLabel);
@@ -55,7 +57,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
     addCalendarLabel(calendarLabel);
     
     // Reset form
-    setFormData({ name: '', letter: '', color: '#3b82f6', text: '' });
+    setFormData({ name: '', letter: '', color: '#3b82f6', text: '', visibleToEmployee: true });
     setMode('select');
   };
 
@@ -66,11 +68,12 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
       name: formData.name.trim(),
       letter: formData.letter.trim().charAt(0).toUpperCase(),
       color: formData.color,
-      text: formData.text.trim()
+      text: formData.text.trim(),
+      visibleToEmployee: formData.visibleToEmployee,
     });
     
     setEditingLabel(null);
-    setFormData({ name: '', letter: '', color: '#3b82f6', text: '' });
+    setFormData({ name: '', letter: '', color: '#3b82f6', text: '', visibleToEmployee: true });
     setMode('select');
   };
 
@@ -104,14 +107,15 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
       name: label.name,
       letter: label.letter,
       color: label.color,
-      text: label.text || ''
+      text: label.text || '',
+      visibleToEmployee: label.visibleToEmployee !== false,
     });
     setMode('edit');
   };
 
   const cancelEdit = () => {
     setEditingLabel(null);
-    setFormData({ name: '', letter: '', color: '#3b82f6', text: '' });
+    setFormData({ name: '', letter: '', color: '#3b82f6', text: '', visibleToEmployee: true });
     setMode('select');
   };
 
@@ -268,6 +272,16 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
+
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formData.visibleToEmployee}
+                  onChange={(e) => setFormData({ ...formData, visibleToEmployee: e.target.checked })}
+                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Für Mitarbeitende sichtbar</span>
+              </label>
 
               {/* Preview */}
               <div className="p-4 bg-gray-50 rounded-lg">

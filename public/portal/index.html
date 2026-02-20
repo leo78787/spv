@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Schichtplan – Mitarbeiter-Portal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: #4f46e5; --primary-hover: #4338ca; --primary-light: #eef2ff;
+      --success: #059669; --success-light: #d1fae5;
+      --warning: #d97706; --warning-light: #fef3c7;
+      --danger: #dc2626; --danger-light: #fee2e2;
+      --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+      --gray-300: #d1d5db; --gray-400: #9ca3af; --gray-500: #6b7280;
+      --gray-600: #4b5563; --gray-700: #374151; --gray-800: #1f2937;
+      --gray-900: #111827;
+      --radius: 8px; --radius-lg: 12px;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--gray-50); color: var(--gray-800); line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
+    .container { max-width: 640px; margin: 0 auto; padding: 16px; flex: 1; width: 100%; }
+
+    /* Header */
+    .header { background: var(--primary); color: white; padding: 16px; margin: -16px -16px 16px; position: relative; }
+    .header h1 { font-size: 18px; font-weight: 700; }
+    .header p { font-size: 13px; opacity: 0.85; }
+    .header .logout { background: rgba(255,255,255,0.15); border: none; color: white; padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font-size: 13px; position: absolute; right: 16px; top: 16px; }
+
+    /* Cards */
+    .card { background: white; border-radius: var(--radius-lg); box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 16px; margin-bottom: 12px; }
+    .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--gray-900); display: flex; align-items: center; gap: 8px; }
+
+    /* Forms */
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 13px; font-weight: 500; color: var(--gray-600); margin-bottom: 4px; }
+    input[type="text"], input[type="password"], input[type="email"], input[type="date"], select {
+      width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: var(--radius);
+      font-size: 16px; background: white; color: var(--gray-800);
+    }
+    input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
+    input:disabled, select:disabled { background: var(--gray-100); color: var(--gray-400); cursor: not-allowed; }
+
+    /* Buttons */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 16px; border-radius: var(--radius); border: none; font-size: 14px; font-weight: 500; cursor: pointer; width: 100%; transition: all 0.15s; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-success:hover { background: #047857; }
+    .btn-success:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline { background: white; color: var(--gray-700); border: 1px solid var(--gray-300); }
+    .btn-outline:hover { background: var(--gray-50); }
+    .btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sm { padding: 6px 10px; font-size: 13px; width: auto; }
+    .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+    .btn-row .btn { flex: 1; }
+
+    /* Vacation items */
+    .vacation-item { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius-lg); padding: 12px 14px; margin-bottom: 8px; transition: box-shadow 0.15s; }
+    .vacation-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .vacation-item .item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .vacation-item .item-num { font-size: 11px; font-weight: 600; color: var(--primary); text-transform: uppercase; letter-spacing: 0.5px; }
+    .vacation-item .dates-row { display: flex; gap: 8px; align-items: center; }
+    .vacation-item .dates-row input { flex: 1; font-size: 15px; }
+    .vacation-item .dates-row .sep { color: var(--gray-400); font-size: 18px; flex-shrink: 0; }
+    .vacation-item .days-count { font-size: 12px; color: var(--gray-500); margin-top: 6px; }
+
+    /* Preference items */
+    .pref-card { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius-lg); padding: 12px 14px; margin-bottom: 8px; transition: box-shadow 0.15s; }
+    .pref-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .pref-card .pref-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .pref-card .pref-num { font-size: 11px; font-weight: 600; color: var(--primary); text-transform: uppercase; letter-spacing: 0.5px; }
+    .pref-card select { margin-bottom: 8px; }
+    .pref-card .dates-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .pref-card .dates-row input { flex: 1; font-size: 15px; }
+    .pref-card .dates-row .sep { color: var(--gray-400); font-size: 18px; flex-shrink: 0; }
+    .pref-type-toggle { display: flex; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--gray-300); }
+    .pref-type-toggle button { flex: 1; padding: 8px; border: none; background: white; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+    .pref-type-toggle button.sel-pref { background: #dbeafe; color: #1e40af; }
+    .pref-type-toggle button.sel-avoid { background: var(--danger-light); color: var(--danger); }
+
+    /* Remove button */
+    .remove-icon { background: none; border: none; color: var(--gray-400); cursor: pointer; padding: 4px; border-radius: 4px; transition: all 0.15s; display: flex; align-items: center; }
+    .remove-icon:hover { color: var(--danger); background: var(--danger-light); }
+
+    /* Calendar Mini */
+    .mini-cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .mini-cal-header button { background: none; border: 1px solid var(--gray-300); border-radius: var(--radius); padding: 4px 10px; cursor: pointer; font-size: 14px; }
+    .mini-cal-header .month-label { font-weight: 600; font-size: 14px; }
+    .mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+    .mini-cal-grid .day-header { font-size: 10px; color: var(--gray-500); padding: 4px 0; font-weight: 600; }
+    .mini-cal-grid .day-cell { font-size: 12px; padding: 4px 2px; border-radius: 4px; cursor: default; position: relative; min-height: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .mini-cal-grid .day-cell.today { outline: 2px solid var(--primary); outline-offset: -1px; }
+    .mini-cal-grid .day-cell.weekend { color: var(--gray-400); }
+    .mini-cal-grid .day-cell.has-shift { font-weight: 600; }
+    .mini-cal-grid .day-cell.shift-fruehschicht { background: #fef3c7; color: #92400e; }
+    .mini-cal-grid .day-cell.shift-verschieben { background: #dbeafe; color: #1e40af; }
+    .mini-cal-grid .day-cell.shift-nachtbereitschaft { background: #d1fae5; color: #065f46; }
+    .mini-cal-grid .day-cell.is-vacation { background: #ede9fe; color: #5b21b6; font-weight: 600; }
+    .mini-cal-grid .day-cell .dots { display: flex; gap: 2px; position: absolute; bottom: 1px; }
+    .mini-cal-grid .day-cell .dot { width: 4px; height: 4px; border-radius: 50%; }
+
+    /* Shift items */
+    .shift-list { display: flex; flex-direction: column; gap: 6px; }
+    .shift-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--gray-50); border-radius: var(--radius); border-left: 4px solid var(--primary); }
+    .shift-item.type-V { border-left-color: #3b82f6; }
+    .shift-item.type-N { border-left-color: #22c55e; }
+    .shift-item.type-F { border-left-color: #eab308; }
+    .shift-item .shift-type { font-weight: 600; font-size: 13px; min-width: 140px; }
+    .shift-item .shift-dates { font-size: 13px; color: var(--gray-600); }
+
+    /* Label chips */
+    .label-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: white; margin: 1px; }
+
+    /* Tabs */
+    .tabs { display: flex; border-bottom: 2px solid var(--gray-200); margin-bottom: 16px; gap: 0; overflow-x: auto; }
+    .tab { padding: 10px 14px; font-size: 13px; font-weight: 500; color: var(--gray-500); border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; white-space: nowrap; flex-shrink: 0; }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+    /* Messages */
+    .msg { padding: 10px 14px; border-radius: var(--radius); font-size: 14px; margin-bottom: 12px; }
+    .msg-info { background: #dbeafe; color: #1e40af; }
+    .msg-success { background: var(--success-light); color: #065f46; }
+    .msg-warning { background: var(--warning-light); color: #92400e; }
+    .msg-error { background: var(--danger-light); color: var(--danger); }
+
+    /* Status badge */
+    .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-submitted { background: var(--success-light); color: #065f46; }
+    .status-draft { background: var(--warning-light); color: #92400e; }
+
+    /* Confirm modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+    .modal-box { background: white; border-radius: var(--radius-lg); padding: 24px; max-width: 400px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+    .modal-box h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .modal-box p { font-size: 14px; color: var(--gray-600); margin-bottom: 16px; }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: var(--radius); font-size: 14px; font-weight: 500; z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideUp 0.3s; max-width: 90%; text-align: center; }
+    @keyframes slideUp { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+    /* Footer */
+    .portal-footer { text-align: center; padding: 16px; font-size: 12px; color: var(--gray-400); border-top: 1px solid var(--gray-200); }
+    .portal-footer a { color: var(--gray-500); text-decoration: underline; }
+
+    .hidden { display: none !important; }
+    .empty-state { text-align: center; padding: 20px 16px; color: var(--gray-400); }
+    .empty-state p { font-size: 13px; margin-top: 4px; }
+
+    @media (min-width: 480px) {
+      .container { padding: 24px; }
+      .header { margin: -24px -24px 24px; padding: 20px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- LOGIN -->
+  <div id="login-view">
+    <div style="padding-top: 60px; text-align: center;">
+      <div style="display:inline-flex;background:var(--primary);padding:12px;border-radius:12px;margin-bottom:16px;">
+        <svg width="32" height="32" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </div>
+      <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">Schichtplan Manager</h1>
+      <p style="color:var(--gray-500);font-size:14px;margin-bottom:24px;">Mitarbeiter-Portal</p>
+    </div>
+    <div class="card">
+      <div class="form-group">
+        <label>Benutzername</label>
+        <input type="text" id="login-user" autocomplete="username" autocapitalize="off">
+      </div>
+      <div class="form-group">
+        <label>Passwort</label>
+        <input type="password" id="login-pass" autocomplete="current-password">
+      </div>
+      <div id="login-error" class="msg msg-error hidden"></div>
+      <button class="btn btn-primary" onclick="doLogin()">Anmelden</button>
+    </div>
+    <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--gray-400);">
+      <p>Schichtplan Manager &copy; 2026</p>
+      <p><a href="/portal/impressum.html" style="color:var(--gray-500);text-decoration:underline;">Impressum</a></p>
+    </div>
+  </div>
+
+  <!-- CHANGE PASSWORD -->
+  <div id="password-view" class="hidden">
+    <div class="header">
+      <h1>Passwort ändern</h1>
+      <p>Bitte vergeben Sie ein neues Passwort</p>
+    </div>
+    <div class="card">
+      <div class="form-group">
+        <label>Neues Passwort (min. 6 Zeichen)</label>
+        <input type="password" id="new-pass" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>Passwort bestätigen</label>
+        <input type="password" id="new-pass-confirm" autocomplete="new-password">
+      </div>
+      <div id="pass-error" class="msg msg-error hidden"></div>
+      <button class="btn btn-primary" onclick="doChangePassword()">Passwort setzen</button>
+    </div>
+  </div>
+
+  <!-- MAIN PORTAL -->
+  <div id="portal-view" class="hidden">
+    <div class="header">
+      <h1>Schichtplan Manager</h1>
+      <p id="portal-welcome"></p>
+      <button class="logout" onclick="doLogout()">Abmelden</button>
+    </div>
+
+    <div id="status-bar" class="hidden" style="margin-bottom:12px;"></div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="vacation" onclick="switchTab('vacation')">🏖 Urlaub</button>
+      <button class="tab" data-tab="preferences" onclick="switchTab('preferences')">⚙ Präferenzen</button>
+      <button class="tab" data-tab="schedule" onclick="switchTab('schedule')">📅 Schichtplan</button>
+    </div>
+
+    <!-- VACATION TAB -->
+    <div id="tab-vacation" class="tab-content">
+      <div class="card">
+        <h2>Urlaubszeiträume</h2>
+        <div id="vacation-locked" class="msg msg-warning hidden"></div>
+        <div id="vacation-ranges"></div>
+        <div id="vacation-empty" class="empty-state hidden">
+          <p>Noch keine Urlaubszeiträume eingetragen.</p>
+          <p>Tippen Sie auf den Button, um einen Zeitraum hinzuzufügen.</p>
+        </div>
+        <button class="btn btn-outline btn-sm" id="add-vacation-btn" onclick="addVacationRange()" style="margin-top:8px;">+ Zeitraum hinzufügen</button>
+      </div>
+    </div>
+
+    <!-- PREFERENCES TAB -->
+    <div id="tab-preferences" class="tab-content hidden">
+      <div class="card">
+        <h2>Schichtpräferenzen</h2>
+        <div id="pref-locked" class="msg msg-warning hidden"></div>
+        <div id="preferences-list"></div>
+        <div id="pref-empty" class="empty-state hidden">
+          <p>Noch keine Schichtpräferenzen eingetragen.</p>
+          <p>Geben Sie an, welche Schichten Sie bevorzugen oder vermeiden möchten.</p>
+        </div>
+        <button class="btn btn-outline btn-sm" id="add-pref-btn" onclick="addPreference()" style="margin-top:8px;">+ Präferenz hinzufügen</button>
+      </div>
+    </div>
+
+    <!-- SCHEDULE TAB -->
+    <div id="tab-schedule" class="tab-content hidden">
+      <div class="card" id="calendar-card">
+        <h2>Kalender</h2>
+        <div id="schedule-unreleased" class="msg msg-info hidden">Der Schichtplan wurde noch nicht freigegeben.</div>
+        <div id="mini-calendar"></div>
+        <div id="calendar-legend" class="hidden" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11px;">
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:#fef3c7;border:1px solid #fde68a;"></span> Frühschicht</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:#dbeafe;border:1px solid #bfdbfe;"></span> Versch. Schicht</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:#d1fae5;border:1px solid #a7f3d0;"></span> Nachtbereitschaft</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:#ede9fe;border:1px solid #ddd6fe;"></span> Urlaub</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Mein Schichtplan</h2>
+        <div id="schedule-list" class="shift-list"></div>
+      </div>
+      <div class="card hidden" id="labels-card">
+        <h2>Labels</h2>
+        <div id="labels-list"></div>
+      </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div id="action-buttons" class="btn-row hidden">
+      <button class="btn btn-outline" onclick="doSave('draft')">Zwischenspeichern</button>
+      <button class="btn btn-success" onclick="confirmSubmit()">Einreichen</button>
+    </div>
+    <div id="save-msg" class="msg msg-success hidden" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- Confirm modal -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h3>⚠ Daten einreichen?</h3>
+      <p>Wenn Sie Ihre Urlaubszeiträume und Präferenzen einreichen, können Sie diese <strong>nicht mehr selbst ändern</strong>. Nur der Administrator kann danach noch Änderungen vornehmen.</p>
+      <p style="font-size:13px;color:var(--gray-500);">Möchten Sie fortfahren?</p>
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="hideConfirm()">Abbrechen</button>
+        <button class="btn btn-success" onclick="hideConfirm();doSave('submit')">Ja, einreichen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<div class="portal-footer" id="main-footer">
+  <p>Schichtplan Manager &copy; 2026</p>
+  <p><a href="/portal/impressum.html">Impressum</a></p>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────
+let token = localStorage.getItem('portal-token') || '';
+let employeeId = localStorage.getItem('portal-empId') || '';
+let data = null;
+let vacationRanges = [];
+let preferences = [];
+let isLocked = false;
+let portalStatus = 'none';
+let pollTimer = null;
+let lastVersion = null;
+let calMonth = new Date().getMonth();
+let calYear = new Date().getFullYear();
+
+const SHIFT_NAMES = {
+  fruehschicht: 'Frühschicht (WE)',
+  verschieben: 'Verschobene Schicht',
+  nachtbereitschaft: 'Nachtbereitschaft'
+};
+
+// ─── Boot ────────────────────────────────────────────────────────────
+(async function boot() {
+  if (token) {
+    try { await loadData(); startPolling(); } catch { doLogout(); }
+  }
+})();
+
+// ─── Auth ────────────────────────────────────────────────────────────
+async function doLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  if (!user || !pass) return;
+  document.getElementById('login-error').classList.add('hidden');
+  try {
+    const resp = await fetch('/api/portal/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { showEl('login-error', d.error || 'Anmeldung fehlgeschlagen'); return; }
+    token = d.token; employeeId = d.employeeId;
+    localStorage.setItem('portal-token', token);
+    localStorage.setItem('portal-empId', employeeId);
+    if (d.mustChangePassword) { showView('password-view'); } else { await loadData(); startPolling(); }
+  } catch { showEl('login-error', 'Verbindungsfehler'); }
+}
+
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('login-user').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('login-pass').focus(); });
+document.getElementById('new-pass-confirm').addEventListener('keydown', e => { if (e.key === 'Enter') doChangePassword(); });
+
+async function doChangePassword() {
+  const p1 = document.getElementById('new-pass').value;
+  const p2 = document.getElementById('new-pass-confirm').value;
+  if (p1.length < 6) { showEl('pass-error', 'Mindestens 6 Zeichen'); return; }
+  if (p1 !== p2) { showEl('pass-error', 'Passwörter stimmen nicht überein'); return; }
+  const resp = await fetch('/api/portal/change-password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ newPassword: p1 }),
+  });
+  if (!resp.ok) { showEl('pass-error', 'Fehler beim Ändern'); return; }
+  await loadData(); startPolling();
+}
+
+function doLogout() {
+  token = ''; employeeId = '';
+  localStorage.removeItem('portal-token'); localStorage.removeItem('portal-empId');
+  stopPolling(); showView('login-view');
+}
+
+// ─── Data ────────────────────────────────────────────────────────────
+async function loadData() {
+  const resp = await fetch('/api/portal/my-data', { headers: { Authorization: `Bearer ${token}` } });
+  if (!resp.ok) throw new Error('Unauthorized');
+  data = await resp.json();
+
+  vacationRanges = (data.employee.vacationRanges || []).map(r => ({
+    startDate: r.startDate?.slice?.(0, 10) || '', endDate: r.endDate?.slice?.(0, 10) || '',
+  }));
+  preferences = (data.employee.preferences || []).map(p => ({
+    shiftType: p.shiftType, startDate: (p.startDate?.slice?.(0, 10)) || '',
+    endDate: (p.endDate?.slice?.(0, 10)) || '', preferred: p.preferred,
+  }));
+
+  portalStatus = data.employee.portalStatus || 'none';
+  isLocked = !!data.planReleased || !!data.employeesLocked || portalStatus === 'submitted';
+
+  document.getElementById('portal-welcome').textContent = `Hallo, ${data.employee.name}`;
+  showView('portal-view');
+  renderStatusBar();
+  renderVacation();
+  renderPreferences();
+  renderSchedule();
+  renderCalendar();
+  updateLockState();
+}
+
+function showView(id) {
+  ['login-view', 'password-view', 'portal-view'].forEach(v => {
+    document.getElementById(v).classList.toggle('hidden', v !== id);
+  });
+  // Show/hide footer based on view
+  const footer = document.getElementById('main-footer');
+  if (footer) footer.style.display = (id === 'login-view') ? 'none' : '';
+}
+
+function showEl(id, text) {
+  const el = document.getElementById(id);
+  el.textContent = text; el.classList.remove('hidden');
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+  document.getElementById('tab-' + tab).classList.remove('hidden');
+}
+
+function renderStatusBar() {
+  const bar = document.getElementById('status-bar');
+  if (portalStatus === 'submitted') {
+    bar.innerHTML = '<span class="status-badge status-submitted">✓ Eingereicht</span>';
+    bar.classList.remove('hidden');
+  } else if (portalStatus === 'draft') {
+    bar.innerHTML = '<span class="status-badge status-draft">Entwurf gespeichert</span>';
+    bar.classList.remove('hidden');
+  } else { bar.classList.add('hidden'); }
+}
+
+function updateLockState() {
+  const lockMsg = data.planReleased ? 'Schichtplan ist freigegeben — Änderungen sind gesperrt.'
+    : data.employeesLocked ? 'Änderungen wurden vom Administrator gesperrt.'
+    : portalStatus === 'submitted' ? 'Ihre Daten wurden eingereicht. Änderungen sind nicht mehr möglich.' : '';
+  const showLock = isLocked;
+  const vl = document.getElementById('vacation-locked');
+  const pl = document.getElementById('pref-locked');
+  vl.classList.toggle('hidden', !showLock); pl.classList.toggle('hidden', !showLock);
+  if (showLock) { vl.textContent = lockMsg; pl.textContent = lockMsg; }
+  document.getElementById('add-vacation-btn').classList.toggle('hidden', showLock);
+  document.getElementById('add-pref-btn').classList.toggle('hidden', showLock);
+  document.getElementById('action-buttons').classList.toggle('hidden', showLock);
+}
+
+// ─── Polling ─────────────────────────────────────────────────────────
+function startPolling() { stopPolling(); pollTimer = setInterval(pollVersion, 3000); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+async function pollVersion() {
+  try {
+    const resp = await fetch('/api/state/version');
+    const { version } = await resp.json();
+    if (lastVersion !== null && version !== lastVersion) { await loadData(); }
+    lastVersion = version;
+  } catch {}
+}
+
+// ─── Vacation ────────────────────────────────────────────────────────
+function renderVacation() {
+  const c = document.getElementById('vacation-ranges');
+  const emptyEl = document.getElementById('vacation-empty');
+  c.innerHTML = '';
+  if (vacationRanges.length === 0) { emptyEl.classList.remove('hidden'); return; }
+  emptyEl.classList.add('hidden');
+  vacationRanges.forEach((r, i) => {
+    const div = document.createElement('div'); div.className = 'vacation-item';
+    const days = calcDays(r.startDate, r.endDate);
+    div.innerHTML = `
+      <div class="item-header">
+        <span class="item-num">Zeitraum ${i + 1}</span>
+        ${isLocked ? '' : `<button class="remove-icon" onclick="vacationRanges.splice(${i},1);renderVacation()" title="Entfernen">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>`}
+      </div>
+      <div class="dates-row">
+        <input type="date" value="${r.startDate}" onchange="vacationRanges[${i}].startDate=this.value;renderVacation()" ${isLocked ? 'disabled' : ''}>
+        <span class="sep">→</span>
+        <input type="date" value="${r.endDate}" onchange="vacationRanges[${i}].endDate=this.value;renderVacation()" ${isLocked ? 'disabled' : ''}>
+      </div>
+      ${days >= 0 ? `<div class="days-count">${days} Arbeitstag(e)</div>` : ''}`;
+    c.appendChild(div);
+  });
+}
+function addVacationRange() {
+  const n = new Date(); const today = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+  vacationRanges.push({ startDate: today, endDate: today }); renderVacation();
+}
+function calcDays(start, end) {
+  if (!start || !end) return -1;
+  const s = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00');
+  if (isNaN(s) || isNaN(e) || e < s) return -1;
+  let count = 0;
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) { const dow = d.getDay(); if (dow !== 0 && dow !== 6) count++; }
+  return count;
+}
+
+// ─── Preferences ─────────────────────────────────────────────────────
+function renderPreferences() {
+  const c = document.getElementById('preferences-list');
+  const emptyEl = document.getElementById('pref-empty');
+  c.innerHTML = '';
+  if (preferences.length === 0) { emptyEl.classList.remove('hidden'); return; }
+  emptyEl.classList.add('hidden');
+  preferences.forEach((p, i) => {
+    const div = document.createElement('div'); div.className = 'pref-card';
+    div.innerHTML = `
+      <div class="pref-header">
+        <span class="pref-num">Präferenz ${i + 1}</span>
+        ${isLocked ? '' : `<button class="remove-icon" onclick="preferences.splice(${i},1);renderPreferences()" title="Entfernen">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>`}
+      </div>
+      <select onchange="preferences[${i}].shiftType=this.value" ${isLocked ? 'disabled' : ''}>
+        <option value="fruehschicht" ${p.shiftType === 'fruehschicht' ? 'selected' : ''}>Frühschicht (Wochenende)</option>
+        <option value="verschieben" ${p.shiftType === 'verschieben' ? 'selected' : ''}>Verschobene Schicht</option>
+        <option value="nachtbereitschaft" ${p.shiftType === 'nachtbereitschaft' ? 'selected' : ''}>Nachtbereitschaft</option>
+      </select>
+      <div class="dates-row">
+        <input type="date" value="${p.startDate}" onchange="preferences[${i}].startDate=this.value" ${isLocked ? 'disabled' : ''}>
+        <span class="sep">→</span>
+        <input type="date" value="${p.endDate}" onchange="preferences[${i}].endDate=this.value" ${isLocked ? 'disabled' : ''}>
+      </div>
+      <div class="pref-type-toggle">
+        <button class="${p.preferred ? 'sel-pref' : ''}" onclick="preferences[${i}].preferred=true;renderPreferences()" ${isLocked ? 'disabled' : ''}>👍 Gewünscht</button>
+        <button class="${!p.preferred ? 'sel-avoid' : ''}" onclick="preferences[${i}].preferred=false;renderPreferences()" ${isLocked ? 'disabled' : ''}>👎 Vermeiden</button>
+      </div>`;
+    c.appendChild(div);
+  });
+}
+function addPreference() {
+  const n = new Date(); const today = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+  preferences.push({ shiftType: 'fruehschicht', startDate: today, endDate: today, preferred: true }); renderPreferences();
+}
+
+// ─── Calendar ────────────────────────────────────────────────────────
+function renderCalendar() {
+  const container = document.getElementById('mini-calendar');
+  const legend = document.getElementById('calendar-legend');
+  if (!data) { container.innerHTML = ''; return; }
+
+  const released = !!data.planReleased;
+  document.getElementById('schedule-unreleased').classList.toggle('hidden', released);
+
+  const shiftDates = {};
+  if (released) {
+    (data.assignments || []).forEach(a => {
+      const s = new Date(a.startDate), e = new Date(a.endDate);
+      for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+        const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        shiftDates[iso] = a.shiftType;
+      }
+    });
+  }
+
+  // Build vacation date set from employee's vacation ranges (always shown)
+  const vacDates = new Set();
+  (data.employee.vacationRanges || []).forEach(r => {
+    const s = new Date(r.startDate), e = new Date(r.endDate);
+    for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      vacDates.add(iso);
+    }
+  });
+
+  const labelMap = {}; (data.labels || []).forEach(l => labelMap[l.id] = l);
+  const labelDates = {};
+  (data.calendarLabels || []).forEach(cl => { const lb = labelMap[cl.labelId]; if (!lb) return; if (!labelDates[cl.date]) labelDates[cl.date] = []; labelDates[cl.date].push(lb); });
+
+  const ms = new Date(calYear, calMonth, 1), me = new Date(calYear, calMonth + 1, 0);
+  const monthName = ms.toLocaleString('de-DE', { month: 'long', year: 'numeric' });
+  const now = new Date();
+  const todayISO = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
+  let html = `<div class="mini-cal-header">
+    <button onclick="calMonth--;if(calMonth<0){calMonth=11;calYear--;}renderCalendar()">‹</button>
+    <span class="month-label">${monthName}</span>
+    <button onclick="calMonth++;if(calMonth>11){calMonth=0;calYear++;}renderCalendar()">›</button>
+  </div><div class="mini-cal-grid">`;
+  ['Mo','Di','Mi','Do','Fr','Sa','So'].forEach(d => html += `<div class="day-header">${d}</div>`);
+  const lead = (ms.getDay() + 6) % 7;
+  for (let i = 0; i < lead; i++) html += '<div class="day-cell"></div>';
+  for (let d = 1; d <= me.getDate(); d++) {
+    const date = new Date(calYear, calMonth, d);
+    const iso = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dow = date.getDay(), isWe = dow === 0 || dow === 6;
+    const shiftType = shiftDates[iso], hasShift = !!shiftType;
+    const isVac = vacDates.has(iso);
+    const labels = labelDates[iso] || [];
+    let cls = 'day-cell'; if (isWe) cls += ' weekend'; if (iso === todayISO) cls += ' today';
+    if (isVac) cls += ' is-vacation';
+    else if (hasShift) cls += ' has-shift shift-' + shiftType;
+    let dots = labels.length > 0 ? '<div class="dots">' + labels.slice(0, 3).map(l => `<span class="dot" style="background:${l.color}"></span>`).join('') + '</div>' : '';
+    let title = '';
+    if (isVac) title += 'Urlaub';
+    if (hasShift) title += (title ? '\n' : '') + (SHIFT_NAMES[shiftType] || shiftType);
+    if (labels.length) title += (title ? '\n' : '') + labels.map(l => l.name).join(', ');
+    html += `<div class="${cls}" title="${title}">${d}${dots}</div>`;
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  // Show legend if there are any shifts or vacation
+  const hasAny = Object.keys(shiftDates).length > 0 || vacDates.size > 0;
+  if (legend) { legend.classList.toggle('hidden', !hasAny); if (hasAny) legend.style.display = 'flex'; }
+}
+
+// ─── Schedule ────────────────────────────────────────────────────────
+function renderSchedule() {
+  const c = document.getElementById('schedule-list'), lc = document.getElementById('labels-list'), lCard = document.getElementById('labels-card');
+  if (!data || !data.planReleased) {
+    c.innerHTML = '<p style="color:var(--gray-400);font-size:13px;text-align:center;padding:16px;">Noch keine Schichten verfügbar.</p>';
+    lc.innerHTML = ''; lCard.classList.add('hidden'); return;
+  }
+  const assignments = data.assignments || [];
+  if (assignments.length === 0) { c.innerHTML = '<p style="color:var(--gray-400);font-size:13px;text-align:center;padding:16px;">Keine Schichten zugewiesen.</p>'; }
+  else {
+    const sorted = [...assignments].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+    c.innerHTML = sorted.map(a => {
+      const tk = a.shiftType === 'verschieben' ? 'V' : a.shiftType === 'nachtbereitschaft' ? 'N' : 'F';
+      return `<div class="shift-item type-${tk}"><span class="shift-type">${SHIFT_NAMES[a.shiftType] || a.shiftType}</span><span class="shift-dates">${new Date(a.startDate).toLocaleDateString('de-DE')} — ${new Date(a.endDate).toLocaleDateString('de-DE')}</span></div>`;
+    }).join('');
+  }
+  const calLabels = data.calendarLabels || [], labelDefs = data.labels || [];
+  if (calLabels.length > 0 && labelDefs.length > 0) {
+    const lm = {}; labelDefs.forEach(l => lm[l.id] = l);
+    const grouped = {}; calLabels.forEach(cl => { const lb = lm[cl.labelId]; if (!lb) return; if (!grouped[cl.date]) grouped[cl.date] = []; grouped[cl.date].push(lb); });
+    lc.innerHTML = Object.keys(grouped).sort().map(d => {
+      const ds = new Date(d + 'T00:00:00').toLocaleDateString('de-DE');
+      return `<div style="margin-bottom:8px;"><span style="font-size:13px;color:var(--gray-600);">${ds}:</span> ${grouped[d].map(l => `<span class="label-chip" style="background:${l.color}">${l.letter} ${l.name}</span>`).join('')}</div>`;
+    }).join('');
+    lCard.classList.remove('hidden');
+  } else { lc.innerHTML = ''; lCard.classList.add('hidden'); }
+}
+
+// ─── Save ────────────────────────────────────────────────────────────
+function confirmSubmit() { document.getElementById('confirm-modal').classList.remove('hidden'); }
+function hideConfirm() { document.getElementById('confirm-modal').classList.add('hidden'); }
+
+async function doSave(action) {
+  const body = {
+    vacationRanges: vacationRanges.map(r => ({ startDate: r.startDate + 'T12:00:00.000Z', endDate: r.endDate + 'T12:00:00.000Z' })),
+    preferences: preferences.map(p => ({ shiftType: p.shiftType, startDate: p.startDate + 'T12:00:00.000Z', endDate: p.endDate + 'T12:00:00.000Z', preferred: p.preferred })),
+    action,
+  };
+  const resp = await fetch('/api/portal/my-data', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) { const d = await resp.json().catch(() => ({})); showToast(d.error || 'Fehler beim Speichern', 'error'); return; }
+  if (action === 'submit') {
+    portalStatus = 'submitted'; isLocked = true;
+    renderStatusBar(); updateLockState(); renderVacation(); renderPreferences();
+    showToast('✓ Erfolgreich eingereicht!', 'success');
+  } else { portalStatus = 'draft'; renderStatusBar(); showToast('✓ Zwischengespeichert', 'success'); }
+}
+
+function showToast(text, type) {
+  let existing = document.querySelector('.toast'); if (existing) existing.remove();
+  const t = document.createElement('div'); t.className = 'toast';
+  t.style.background = type === 'error' ? '#dc2626' : type === 'success' ? '#059669' : '#4f46e5';
+  t.style.color = 'white'; t.textContent = text; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+</script>
+</body>
+</html>
