@@ -315,7 +315,7 @@ export function ShiftPlanning() {
         const { assignments, violations } = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12, schedulerConfig);
         
         // Remove any existing plan for the selected start year/month, then store new assignments
-        createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations);
+        createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations, 'automatisch generiert');
         assignments.forEach(assignment => updateShiftAssignment(assignment));
 
         // Open the pipeline automatically if there are unresolvable violations
@@ -425,7 +425,9 @@ export function ShiftPlanning() {
       }));
 
       const finalPlan = { ...importedPlan, assignments: mappedAssignments };
-
+      if (!finalPlan.algorithm) {
+        finalPlan.algorithm = 'importiert';
+      }
       setShiftPlan(finalPlan as any);
       
       // Import labels if present
@@ -822,7 +824,12 @@ export function ShiftPlanning() {
           </div>
         )}
       </div>
-
+        {/* Algorithm info box */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mt-4">
+        <p className="text-sm text-gray-700">
+          Algorithmus des aktuellen Plans: <strong>{shiftPlan?.algorithm ?? 'unbekannt'}</strong>
+        </p>
+      </div>
       {/* Generation Result */}
       {generationResult && (
         <div className={`rounded-lg p-6 ${

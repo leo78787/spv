@@ -204,7 +204,7 @@ export function startOptimisation(
       const ctx = applyContext;
       if (ctx) {
         const store = useStore.getState();
-        store.createShiftPlan(ctx.year, ctx.startMonth, 12, ctx.schedulerConfig, []);
+        store.createShiftPlan(ctx.year, ctx.startMonth, 12, ctx.schedulerConfig, [], 'fairness-optimiert');
         result.assignments.forEach((a: any) => {
           store.updateShiftAssignment({
             ...a,

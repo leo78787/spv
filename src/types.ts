@@ -134,6 +134,8 @@ export interface ShiftPlan {
   schedulerConfig?: SchedulerConfig; // config used when generating this plan
   violations?: SchedulerViolation[]; // unresolved staffing violations from last generation
   assignments: ShiftAssignment[];
+  /** Describes which algorithm or method produced this plan (e.g. "generiert", "fairness-optimiert", "importiert"). */
+  algorithm?: string;
 }
 
 // Label types for calendar markings (e.g., training, meetings, etc.)

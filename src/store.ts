@@ -36,7 +36,7 @@ interface AppState {
 
   // Shift plan actions
   setCurrentYear: (year: number) => void;
-  createShiftPlan: (year: number, startMonth?: number, months?: number, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[]) => void;
+  createShiftPlan: (year: number, startMonth?: number, months?: number, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[], algorithm?: string) => void;
   setShiftPlan: (plan: ShiftPlan | null) => void;
   updateShiftAssignment: (assignment: ShiftAssignment) => void;
   deleteShiftAssignment: (id: string) => void;
@@ -207,13 +207,13 @@ export const useStore = create<AppState>((set) => {
       return newState;
     }),
     
-    createShiftPlan: (year: number, startMonth = 0, months = 12, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[]) => set((state) => {
+    createShiftPlan: (year: number, startMonth = 0, months = 12, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[], algorithm?: string) => set((state) => {
       const newState = {
         ...state,
         // When creating a fresh plan we remove any calendar label assignments
         // so old per-day annotations do not carry over to the new schedule.
         calendarLabels: [],
-        shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [] }
+        shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [], algorithm }
       };
       saveToLocalStorage('schichtplan-storage', newState);
       return newState;

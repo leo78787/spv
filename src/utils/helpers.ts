@@ -136,8 +136,13 @@ export function reviveImportedPlan(data: any) {
 
   const revivedPlan = {
     ...shiftPlan,
-    assignments: revivedAssignments
+    assignments: revivedAssignments,
   };
+
+  // Mark imported plans so UI can display the source algorithm if missing
+  if (!revivedPlan.algorithm) {
+    revivedPlan.algorithm = 'importiert';
+  }
 
   return { shiftPlan: revivedPlan, employees: revivedEmployees, departments };
 }
