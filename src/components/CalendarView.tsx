@@ -98,11 +98,12 @@ export function CalendarView() {
     shiftPlan.assignments.forEach(assignment => {
       if (!assignment.employees.includes(employeeId)) return;
       
-      const assignmentStart = new Date(assignment.startDate);
-      const assignmentEnd = new Date(assignment.endDate);
+      const assignmentStart = startOfDay(new Date(assignment.startDate));
+      const assignmentEnd = startOfDay(new Date(assignment.endDate));
+      const dayNorm = startOfDay(date);
       
-      // Check if date falls within assignment period
-      if (date >= assignmentStart && date <= assignmentEnd) {
+      // Check if date falls within assignment period (normalized to day precision)
+      if (dayNorm >= assignmentStart && dayNorm <= assignmentEnd) {
         shifts.push(assignment.shiftType);
       }
     });
@@ -117,10 +118,11 @@ export function CalendarView() {
     const assignment = shiftPlan.assignments.find(a => {
       if (a.shiftType !== shiftType) return false;
       
-      const start = new Date(a.startDate);
-      const end = new Date(a.endDate);
+      const start = startOfDay(new Date(a.startDate));
+      const end = startOfDay(new Date(a.endDate));
+      const dayNorm = startOfDay(date);
       
-      return date >= start && date <= end;
+      return dayNorm >= start && dayNorm <= end;
     });
     
     return assignment || null;
@@ -726,9 +728,10 @@ export function CalendarView() {
 
                     // detect assignment coverage mismatches (too few / too many assigned)
                     const assignmentsCovering = (shiftPlan?.assignments || []).filter(a => {
-                      const aStart = new Date(a.startDate);
-                      const aEnd = new Date(a.endDate);
-                      return day >= aStart && day <= aEnd;
+                      const aStart = startOfDay(new Date(a.startDate));
+                      const aEnd = startOfDay(new Date(a.endDate));
+                      const dayNorm = startOfDay(day);
+                      return dayNorm >= aStart && dayNorm <= aEnd;
                     });
 
                     const mismatches = assignmentsCovering.map(a => {

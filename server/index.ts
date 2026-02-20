@@ -13,10 +13,9 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
-import { Worker } from 'node:worker_threads';
 import { loadState, saveState } from './db.js';
 import { generateAutomaticShiftPlan } from '../src/utils/scheduler.js';
-import { computeImpactFactors } from '../src/utils/fairnessImpact.js';
+import { computeImpactFactors, computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
 
 const app = express();
@@ -122,79 +121,115 @@ app.post('/api/generate', authMiddleware, (req, res) => {
 
 app.post('/api/optimize', authMiddleware, (req, res) => {
   // Set SSE headers
-  res.writeHead(200, {
+  res.status(200);
+  res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
+    'Connection': 'keep-alive',
   });
+  res.flushHeaders();
 
   let closed = false;
-  req.on('close', () => {
-    closed = true;
-    worker.terminate();
-  });
+  res.on('close', () => { closed = true; });
 
-  // Try worker_threads first — if tsx doesn't support it in the worker,
-  // fall back to running the optimiser synchronously in the main thread.
-  let worker: Worker;
-  try {
-    worker = new Worker(new URL('./optimizerWorker.ts', import.meta.url), {
-      workerData: req.body,
-    });
-  } catch {
-    // Fallback: synchronous execution
-    try {
-      const data = reviveDates(req.body);
-      const result = runOptimiser(
-        data.employees,
-        data.year,
-        data.startMonth,
-        data.months,
-        data.schedulerConfig,
-        data.optimiserConfig,
-        (progress) => {
-          if (!closed)
-            res.write(`data: ${JSON.stringify({ type: 'progress', progress })}\n\n`);
-        },
-      );
-      if (!closed) {
-        res.write(`data: ${JSON.stringify({ type: 'result', result })}\n\n`);
-      }
-    } catch (err) {
-      if (!closed) {
-        res.write(
-          `data: ${JSON.stringify({ type: 'error', error: String(err) })}\n\n`,
-        );
-      }
+  // Run the optimiser in async chunks to keep the event loop responsive
+  // and allow SSE progress events to be flushed to the client.
+  const data = reviveDates(req.body);
+  const { employees, schedulerConfig, year, startMonth, months } = data;
+  const optimiserConfig = data.optimiserConfig ?? { maxIterations: 5000, targets: { overall: true, verschieben: true, nacht: true, frueh: true } };
+  const { maxIterations, targets } = optimiserConfig;
+
+  // Run optimiser logic inline with async yielding
+  const genPlan = generateAutomaticShiftPlan;
+
+  function shuffle<T>(arr: T[]): T[] {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
     }
-    res.end();
-    return;
+    return arr;
   }
 
-  worker.on('message', (msg: any) => {
+  function compositeScore(scores: any, t: any): number {
+    let sum = 0, count = 0;
+    if (t.overall)     { sum += scores.overall;     count++; }
+    if (t.verschieben) { sum += scores.verschieben; count++; }
+    if (t.nacht)       { sum += scores.nacht;       count++; }
+    if (t.frueh)       { sum += scores.frueh;       count++; }
+    return count === 0 ? 0 : sum / count;
+  }
+
+  // Baseline
+  const { assignments: baseline } = genPlan(employees, year, startMonth, months, schedulerConfig);
+  let bestAssignments = baseline;
+  let bestScores = computeFairnessScores(employees, baseline);
+  let bestComposite = compositeScore(bestScores, targets);
+
+  const progressInterval = Math.max(1, Math.floor(maxIterations / 200));
+  const CHUNK_SIZE = Math.max(1, Math.min(10, progressInterval));
+  const t0 = Date.now();
+  let iter = 0;
+
+  function runChunk() {
     if (closed) return;
-    res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    if (msg.type === 'result') {
+
+    try {
+      const chunkEnd = Math.min(iter + CHUNK_SIZE, maxIterations);
+      for (; iter < chunkEnd; iter++) {
+        if (iter % progressInterval === 0) {
+          const elapsedMs = Date.now() - t0;
+          const frac = iter / maxIterations;
+          const estimatedTotalMs = frac > 0 ? elapsedMs / frac : 0;
+          const progress = {
+            iteration: iter, maxIterations, bestScore: bestComposite,
+            currentScores: { ...bestScores }, elapsedMs, estimatedTotalMs, done: false,
+          };
+          if (!closed) res.write(`data: ${JSON.stringify({ type: 'progress', progress })}\n\n`);
+        }
+
+        const shuffled = shuffle([...employees]);
+        const { assignments: candidate } = genPlan(shuffled, year, startMonth, months, schedulerConfig);
+        const candidateScores = computeFairnessScores(employees, candidate);
+        const candidateComposite = compositeScore(candidateScores, targets);
+        if (candidateComposite > bestComposite) {
+          bestAssignments = candidate;
+          bestScores = { ...candidateScores };
+          bestComposite = candidateComposite;
+        }
+      }
+
+      if (iter >= maxIterations) {
+        // Done
+        const totalElapsed = Date.now() - t0;
+        const doneProgress = {
+          iteration: maxIterations, maxIterations, bestScore: bestComposite,
+          currentScores: { ...bestScores }, elapsedMs: totalElapsed, estimatedTotalMs: totalElapsed, done: true,
+        };
+        if (!closed) {
+          res.write(`data: ${JSON.stringify({ type: 'progress', progress: doneProgress })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'result', result: { assignments: bestAssignments, scores: bestScores, iterations: maxIterations } })}\n\n`);
+        }
+        res.end();
+      } else {
+        // Yield to the event loop, then continue
+        setImmediate(runChunk);
+      }
+    } catch (chunkErr) {
+      if (!closed) {
+        res.write(`data: ${JSON.stringify({ type: 'error', error: String(chunkErr) })}\n\n`);
+      }
       res.end();
     }
-  });
+  }
 
-  worker.on('error', (err: Error) => {
-    if (closed) return;
-    res.write(
-      `data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`,
-    );
+  try {
+    runChunk();
+  } catch (err) {
+    if (!closed) {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: String(err) })}\n\n`);
+    }
     res.end();
-  });
-
-  worker.on('exit', (code) => {
-    if (!closed && code !== 0) {
-      res.write(
-        `data: ${JSON.stringify({ type: 'error', error: `Worker exited with code ${code}` })}\n\n`,
-      );
-      res.end();
-    }
-  });
+  }
 });
 
 // ── Fairness impact preview ─────────────────────────────────────────
