@@ -91,7 +91,7 @@ describe('Fairness Optimizer', () => {
     }
   });
 
-  it('converges early when plateau is reached', () => {
+  it('always runs all requested iterations', () => {
     const result = runOptimiser(
       employees,
       2026,
@@ -101,15 +101,9 @@ describe('Fairness Optimizer', () => {
       { maxIterations: 200, targets: { overall: true, verschieben: true, nacht: true, frueh: true } }
     );
 
-    // The algorithm should finish (either converge or exhaust iterations)
-    // and produce a valid result with good scores
-    expect(result.iterations).toBeGreaterThan(0);
-    expect(result.iterations).toBeLessThanOrEqual(200);
+    // Must always exhaust exactly the requested iterations
+    expect(result.iterations).toBe(200);
     expect(result.assignments.length).toBeGreaterThan(0);
-    // If converged, iterations must be < maxIterations
-    if (result.converged) {
-      expect(result.iterations).toBeLessThan(200);
-    }
   });
 
   it('calls the progress callback', () => {

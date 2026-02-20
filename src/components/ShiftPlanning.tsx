@@ -14,6 +14,7 @@ import {
   cancelOptimisation,
   setMaxIterations,
   setTargets,
+  calibrate,
   type OptimiserManagerState,
 } from '../services/optimiserManager';
 
@@ -152,7 +153,8 @@ export function ShiftPlanning() {
   const [optimiserState, setOptimiserState] = useState<OptimiserManagerState>(getOptimiserState);
   useEffect(() => subscribeOptimiser(setOptimiserState), []);
   const { isOptimising, progress: optimiserProgress, result: optimiserResult,
-          maxIterations: optimiserMaxIter, targets: optimiserTargets } = optimiserState;
+          maxIterations: optimiserMaxIter, targets: optimiserTargets,
+          msPerIteration } = optimiserState;
 
   // When the manager finishes & produces a generationMessage, sync it into
   // the local generationResult so the existing UI picks it up.
@@ -161,6 +163,15 @@ export function ShiftPlanning() {
       setGenerationResult(optimiserState.generationMessage);
     }
   }, [optimiserState.generationMessage, optimiserState.isOptimising]);
+
+  // Auto-calibrate ms/iteration when employees or config change so the
+  // time estimate is available before the user starts.
+  useEffect(() => {
+    if (employees.length > 0 && !isOptimising) {
+      calibrate(employees, schedulerConfig, selectedYear, selectedMonth);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees.length, schedulerConfig, selectedYear, selectedMonth]);
 
   const [generationResult, setGenerationResult] = useState<{
     success: boolean;
@@ -707,7 +718,16 @@ export function ShiftPlanning() {
               disabled={isOptimising}
               className="w-40 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
-            <p className="text-xs text-gray-400 mt-1">Der Algorithmus bricht früher ab, wenn er konvergiert.</p>
+            {(() => {
+              // Show estimated time before starting, based on previous run data
+              const est = msPerIteration != null ? msPerIteration * optimiserMaxIter : null;
+              if (est != null && !isOptimising) {
+                const secs = Math.round(est / 1000);
+                const display = secs >= 60 ? `ca. ${Math.floor(secs / 60)} Min ${secs % 60} Sek` : `ca. ${secs} Sek`;
+                return <p className="text-xs text-amber-600 mt-1">Geschätzte Dauer: {display}</p>;
+              }
+              return <p className="text-xs text-gray-400 mt-1">Der Algorithmus durchläuft immer alle Iterationen.</p>;
+            })()}
           </div>
 
           {/* Target dimensions */}
@@ -761,6 +781,15 @@ export function ShiftPlanning() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-gray-600">
               <span>Iteration {optimiserProgress.iteration.toLocaleString()} / {optimiserProgress.maxIterations.toLocaleString()}</span>
+              {(() => {
+                const remaining = optimiserProgress.estimatedTotalMs - optimiserProgress.elapsedMs;
+                if (remaining > 0) {
+                  const secs = Math.round(remaining / 1000);
+                  const display = secs >= 60 ? `${Math.floor(secs / 60)} Min ${secs % 60} Sek` : `${secs} Sek`;
+                  return <span>Verbleibend: {display}</span>;
+                }
+                return null;
+              })()}
               <span>Bester Score: {optimiserProgress.bestScore.toFixed(1)} %</span>
             </div>
             <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
@@ -783,7 +812,6 @@ export function ShiftPlanning() {
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-1">
             <p className="text-sm font-medium text-amber-900">
               Optimierung abgeschlossen nach {optimiserResult.iterations.toLocaleString()} Iterationen
-              {optimiserResult.converged && <span className="text-green-700 ml-1">(konvergiert)</span>}
             </p>
             <div className="flex gap-4 text-sm text-amber-800">
               <span>Gesamt: <strong>{optimiserResult.scores.overall.toFixed(1)}%</strong></span>

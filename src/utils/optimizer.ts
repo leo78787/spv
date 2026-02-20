@@ -11,8 +11,9 @@
  *   enforces them) — no separate legality checks needed.
  * - With infinite iterations, theoretically explores all possible valid plans.
  * - Keeps track of the best plan found so far.
- * - Converges early when no improvement found for a configurable plateau.
- * - Emits progress callbacks so the UI can show a progress bar.
+ * - Always runs all user-specified iterations (no early convergence).
+ * - Emits progress callbacks with elapsed / estimated time so the UI can
+ *   show a progress bar and ETA.
  */
 
 import {
@@ -49,7 +50,10 @@ export interface OptimiserProgress {
   maxIterations: number;
   bestScore: number;
   currentScores: FairnessScores;
-  converged: boolean;
+  /** Milliseconds elapsed since optimisation start. */
+  elapsedMs: number;
+  /** Estimated total runtime in milliseconds (extrapolated from current pace). */
+  estimatedTotalMs: number;
   done: boolean;
 }
 
@@ -57,7 +61,6 @@ export interface OptimiserResult {
   assignments: ShiftAssignment[];
   scores: FairnessScores;
   iterations: number;
-  converged: boolean;
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -115,21 +118,22 @@ export function runOptimiser(
   let bestScores = computeFairnessScores(employees, baseline);
   let bestComposite = compositeScore(bestScores, targets);
 
-  // Convergence: abort after this many iterations w/o improvement
-  const PLATEAU_LIMIT = Math.max(500, Math.floor(maxIterations * 0.15));
-  let plateauCount = 0;
-
   const progressInterval = Math.max(1, Math.floor(maxIterations / 200));
+  const t0 = Date.now();
 
   for (let iter = 0; iter < maxIterations; iter++) {
     // ── emit progress at intervals ───────────────────────────────────
     if (iter % progressInterval === 0 && onProgress) {
+      const elapsedMs = Date.now() - t0;
+      const frac = iter / maxIterations;
+      const estimatedTotalMs = frac > 0 ? elapsedMs / frac : 0;
       onProgress({
         iteration: iter,
         maxIterations,
         bestScore: bestComposite,
         currentScores: { ...bestScores },
-        converged: false,
+        elapsedMs,
+        estimatedTotalMs,
         done: false,
       });
     }
@@ -147,40 +151,19 @@ export function runOptimiser(
       bestAssignments = candidate;
       bestScores = { ...candidateScores };
       bestComposite = candidateComposite;
-      plateauCount = 0;
-    } else {
-      plateauCount++;
-    }
-
-    // ── convergence check ────────────────────────────────────────────
-    if (plateauCount >= PLATEAU_LIMIT) {
-      if (onProgress) {
-        onProgress({
-          iteration: iter,
-          maxIterations,
-          bestScore: bestComposite,
-          currentScores: { ...bestScores },
-          converged: true,
-          done: true,
-        });
-      }
-      return {
-        assignments: bestAssignments,
-        scores: bestScores,
-        iterations: iter + 1,
-        converged: true,
-      };
     }
   }
 
-  // Reached max iterations
+  // All iterations completed
+  const totalElapsed = Date.now() - t0;
   if (onProgress) {
     onProgress({
       iteration: maxIterations,
       maxIterations,
       bestScore: bestComposite,
       currentScores: { ...bestScores },
-      converged: false,
+      elapsedMs: totalElapsed,
+      estimatedTotalMs: totalElapsed,
       done: true,
     });
   }
@@ -188,6 +171,5 @@ export function runOptimiser(
     assignments: bestAssignments,
     scores: bestScores,
     iterations: maxIterations,
-    converged: false,
   };
 }

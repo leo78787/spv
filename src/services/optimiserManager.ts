@@ -24,6 +24,8 @@ export interface OptimiserManagerState {
   result: OptimiserResult | null;
   maxIterations: number;
   targets: OptimiserTargets;
+  /** Measured ms per iteration from the last run (used for pre-start time estimates). */
+  msPerIteration: number | null;
   /** Human-readable message set when the optimiser finishes. */
   generationMessage: { success: boolean; message: string; assignmentCount: number } | null;
 }
@@ -47,6 +49,7 @@ const state: OptimiserManagerState = {
   result: null,
   maxIterations: 5000,
   targets: { overall: true, verschieben: true, nacht: true, frueh: true },
+  msPerIteration: null,
   generationMessage: null,
 };
 
@@ -91,6 +94,69 @@ export function setTargets(targets: OptimiserTargets) {
   notify();
 }
 
+let calibrationWorker: Worker | null = null;
+
+/**
+ * Run a tiny calibration (3 iterations) to measure ms-per-iteration for the
+ * current dataset & machine.  This lets the UI show a time estimate *before*
+ * the user starts the full optimisation.
+ */
+export function calibrate(
+  employees: Employee[],
+  schedulerConfig: SchedulerConfig,
+  year: number,
+  startMonth: number,
+) {
+  // Don't calibrate while a real run is in progress
+  if (state.isOptimising) return;
+  // Abort any previous calibration
+  if (calibrationWorker) { calibrationWorker.terminate(); calibrationWorker = null; }
+
+  calibrationWorker = new Worker(
+    new URL('../workers/optimiserWorker.ts', import.meta.url),
+    { type: 'module' },
+  );
+
+  calibrationWorker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
+    const msg = e.data;
+    if (msg.type === 'result' && msg.result) {
+      // result.iterations always = CALIBRATION_ITERS
+      // elapsed time is in the last progress we received, but the worker
+      // doesn't send it in the result.  However we timed it ourselves:
+    }
+    // We use our own timing below
+  };
+
+  const CALIBRATION_ITERS = 3;
+  const t0 = performance.now();
+
+  // We need to capture the finish event
+  calibrationWorker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
+    const msg = e.data;
+    if (msg.type === 'result') {
+      const elapsed = performance.now() - t0;
+      state.msPerIteration = elapsed / CALIBRATION_ITERS;
+      notify();
+      calibrationWorker?.terminate();
+      calibrationWorker = null;
+    } else if (msg.type === 'error') {
+      calibrationWorker?.terminate();
+      calibrationWorker = null;
+    }
+  };
+
+  const req: OptimiserWorkerRequest = {
+    id: Date.now(),
+    employees,
+    schedulerConfig,
+    optimiserConfig: { maxIterations: CALIBRATION_ITERS, targets: state.targets },
+    year,
+    startMonth,
+    months: 12,
+  };
+  calibrationWorker.postMessage(req);
+}
+
 /**
  * Start the optimisation.  Creates a new Web Worker and tracks its progress.
  * When the worker finishes, the result is applied directly to the Zustand
@@ -122,6 +188,10 @@ export function startOptimisation(
 
     if (msg.type === 'progress' && msg.progress) {
       state.progress = msg.progress;
+      // Update msPerIteration from live data for future estimates
+      if (msg.progress.iteration > 0 && msg.progress.elapsedMs > 0) {
+        state.msPerIteration = msg.progress.elapsedMs / msg.progress.iteration;
+      }
       notify();
     } else if (msg.type === 'result' && msg.result) {
       const result = msg.result;
@@ -146,7 +216,7 @@ export function startOptimisation(
 
       state.generationMessage = {
         success: true,
-        message: `Optimierter Schichtplan – ${result.iterations} Iterationen${result.converged ? ' (konvergiert)' : ''}`,
+        message: `Optimierter Schichtplan – ${result.iterations.toLocaleString()} Iterationen`,
         assignmentCount: result.assignments.length,
       };
       notify();
