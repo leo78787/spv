@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { EmployeeManagement } from './components/EmployeeManagement';
 import { DepartmentManagement } from './components/DepartmentManagement';
 import { ShiftPlanning } from './components/ShiftPlanning';
@@ -8,19 +8,22 @@ import { ViewTab } from './types';
 import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut } from 'lucide-react';
 import { HolidaySettings } from './components/HolidaySettings';
 import { Login } from './components/Login';
+import { getAuthToken, clearAuthToken, loadFromServer } from './store';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('employees');
   const [showHolidaySettings, setShowHolidaySettings] = useState(false);
+  const [stateLoaded, setStateLoaded] = useState(false);
 
-  // simple client-side auth (persisted in localStorage)
-  const [authenticated, setAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('spm-authenticated') === 'true';
-    } catch (err) {
-      return false;
+  // server-based auth — the auth token is stored in localStorage
+  const [authenticated, setAuthenticated] = useState<boolean>(() => !!getAuthToken());
+
+  // Hydrate Zustand store from the server after login / on mount
+  useEffect(() => {
+    if (authenticated) {
+      loadFromServer().then(() => setStateLoaded(true));
     }
-  });
+  }, [authenticated]);
 
   
   const tabs = [
@@ -40,6 +43,15 @@ function App() {
   // if not authenticated show login screen only
   if (!authenticated) {
     return <Login onSuccess={() => setAuthenticated(true)} />;
+  }
+
+  // Wait for server state to load before rendering the main UI
+  if (!stateLoaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <p className="text-gray-500">Lade Daten vom Server…</p>
+      </div>
+    );
   }
 
   return (
@@ -95,8 +107,9 @@ function App() {
                 <SettingsButton />
                 <button
                   onClick={() => {
-                    localStorage.removeItem('spm-authenticated');
+                    clearAuthToken();
                     setAuthenticated(false);
+                    setStateLoaded(false);
                   }}
                   title="Abmelden"
                   className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600 flex items-center gap-2"

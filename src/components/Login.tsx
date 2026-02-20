@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { setAuthToken } from '../store';
 
 type Props = {
   onSuccess: () => void;
@@ -10,25 +11,30 @@ export function Login({ onSuccess }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    // simple client-side check (no backend) — credentials provided by user
-    setTimeout(() => {
+    try {
+      const resp = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await resp.json();
       setLoading(false);
-      if (username === 'spm2026' && password === 'schichtplan2026!') {
-        try {
-          localStorage.setItem('spm-authenticated', 'true');
-        } catch (err) {
-          console.error(err);
-        }
+
+      if (data.success && data.token) {
+        setAuthToken(data.token);
         onSuccess();
       } else {
-        setError('Ungültiger Benutzername oder Passwort.');
+        setError(data.message || 'Ungültiger Benutzername oder Passwort.');
       }
-    }, 350);
+    } catch {
+      setLoading(false);
+      setError('Verbindungsfehler — Server nicht erreichbar.');
+    }
   };
 
   return (

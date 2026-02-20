@@ -1,6 +1,102 @@
 import { create } from 'zustand';
 import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel, SchedulerConfig, SchedulerViolation } from './types';
 
+// ═══════════════════════════════════════════════════════════════════════
+// Auth token helpers (stored in localStorage — only the token, not data)
+// ═══════════════════════════════════════════════════════════════════════
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem('spm-auth-token');
+  } catch { return null; }
+}
+
+export function setAuthToken(token: string) {
+  localStorage.setItem('spm-auth-token', token);
+}
+
+export function clearAuthToken() {
+  localStorage.removeItem('spm-auth-token');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Server persistence helpers (replace the old localStorage approach)
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Fire-and-forget save to the server (optimistic update). */
+const saveToServer = async (state: any) => {
+  const token = getAuthToken();
+  if (!token) return;
+  try {
+    await fetch('/api/state', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        employees: state.employees,
+        departments: state.departments,
+        currentYear: state.currentYear,
+        shiftPlan: state.shiftPlan,
+        customHolidays: state.customHolidays,
+        labels: state.labels,
+        calendarLabels: state.calendarLabels,
+      }),
+    });
+  } catch (err) {
+    console.error('Error saving to server:', err);
+  }
+};
+
+/** Revive ISO date strings back to Date objects. */
+function reviveDatesInState(obj: any): any {
+  if (typeof obj === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(obj)) {
+    return new Date(obj);
+  }
+  if (Array.isArray(obj)) return obj.map(reviveDatesInState);
+  if (obj && typeof obj === 'object') {
+    const out: any = {};
+    for (const key of Object.keys(obj)) {
+      out[key] = reviveDatesInState(obj[key]);
+    }
+    return out;
+  }
+  return obj;
+}
+
+/**
+ * Load application state from the server.
+ * Called once after login / on app mount.
+ */
+export async function loadFromServer(): Promise<void> {
+  const token = getAuthToken();
+  if (!token) return;
+  try {
+    const resp = await fetch('/api/state', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return;
+    const raw = await resp.json();
+    const revived = reviveDatesInState(raw);
+    useStore.setState({
+      employees: revived.employees ?? [],
+      departments: revived.departments ?? [
+        { id: 'dept-1', name: 'Abteilung A' },
+        { id: 'dept-2', name: 'Abteilung B' },
+        { id: 'dept-3', name: 'Abteilung C' },
+      ],
+      currentYear: revived.currentYear ?? new Date().getFullYear(),
+      shiftPlan: revived.shiftPlan ?? null,
+      customHolidays: revived.customHolidays ?? [],
+      labels: revived.labels ?? [],
+      calendarLabels: revived.calendarLabels ?? [],
+    });
+  } catch (err) {
+    console.error('Error loading from server:', err);
+  }
+}
+
 interface AppState {
   employees: Employee[];
   departments: Department[];
@@ -44,78 +140,53 @@ interface AppState {
   acknowledgeViolation: (id: string) => void;
 }
 
-const saveToLocalStorage = (key: string, state: any) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(state));
-  } catch (error) {
-    console.error('Error saving to localStorage:', error);
-  }
-};
-
-const loadFromLocalStorage = (key: string) => {
-  try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item, (_key, value) => {
-      // Convert date strings back to Date objects
-      if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
-        return new Date(value);
-      }
-      return value;
-    }) : null;
-  } catch (error) {
-    console.error('Error loading from localStorage:', error);
-    return null;
-  }
-};
-
 export const useStore = create<AppState>((set) => {
-  const saved = loadFromLocalStorage('schichtplan-storage');
-  
+  // Start with defaults; loadFromServer() hydrates after login
   const initialState = {
-    employees: saved?.employees || [],
-    departments: saved?.departments || [
+    employees: [] as Employee[],
+    departments: [
       { id: 'dept-1', name: 'Abteilung A' },
       { id: 'dept-2', name: 'Abteilung B' },
       { id: 'dept-3', name: 'Abteilung C' },
     ],
-    currentYear: saved?.currentYear || new Date().getFullYear(),
-    shiftPlan: saved?.shiftPlan || null,
-    customHolidays: saved?.customHolidays || [],
-    labels: saved?.labels || [],
-    calendarLabels: saved?.calendarLabels || [],
+    currentYear: new Date().getFullYear(),
+    shiftPlan: null as ShiftPlan | null,
+    customHolidays: [] as Holiday[],
+    labels: [] as Label[],
+    calendarLabels: [] as CalendarLabel[],
     
     addEmployee: (employee: Employee) => set((state) => {
       const newState = {
         ...state,
         employees: [...state.employees, employee]
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     // Holiday actions (user configurable)
     addCustomHoliday: (holiday: Holiday) => set((state) => {
       const newState = { ...state, customHolidays: [...state.customHolidays, holiday] };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     updateCustomHoliday: (id: string, updates: Partial<Holiday>) => set((state) => {
       const newState = { ...state, customHolidays: state.customHolidays.map(h => h.id === id ? { ...h, ...updates } : h) };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     deleteCustomHoliday: (id: string) => set((state) => {
       const newState = { ...state, customHolidays: state.customHolidays.filter(h => h.id !== id) };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     // Label actions
     addLabel: (label: Label) => set((state) => {
       const newState = { ...state, labels: [...state.labels, label] };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
@@ -124,7 +195,7 @@ export const useStore = create<AppState>((set) => {
         ...state, 
         labels: state.labels.map(l => l.id === id ? { ...l, ...updates } : l) 
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
@@ -135,20 +206,20 @@ export const useStore = create<AppState>((set) => {
         // Also remove all calendar labels that reference this label
         calendarLabels: state.calendarLabels.filter(cl => cl.labelId !== id)
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     // Calendar label actions
     addCalendarLabel: (calendarLabel: CalendarLabel) => set((state) => {
       const newState = { ...state, calendarLabels: [...state.calendarLabels, calendarLabel] };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     deleteCalendarLabel: (id: string) => set((state) => {
       const newState = { ...state, calendarLabels: state.calendarLabels.filter(cl => cl.id !== id) };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -159,7 +230,7 @@ export const useStore = create<AppState>((set) => {
           emp.id === id ? { ...emp, ...updates } : emp
         )
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -168,7 +239,7 @@ export const useStore = create<AppState>((set) => {
         ...state,
         employees: state.employees.filter(emp => emp.id !== id)
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -177,7 +248,7 @@ export const useStore = create<AppState>((set) => {
         ...state,
         departments: [...state.departments, department]
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -188,7 +259,7 @@ export const useStore = create<AppState>((set) => {
           dept.id === id ? { ...dept, ...updates } : dept
         )
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -197,13 +268,13 @@ export const useStore = create<AppState>((set) => {
         ...state,
         departments: state.departments.filter(dept => dept.id !== id)
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
     setCurrentYear: (year: number) => set((state) => {
       const newState = { ...state, currentYear: year };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -215,7 +286,7 @@ export const useStore = create<AppState>((set) => {
         calendarLabels: [],
         shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [], algorithm }
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
@@ -228,14 +299,14 @@ export const useStore = create<AppState>((set) => {
           violations: (state.shiftPlan.violations ?? []).filter(v => v.id !== id)
         }
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
 
     // Replace entire shiftPlan (used for JSON import)
     setShiftPlan: (plan: ShiftPlan | null) => set((state) => {
       const newState = { ...state, shiftPlan: plan };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -261,7 +332,7 @@ export const useStore = create<AppState>((set) => {
           }
         };
       }
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -274,7 +345,7 @@ export const useStore = create<AppState>((set) => {
           assignments: state.shiftPlan.assignments.filter(a => a.id !== id)
         }
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
     
@@ -289,7 +360,7 @@ export const useStore = create<AppState>((set) => {
           )
         }
       };
-      saveToLocalStorage('schichtplan-storage', newState);
+      saveToServer(newState);
       return newState;
     }),
   };

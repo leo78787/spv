@@ -1,20 +1,18 @@
 /**
- * Module-level singleton that manages the optimiser Web Worker.
+ * Module-level singleton that manages the optimiser via the server API.
  *
- * The worker reference and all optimiser state live at module scope so they
- * survive React component unmounts (e.g. when the user switches to another
- * tab inside the app).  When the ShiftPlanning component remounts it simply
- * subscribes to the manager and immediately receives the current state.
+ * Replaces the old Web Worker approach: the optimiser now runs on the
+ * server and streams progress via SSE.  The manager state and subscribe /
+ * notify pattern remain identical so the UI code is mostly unchanged.
  *
- * When the optimiser finishes, it applies the result directly to the Zustand
- * store — even if the ShiftPlanning component is not mounted at that moment.
+ * When the optimiser finishes, it applies the result directly to the
+ * Zustand store — even if the ShiftPlanning component is not mounted.
  */
 
-import type { OptimiserWorkerRequest, OptimiserWorkerResponse } from '../workers/optimiserWorker';
 import type { OptimiserTargets, OptimiserProgress, OptimiserResult } from '../utils/optimizer';
 import type { Employee } from '../types';
 import type { SchedulerConfig } from '../utils/scheduler';
-import { useStore } from '../store';
+import { useStore, getAuthToken } from '../store';
 
 // ── Public state shape ──────────────────────────────────────────────────────
 
@@ -34,7 +32,8 @@ type Listener = (state: OptimiserManagerState) => void;
 
 // ── Module-level singleton state ────────────────────────────────────────────
 
-let worker: Worker | null = null;
+/** AbortController for cancelling the running fetch / SSE stream. */
+let abortController: AbortController | null = null;
 
 /** Parameters captured at start-time so the result can be applied later. */
 let applyContext: {
@@ -64,6 +63,21 @@ function notify() {
   for (const l of listeners) l(s);
 }
 
+// ── Date revival helper ─────────────────────────────────────────────────────
+
+function reviveDates(obj: any): any {
+  if (typeof obj === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(obj)) {
+    return new Date(obj);
+  }
+  if (Array.isArray(obj)) return obj.map(reviveDates);
+  if (obj && typeof obj === 'object') {
+    const out: any = {};
+    for (const key of Object.keys(obj)) out[key] = reviveDates(obj[key]);
+    return out;
+  }
+  return obj;
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /** Get the current optimiser state (non-reactive, for initial reads). */
@@ -77,9 +91,7 @@ export function getOptimiserState(): OptimiserManagerState {
  */
 export function subscribeOptimiser(listener: Listener): () => void {
   listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return () => { listeners.delete(listener); };
 }
 
 /** Update max-iterations setting. */
@@ -94,73 +106,43 @@ export function setTargets(targets: OptimiserTargets) {
   notify();
 }
 
-let calibrationWorker: Worker | null = null;
-
 /**
- * Run a tiny calibration (3 iterations) to measure ms-per-iteration for the
- * current dataset & machine.  This lets the UI show a time estimate *before*
- * the user starts the full optimisation.
+ * Run a tiny calibration (3 iterations) on the server to measure ms-per-
+ * iteration for the current dataset.  Lets the UI show a time estimate
+ * *before* the user starts the full optimisation.
  */
-export function calibrate(
+export async function calibrate(
   employees: Employee[],
   schedulerConfig: SchedulerConfig,
   year: number,
   startMonth: number,
 ) {
-  // Don't calibrate while a real run is in progress
   if (state.isOptimising) return;
-  // Abort any previous calibration
-  if (calibrationWorker) { calibrationWorker.terminate(); calibrationWorker = null; }
-
-  calibrationWorker = new Worker(
-    new URL('../workers/optimiserWorker.ts', import.meta.url),
-    { type: 'module' },
-  );
-
-  calibrationWorker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
-    const msg = e.data;
-    if (msg.type === 'result' && msg.result) {
-      // result.iterations always = CALIBRATION_ITERS
-      // elapsed time is in the last progress we received, but the worker
-      // doesn't send it in the result.  However we timed it ourselves:
-    }
-    // We use our own timing below
-  };
-
-  const CALIBRATION_ITERS = 3;
-  const t0 = performance.now();
-
-  // We need to capture the finish event
-  calibrationWorker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
-    const msg = e.data;
-    if (msg.type === 'result') {
-      const elapsed = performance.now() - t0;
-      state.msPerIteration = elapsed / CALIBRATION_ITERS;
+  const token = getAuthToken();
+  if (!token) return;
+  try {
+    const resp = await fetch('/api/calibrate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ employees, schedulerConfig, year, startMonth, targets: state.targets }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      state.msPerIteration = data.msPerIteration;
       notify();
-      calibrationWorker?.terminate();
-      calibrationWorker = null;
-    } else if (msg.type === 'error') {
-      calibrationWorker?.terminate();
-      calibrationWorker = null;
     }
-  };
-
-  const req: OptimiserWorkerRequest = {
-    id: Date.now(),
-    employees,
-    schedulerConfig,
-    optimiserConfig: { maxIterations: CALIBRATION_ITERS, targets: state.targets },
-    year,
-    startMonth,
-    months: 12,
-  };
-  calibrationWorker.postMessage(req);
+  } catch (err) {
+    console.error('[calibrate]', err);
+  }
 }
 
 /**
- * Start the optimisation.  Creates a new Web Worker and tracks its progress.
- * When the worker finishes, the result is applied directly to the Zustand
- * store so the shift plan is updated even if the UI component is unmounted.
+ * Start the optimisation via the server.  Reads progress from an SSE
+ * stream.  When the server replies with a 'result' event, the result is
+ * applied to the Zustand store — even if the component is unmounted.
  */
 export function startOptimisation(
   employees: Employee[],
@@ -178,78 +160,106 @@ export function startOptimisation(
 
   applyContext = { year, startMonth, schedulerConfig };
 
-  worker = new Worker(
-    new URL('../workers/optimiserWorker.ts', import.meta.url),
-    { type: 'module' },
-  );
+  abortController = new AbortController();
 
-  worker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
-    const msg = e.data;
+  const token = getAuthToken();
 
-    if (msg.type === 'progress' && msg.progress) {
-      state.progress = msg.progress;
-      // Update msPerIteration from live data for future estimates
-      if (msg.progress.iteration > 0 && msg.progress.elapsedMs > 0) {
-        state.msPerIteration = msg.progress.elapsedMs / msg.progress.iteration;
+  fetch('/api/optimize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      employees,
+      schedulerConfig,
+      optimiserConfig: { maxIterations: state.maxIterations, targets: state.targets },
+      year,
+      startMonth,
+      months: 12,
+    }),
+    signal: abortController.signal,
+  })
+    .then(async (response) => {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? ''; // keep incomplete line in buffer
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          let data: any;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (data.type === 'progress' && data.progress) {
+            state.progress = data.progress;
+            if (data.progress.iteration > 0 && data.progress.elapsedMs > 0) {
+              state.msPerIteration = data.progress.elapsedMs / data.progress.iteration;
+            }
+            notify();
+          } else if (data.type === 'result' && data.result) {
+            const result = reviveDates(data.result) as OptimiserResult;
+            state.result = result;
+            state.progress = null;
+            state.isOptimising = false;
+
+            // Apply result to Zustand store
+            const ctx = applyContext;
+            if (ctx) {
+              const store = useStore.getState();
+              store.createShiftPlan(ctx.year, ctx.startMonth, 12, ctx.schedulerConfig, [], 'fairness-optimiert');
+              result.assignments.forEach((a: any) => {
+                store.updateShiftAssignment({
+                  ...a,
+                  startDate: new Date(a.startDate),
+                  endDate: new Date(a.endDate),
+                });
+              });
+            }
+
+            state.generationMessage = {
+              success: true,
+              message: `Optimierter Schichtplan – ${result.iterations.toLocaleString()} Iterationen`,
+              assignmentCount: result.assignments.length,
+            };
+            notify();
+          } else if (data.type === 'error') {
+            console.error('[optimiser server]', data.error);
+            state.isOptimising = false;
+            state.progress = null;
+            notify();
+          }
+        }
       }
-      notify();
-    } else if (msg.type === 'result' && msg.result) {
-      const result = msg.result;
 
-      state.result = result;
-      state.progress = null;
-      state.isOptimising = false;
-
-      // Apply result to the Zustand store (works even while unmounted)
-      const ctx = applyContext;
-      if (ctx) {
-        const store = useStore.getState();
-        store.createShiftPlan(ctx.year, ctx.startMonth, 12, ctx.schedulerConfig, [], 'fairness-optimiert');
-        result.assignments.forEach((a: any) => {
-          store.updateShiftAssignment({
-            ...a,
-            startDate: new Date(a.startDate),
-            endDate: new Date(a.endDate),
-          });
-        });
+      // If stream ended without a result event
+      if (state.isOptimising) {
+        state.isOptimising = false;
+        state.progress = null;
+        notify();
       }
-
-      state.generationMessage = {
-        success: true,
-        message: `Optimierter Schichtplan – ${result.iterations.toLocaleString()} Iterationen`,
-        assignmentCount: result.assignments.length,
-      };
-      notify();
-
-      worker?.terminate();
-      worker = null;
-    } else if (msg.type === 'error') {
-      console.error('[optimiserWorker]', msg.error);
+    })
+    .catch((err) => {
+      if (err.name === 'AbortError') return; // user cancelled
+      console.error('[optimiser fetch]', err);
       state.isOptimising = false;
       state.progress = null;
       notify();
-      worker?.terminate();
-      worker = null;
-    }
-  };
-
-  const req: OptimiserWorkerRequest = {
-    id: Date.now(),
-    employees,
-    schedulerConfig,
-    optimiserConfig: { maxIterations: state.maxIterations, targets: state.targets },
-    year,
-    startMonth,
-    months: 12,
-  };
-  worker.postMessage(req);
+    });
 }
 
-/** Cancel a running optimisation (terminates the worker). */
+/** Cancel a running optimisation (aborts the fetch / SSE stream). */
 export function cancelOptimisation() {
-  if (worker) {
-    worker.terminate();
-    worker = null;
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
   }
   state.isOptimising = false;
   state.progress = null;

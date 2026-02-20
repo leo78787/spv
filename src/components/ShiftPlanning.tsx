@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap } from 'lucide-react';
-import { useStore } from '../store';
-import { generateAutomaticShiftPlan, DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
+import { useStore, getAuthToken } from '../store';
+import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
 import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
-import type { WorkerResponse } from '../workers/fairnessWorker';
 import {
   getOptimiserState,
   subscribeOptimiser,
@@ -25,45 +24,47 @@ let moduleCachedImpactFactors: ImpactFactors | null = null;
 // can restore the in-progress settings and continue computing when remounted.
 let moduleCachedSchedulerConfig: SchedulerConfig | null = null;
 
-// Module-level worker + helpers so background computations survive component
-// unmounts (tab switches). The worker is created lazily and kept for the page life.
-let moduleWorker: Worker | null = null;
-let moduleWorkerNextId = 0;
-const moduleWorkerPendingSnapshots: Record<number, string> = {};
-const moduleListeners = new Set<(msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => void>();
+// Module-level fairness computation via server API
+let moduleFairnessAbort: AbortController | null = null;
+let moduleFairnessRequestId = 0;
+const moduleFairnessListeners = new Set<(msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => void>();
 
-function ensureModuleWorker() {
-  if (moduleWorker) return moduleWorker;
-  moduleWorker = new Worker(new URL('../workers/fairnessWorker.ts', import.meta.url), { type: 'module' });
-  moduleWorker.onmessage = (e: MessageEvent<{ id: number; result?: ImpactFactors; error?: string }>) => {
-    const { id, result, error } = e.data;
-    const snapshot = moduleWorkerPendingSnapshots[id];
-    // update module cache if we have a result
-    if (result) {
+function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string): number {
+  const id = ++moduleFairnessRequestId;
+  const token = getAuthToken();
+
+  // Cancel any previous in-flight request
+  if (moduleFairnessAbort) moduleFairnessAbort.abort();
+  moduleFairnessAbort = new AbortController();
+
+  fetch('/api/fairness', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      employees: payload.employees,
+      config: payload.schedulerConfig,
+      year: payload.year,
+      startMonth: payload.startMonth,
+    }),
+    signal: moduleFairnessAbort.signal,
+  })
+    .then(async (resp) => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json();
+      // Update module cache
       moduleCachedImpactFactors = result;
-      if (snapshot) moduleCachedImpactSnapshot = snapshot;
-    }
-    // notify listeners (component instances)
-    for (const l of moduleListeners) l({ id, result, error, snapshot });
-    delete moduleWorkerPendingSnapshots[id];
-  };
-  return moduleWorker;
-}
+      moduleCachedImpactSnapshot = snapshot;
+      for (const l of moduleFairnessListeners) l({ id, result, snapshot });
+    })
+    .catch((err) => {
+      if (err.name === 'AbortError') return;
+      for (const l of moduleFairnessListeners) l({ id, error: String(err), snapshot });
+    });
 
-function postModuleWorkerRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string) {
-  const worker = ensureModuleWorker();
-  const id = ++moduleWorkerNextId;
-  moduleWorkerPendingSnapshots[id] = snapshot;
-  worker.postMessage({ id, employees: payload.employees, config: payload.schedulerConfig, year: payload.year, startMonth: payload.startMonth });
   return id;
-}
-
-function findModulePendingIdForSnapshot(snapshot: string): number | null {
-  for (const idStr of Object.keys(moduleWorkerPendingSnapshots)) {
-    const id = Number(idStr);
-    if (moduleWorkerPendingSnapshots[id] === snapshot) return id;
-  }
-  return null;
 }
 
 const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
@@ -190,17 +191,14 @@ export function ShiftPlanning() {
   // Which snapshot the currently-displayed `impactFactors` corresponds to
   const computedSnapshotRef = useRef<string | null>(null);
 
-  // Subscribe to module-level worker notifications (worker itself is
-  // module-scoped and kept alive across mounts). We only register a
-  // listener here; the worker is NOT terminated on unmount so a running
-  // computation continues when the component is unmounted.
+  // Subscribe to module-level fairness computation notifications.
   useEffect(() => {
     const handler = (msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => {
       const { id, result, error, snapshot } = msg;
       // Component only cares about the latest request it issued
       if (id !== pendingIdRef.current) return;
       if (error) {
-        console.error('[fairnessWorker]', error);
+        console.error('[fairness server]', error);
         setIsComputingImpact(false);
         return;
       }
@@ -212,10 +210,8 @@ export function ShiftPlanning() {
       }
       setIsComputingImpact(false);
     };
-    moduleListeners.add(handler);
-    // ensure worker exists so in-flight background computations keep running
-    ensureModuleWorker();
-    return () => void moduleListeners.delete(handler);
+    moduleFairnessListeners.add(handler);
+    return () => void moduleFairnessListeners.delete(handler);
   }, []);
 
   // Trigger a new background computation whenever relevant inputs change
@@ -251,16 +247,6 @@ export function ShiftPlanning() {
       return;
     }
 
-    // If another (module-level) request for the same snapshot is in flight,
-    // attach to it instead of re-posting — show spinner while waiting.
-    const existingId = findModulePendingIdForSnapshot(snapshot);
-    if (existingId !== null) {
-      pendingIdRef.current = existingId;
-      lastSnapshotRef.current = snapshot;
-      setIsComputingImpact(true);
-      return;
-    }
-
     // If nothing changed since the last computation within this mounted
     // component and we already have results for that same snapshot, skip
     // recompute as well.
@@ -268,10 +254,10 @@ export function ShiftPlanning() {
       return;
     }
 
-    // Debounce then post to the worker — keep current preview visible while
+    // Debounce then post to the server — keep current preview visible while
     // the new computation runs.
     const timer = setTimeout(() => {
-      const id = postModuleWorkerRequest({ employees, schedulerConfig, year: selectedYear, startMonth: selectedMonth }, snapshot);
+      const id = postModuleFairnessRequest({ employees, schedulerConfig, year: selectedYear, startMonth: selectedMonth }, snapshot);
       pendingIdRef.current = id;
       lastSnapshotRef.current = snapshot; // mark which inputs we're computing for
       setIsComputingImpact(true);
@@ -296,7 +282,7 @@ export function ShiftPlanning() {
     moduleCachedSchedulerConfig = schedulerConfig;
   }, [schedulerConfig]);
 
-  const handleGenerateFullPlan = () => {
+  const handleGenerateFullPlan = async () => {
     if (employees.length === 0) {
       setGenerationResult({
         success: false,
@@ -309,37 +295,65 @@ export function ShiftPlanning() {
     setIsGenerating(true);
     setGenerationResult(null);
 
-    // Simulate async operation for better UX
-    setTimeout(() => {
-      try {
-        const { assignments, violations } = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12, schedulerConfig);
-        
-        // Remove any existing plan for the selected start year/month, then store new assignments
-        createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations, 'automatisch generiert');
-        assignments.forEach(assignment => updateShiftAssignment(assignment));
+    // Call server-side generation endpoint
+    const token = getAuthToken();
+    try {
+      const resp = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          employees,
+          year: selectedYear,
+          startMonth: selectedMonth,
+          months: 12,
+          schedulerConfig,
+        }),
+      });
 
-        // Open the pipeline automatically if there are unresolvable violations
-        if (violations.length > 0) {
-          setShowPipeline(true);
-        }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-        const end = new Date(selectedYear, selectedMonth + 12, 0); // last day of 12-month period
+      const data = await resp.json();
 
-        setGenerationResult({
-          success: true,
-          message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
-          assignmentCount: assignments.length
-        });
-      } catch (error) {
-        setGenerationResult({
-          success: false,
-          message: 'Fehler beim Generieren des Schichtplans.',
-          assignmentCount: 0
-        });
-      } finally {
-        setIsGenerating(false);
+      // Revive dates from JSON
+      const assignments = (data.assignments || []).map((a: any) => ({
+        ...a,
+        startDate: new Date(a.startDate),
+        endDate: new Date(a.endDate),
+      }));
+      const violations = (data.violations || []).map((v: any) => ({
+        ...v,
+        startDate: new Date(v.startDate),
+        endDate: new Date(v.endDate),
+      }));
+
+      // Remove any existing plan for the selected start year/month, then store new assignments
+      createShiftPlan(selectedYear, selectedMonth, 12, schedulerConfig, violations, 'automatisch generiert');
+      assignments.forEach((assignment: any) => updateShiftAssignment(assignment));
+
+      // Open the pipeline automatically if there are unresolvable violations
+      if (violations.length > 0) {
+        setShowPipeline(true);
       }
-    }, 500);
+
+      const end = new Date(selectedYear, selectedMonth + 12, 0);
+
+      setGenerationResult({
+        success: true,
+        message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
+        assignmentCount: assignments.length,
+      });
+    } catch (error) {
+      setGenerationResult({
+        success: false,
+        message: 'Fehler beim Generieren des Schichtplans.',
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
@@ -375,7 +389,7 @@ export function ShiftPlanning() {
     try {
       const text = await f.text();
       const parsed = JSON.parse(text);
-      const revived = reviveImportedPlan(parsed);
+      const revived = reviveImportedPlan(parsed) as any;
       if (!revived) {
         alert('Ungültige Plan‑Datei. Bitte eine zuvor exportierte Schichtplan‑JSON verwenden.');
         return;

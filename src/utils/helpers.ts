@@ -144,7 +144,7 @@ export function reviveImportedPlan(data: any) {
     revivedPlan.algorithm = 'importiert';
   }
 
-  return { shiftPlan: revivedPlan, employees: revivedEmployees, departments };
+  return { shiftPlan: revivedPlan, employees: revivedEmployees, departments, labels: data.labels, calendarLabels: data.calendarLabels };
 }
 
 // Return a map of ISO-date (yyyy-MM-dd) => holiday name for Berlin (Bundesland: BE)
