@@ -13,10 +13,16 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { loadState, saveState } from './db.js';
 import { generateAutomaticShiftPlan } from '../src/utils/scheduler.js';
-import { computeImpactFactors, computeFairnessScores } from '../src/utils/fairnessImpact.js';
+import { computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
 
 const app = express();
 const PORT = 3001;
@@ -232,16 +238,33 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   }
 });
 
-// ── Fairness impact preview ─────────────────────────────────────────
+// ── Fairness impact preview (runs in worker thread to keep event loop free) ──
 
 app.post('/api/fairness', authMiddleware, (req, res) => {
-  try {
-    const { employees, config, year, startMonth } = reviveDates(req.body);
-    const result = computeImpactFactors(employees, config, year, startMonth);
-    res.json(result);
-  } catch (err) {
+  const { employees, config, year, startMonth } = reviveDates(req.body);
+
+  const worker = new Worker(FAIRNESS_WORKER_PATH, {
+    workerData: { employees, config, year, startMonth },
+  });
+
+  let replied = false;
+
+  worker.once('message', (msg: { result?: any; error?: string }) => {
+    replied = true;
+    if (msg.error) {
+      res.status(500).json({ error: msg.error });
+    } else {
+      res.json(msg.result);
+    }
+  });
+
+  worker.once('error', (err) => {
+    replied = true;
     res.status(500).json({ error: String(err) });
-  }
+  });
+
+  // Only terminate worker if client disconnects before we've replied
+  res.on('close', () => { if (!replied) worker.terminate(); });
 });
 
 // ── Calibrate (tiny 3-iteration run to measure performance) ─────────
