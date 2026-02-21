@@ -375,6 +375,69 @@ export function getAvailableEmployeesSorted(
       if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
     }
 
+    // ── FORWARD-LOOKING CHECKS ───────────────────────────────────────────────
+    // All rules above only check: "does an existing past shift block this new one?"
+    // We also need to check: "if we assign this shift, does it violate a rule
+    // relative to an already-scheduled FUTURE shift for this employee?"
+    // (Same rule, symmetric direction.)
+
+    const daysDiffFromEnd = (a: ShiftAssignment) =>
+      Math.round((new Date(a.startDate).getTime() - endDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    // noVerschiebenAfterNacht → forward: scheduling Nacht, emp has Verschieben starting ≤8d after nacht ends
+    if (rules.noVerschiebenAfterNacht && shiftType === 'nachtbereitschaft') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'verschieben' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+
+    // noNachtAfterVerschieben → forward: scheduling Verschieben, emp has Nacht starting ≤8d after verschieben ends
+    if (rules.noNachtAfterVerschieben && shiftType === 'verschieben') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'nachtbereitschaft' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+
+    // noFruehschichtAdjacentToVerschieben (Nacht→Früh) → forward: scheduling Nacht, emp has Früh ≤8d after nacht ends
+    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === 'nachtbereitschaft') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'fruehschicht' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 0 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+
+    // noConsecutiveNacht → forward: scheduling Nacht, emp has another Nacht starting ≤8d after this nacht ends
+    if (rules.noConsecutiveNacht && shiftType === 'nachtbereitschaft') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'nachtbereitschaft' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+
+    // noConsecutiveVerschieben → forward: scheduling Verschieben, emp has another Verschieben starting ≤7d after this one ends
+    if (rules.noConsecutiveVerschieben && shiftType === 'verschieben') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'verschieben' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 1 && d <= 7;
+      });
+      if (blocked) return false;
+    }
+
+    // noConsecutiveFruehschicht → forward: scheduling Früh, emp has another Früh starting ≤7d after this one ends
+    if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht') {
+      const blocked = existingAssignments.some(a => {
+        if (a.shiftType !== 'fruehschicht' || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a); return d >= 1 && d <= 7;
+      });
+      if (blocked) return false;
+    }
+
     return true;
   });
   
