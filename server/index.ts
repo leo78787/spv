@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { loadState, saveState } from './db.js';
-import { generateAutomaticShiftPlan } from '../src/utils/scheduler.js';
+import { generateAutomaticShiftPlan, runEqualityOptimiser } from '../src/utils/scheduler.js';
 import { computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
 import {
@@ -175,6 +175,27 @@ app.post('/api/generate', authMiddleware, (req, res) => {
   }
 });
 
+// ── Equality optimiser (synchronous — fast) ─────────────────────────
+
+app.post('/api/optimize-equality', authMiddleware, (req, res) => {
+  try {
+    const data = reviveDates(req.body);
+    const { employees, schedulerConfig, baselineAssignments } = data;
+    const maxIterations = data.maxIterations ?? 500;
+
+    const result = runEqualityOptimiser(
+      employees,
+      baselineAssignments,
+      schedulerConfig,
+      maxIterations,
+    );
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // ── Optimise — starts/joins a persistent background job ─────────────────
 
 app.post('/api/optimize', authMiddleware, (req, res) => {
@@ -200,6 +221,8 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   const months = data.months ?? 12;
   const optimiserConfig = data.optimiserConfig ?? { maxIterations: 5000, targets: { overall: true, verschieben: true, nacht: true, frueh: true } };
   const { maxIterations, targets } = optimiserConfig;
+  // Optional: caller can supply a pre-optimised baseline (e.g. from the equality step)
+  const suppliedBaseline: any[] | undefined = data.baselineAssignments;
 
   // Create the persistent job record
   const job: OptimJob = {
@@ -237,8 +260,10 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
     return count === 0 ? 0 : sum / count;
   }
 
-  // Baseline
-  const { assignments: baseline } = generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig);
+  // Baseline — use supplied baseline if available (from equality optimizer), otherwise generate fresh
+  const baseline = suppliedBaseline && suppliedBaseline.length > 0
+    ? suppliedBaseline
+    : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig).assignments;
   let bestAssignments = baseline;
   let bestScores = computeFairnessScores(employees, baseline);
   let bestComposite = compositeScore(bestScores, targets);

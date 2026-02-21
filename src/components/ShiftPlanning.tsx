@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap } from 'lucide-react';
+import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale } from 'lucide-react';
 import { useStore, getAuthToken } from '../store';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
@@ -185,6 +185,13 @@ export function ShiftPlanning() {
     success: boolean;
     message: string;
     assignmentCount: number;
+  } | null>(null);
+
+  // ── Equality optimizer state ───────────────────────────────────────────────
+  const [isEqualizing, setIsEqualizing] = useState(false);
+  const [equalityResult, setEqualityResult] = useState<{
+    improvements: number;
+    ranges: Record<string, number>;
   } | null>(null);
 
   // ── Impact factor state ───────────────────────────────────────────────────
@@ -376,12 +383,67 @@ export function ShiftPlanning() {
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
   const handleOptimise = useCallback(() => {
     if (employees.length === 0) return;
-    startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth);
-  }, [employees, schedulerConfig, selectedYear, selectedMonth]);
+    // Use current plan assignments as baseline (from equality step)
+    const baseline = shiftPlan?.assignments;
+    startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline);
+  }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments]);
 
   const handleCancelOptimiser = useCallback(() => {
     cancelOptimisation();
   }, []);
+
+  // ── Equality optimizer handler ──────────────────────────────────────────
+  const handleEquality = useCallback(async () => {
+    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    setIsEqualizing(true);
+    setEqualityResult(null);
+    const token = getAuthToken();
+    try {
+      const resp = await fetch('/api/optimize-equality', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          employees,
+          schedulerConfig,
+          baselineAssignments: shiftPlan.assignments,
+          maxIterations: 500,
+        }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const revivedAssignments = (data.assignments || []).map((a: any) => ({
+        ...a,
+        startDate: new Date(a.startDate),
+        endDate: new Date(a.endDate),
+      }));
+      setShiftPlan({
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations: [],
+        assignments: revivedAssignments,
+        algorithm: 'gleichheits-optimiert',
+      } as any);
+      setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
+      setGenerationResult({
+        success: true,
+        message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+        assignmentCount: revivedAssignments.length,
+      });
+    } catch (err) {
+      setGenerationResult({
+        success: false,
+        message: `Gleichheitsoptimierung fehlgeschlagen: ${err}`,
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsEqualizing(false);
+    }
+  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
 
   const planStart = new Date(selectedYear, selectedMonth, 1);
   const planEnd = new Date(selectedYear, selectedMonth + 12, 0); // last day of the 12-month range
@@ -661,9 +723,12 @@ export function ShiftPlanning() {
         )}
       </div>
 
-      {/* Year Selection & Generate */}
+      {/* ═══════════════════════════════════════════════════════════════════
+           3-Step Pipeline: Normal → Gleichheit → Fairness
+           ═══════════════════════════════════════════════════════════════════ */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="space-y-4">
+          {/* Year / month selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Startjahr</label>
@@ -673,13 +738,10 @@ export function ShiftPlanning() {
                 className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
                 {[2024, 2025, 2026, 2027, 2028].map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
+                  <option key={year} value={year}>{year}</option>
                 ))}
               </select>
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Startmonat</label>
               <select
@@ -694,28 +756,6 @@ export function ShiftPlanning() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleGenerateFullPlan}
-              disabled={isGenerating || isOptimising || employees.length === 0}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium text-lg"
-            >
-              <Sparkles className="h-5 w-5" />
-              {isGenerating ? 'Generiere Schichtplan...' : 'Schichtplan generieren'}
-            </button>
-
-            {(shiftPlan?.violations?.length ?? 0) > 0 && (
-              <button
-                onClick={() => setShowPipeline(true)}
-                className="inline-flex items-center gap-2 px-4 py-3 bg-amber-500 text-white rounded-md hover:bg-amber-600 font-medium text-base transition-colors"
-                title="Regelprobleme anzeigen"
-              >
-                <AlertTriangle className="h-5 w-5" />
-                {shiftPlan!.violations!.length} Regelverstoß{shiftPlan!.violations!.length !== 1 ? 'e' : ''}
-              </button>
-            )}
-          </div>
-
           {employees.length === 0 && (
             <div className="flex items-start gap-2 text-amber-600 bg-amber-50 p-3 rounded-md">
               <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
@@ -724,144 +764,202 @@ export function ShiftPlanning() {
               </p>
             </div>
           )}
-        </div>
-      </div>
 
-      {/* ─── Fairness Optimiser Panel ─────────────────────────────────── */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-          <Zap className="h-5 w-5 text-amber-500" />
-          Fairness-Optimierung (iterativ)
-        </h3>
-        <p className="text-sm text-gray-600 mb-4">
-          Erzeugt zunächst einen Plan mit dem normalen Algorithmus und verbessert ihn dann iterativ
-          durch zufällige generierte Schichtpläne (Monte Carlo Simulation). Alle harten Regeln (Planungsregeln & Schichtbesetzung) und
-          Urlaubszeiten werden eingehalten.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          {/* Max iterations */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Maximale Iterationen</label>
-            <input
-              type="number"
-              min={100}
-              max={100000}
-              step={500}
-              value={optimiserMaxIter}
-              onChange={e => setMaxIterations(Number(e.target.value))}
-              disabled={isOptimising}
-              className="w-40 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-400"
-            />
-            {(() => {
-              // Show estimated time before starting, based on previous run data
-              const est = msPerIteration != null ? msPerIteration * optimiserMaxIter : null;
-              if (est != null && !isOptimising) {
-                const secs = Math.round(est / 1000);
-                const display = secs >= 60 ? `ca. ${Math.floor(secs / 60)} Min ${secs % 60} Sek` : `ca. ${secs} Sek`;
-                return <p className="text-xs text-amber-600 mt-1">Geschätzte Dauer: {display}</p>;
-              }
-              return <p className="text-xs text-gray-400 mt-1">Der Algorithmus durchläuft immer alle Iterationen.</p>;
-            })()}
-          </div>
-
-          {/* Target dimensions */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Optimierungsziel</label>
-            <div className="flex flex-wrap gap-3">
-              {([
-                { key: 'overall' as const, label: 'Gesamt' },
-                { key: 'verschieben' as const, label: 'Versetzt' },
-                { key: 'nacht' as const, label: 'Nacht' },
-                { key: 'frueh' as const, label: 'Früh/WE' },
-              ]).map(({ key, label }) => (
-                <label key={key} className="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={optimiserTargets[key]}
-                    disabled={isOptimising}
-                    onChange={() => setTargets({ ...optimiserTargets, [key]: !optimiserTargets[key] })}
-                    className="rounded border-gray-300 text-amber-500 focus:ring-amber-400"
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Start / Cancel button */}
-        <div className="flex items-center gap-3 mb-3">
-          {!isOptimising ? (
+          {(shiftPlan?.violations?.length ?? 0) > 0 && (
             <button
-              onClick={handleOptimise}
-              disabled={isGenerating || employees.length === 0 || !Object.values(optimiserTargets).some(Boolean)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-white rounded-md hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+              onClick={() => setShowPipeline(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-md hover:bg-amber-600 font-medium text-sm transition-colors"
+              title="Regelprobleme anzeigen"
             >
-              <Zap className="h-4 w-4" />
-              Optimierung starten
-            </button>
-          ) : (
-            <button
-              onClick={handleCancelOptimiser}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-red-500 text-white rounded-md hover:bg-red-600 font-medium"
-            >
-              Abbrechen
+              <AlertTriangle className="h-4 w-4" />
+              {shiftPlan!.violations!.length} Regelverstoß{shiftPlan!.violations!.length !== 1 ? 'e' : ''}
             </button>
           )}
+
+          {/* ─── Stepper ─────────────────────────────────────────────── */}
+          {(() => {
+            const hasEmployees = employees.length > 0;
+            const hasPlan = (shiftPlan?.assignments?.length ?? 0) > 0;
+            const algoTag = shiftPlan?.algorithm ?? '';
+            const step1Done = hasPlan; // any plan exists from step 1
+            const step2Done = algoTag === 'gleichheits-optimiert' || algoTag === 'fairness-optimiert';
+            const step3Done = algoTag === 'fairness-optimiert';
+
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-2">
+                {/* ── Step 1: Normal ─────────────────────── */}
+                <div className={`rounded-lg border-2 p-4 ${step1Done ? 'border-green-300 bg-green-50/50' : 'border-gray-200'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step1Done ? 'bg-green-500 text-white' : 'bg-primary-100 text-primary-700'}`}>1</div>
+                    <h4 className="font-semibold text-gray-900">Grundplan</h4>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Greedy-Algorithmus: weist Schichten chronologisch zu, berücksichtigt alle aktiven Regeln.
+                  </p>
+                  <button
+                    onClick={handleGenerateFullPlan}
+                    disabled={isGenerating || isOptimising || isEqualizing || !hasEmployees}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {isGenerating ? 'Generiere...' : step1Done ? 'Neu generieren' : 'Schichtplan generieren'}
+                  </button>
+                </div>
+
+                {/* ── Step 2: Gleichheit ─────────────────── */}
+                <div className={`rounded-lg border-2 p-4 ${!step1Done ? 'opacity-50 border-gray-200' : step2Done ? 'border-green-300 bg-green-50/50' : 'border-blue-200'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step2Done ? 'bg-green-500 text-white' : step1Done ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-400'}`}>2</div>
+                    <h4 className="font-semibold text-gray-900">Gleichheitsoptimierung</h4>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Minimiert die Spannweite (Max − Min) der Schichtzahlen je Typ durch regelkonforme Tausche.
+                    {schedulerConfig.rules.reserveOver55SlotsForVerschieben && ' Ü55 und Nicht-Ü55 werden getrennt balanciert.'}
+                  </p>
+                  <button
+                    onClick={handleEquality}
+                    disabled={!step1Done || isGenerating || isOptimising || isEqualizing || !hasEmployees}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+                  >
+                    <Scale className="h-4 w-4" />
+                    {isEqualizing ? 'Optimiere...' : step2Done ? 'Erneut optimieren' : 'Gleichheit optimieren'}
+                  </button>
+                  {equalityResult && !isEqualizing && (
+                    <div className="mt-2 text-xs text-blue-800 bg-blue-50 rounded p-2 space-y-0.5">
+                      <div className="font-medium">{equalityResult.improvements} Verbesserungen</div>
+                      <div>Spannweite: V={equalityResult.ranges.verschieben} · N={equalityResult.ranges.nachtbereitschaft} · F={equalityResult.ranges.fruehschicht}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Step 3: Fairness ───────────────────── */}
+                <div className={`rounded-lg border-2 p-4 ${!step1Done ? 'opacity-50 border-gray-200' : step3Done ? 'border-green-300 bg-green-50/50' : 'border-amber-200'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step3Done ? 'bg-green-500 text-white' : step1Done ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-400'}`}>3</div>
+                    <h4 className="font-semibold text-gray-900">Fairness-Optimierung</h4>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Monte-Carlo-Simulation: erzeugt viele zufällige gültige Pläne und behält den fairsten.
+                  </p>
+
+                  <div className="space-y-2 mb-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-0.5">Max. Iterationen</label>
+                      <input
+                        type="number"
+                        min={100} max={100000} step={500}
+                        value={optimiserMaxIter}
+                        onChange={e => setMaxIterations(Number(e.target.value))}
+                        disabled={isOptimising}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      />
+                      {(() => {
+                        const est = msPerIteration != null ? msPerIteration * optimiserMaxIter : null;
+                        if (est != null && !isOptimising) {
+                          const secs = Math.round(est / 1000);
+                          const display = secs >= 60 ? `ca. ${Math.floor(secs / 60)} Min ${secs % 60} Sek` : `ca. ${secs} Sek`;
+                          return <p className="text-xs text-amber-600 mt-0.5">{display}</p>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-0.5">Zieldimensionen</label>
+                      <div className="flex flex-wrap gap-2">
+                        {([
+                          { key: 'overall' as const, label: 'Gesamt' },
+                          { key: 'verschieben' as const, label: 'Versetzt' },
+                          { key: 'nacht' as const, label: 'Nacht' },
+                          { key: 'frueh' as const, label: 'Früh/WE' },
+                        ]).map(({ key, label }) => (
+                          <label key={key} className="inline-flex items-center gap-1 text-xs text-gray-700 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={optimiserTargets[key]}
+                              disabled={isOptimising}
+                              onChange={() => setTargets({ ...optimiserTargets, [key]: !optimiserTargets[key] })}
+                              className="rounded border-gray-300 text-amber-500 focus:ring-amber-400 h-3.5 w-3.5"
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {!isOptimising ? (
+                    <button
+                      onClick={handleOptimise}
+                      disabled={!step1Done || isGenerating || isEqualizing || !hasEmployees || !Object.values(optimiserTargets).some(Boolean)}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-md hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+                    >
+                      <Zap className="h-4 w-4" />
+                      {step3Done ? 'Erneut optimieren' : 'Fairness optimieren'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleCancelOptimiser}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-red-500 text-white rounded-md hover:bg-red-600 font-medium"
+                    >
+                      Abbrechen
+                    </button>
+                  )}
+
+                  {/* Progress bar */}
+                  {isOptimising && optimiserProgress && (
+                    <div className="mt-3 space-y-1.5">
+                      <div className="flex items-center justify-between text-xs text-gray-600">
+                        <span>{optimiserProgress.iteration.toLocaleString()} / {optimiserProgress.maxIterations.toLocaleString()}</span>
+                        {(() => {
+                          const remaining = optimiserProgress.estimatedTotalMs - optimiserProgress.elapsedMs;
+                          if (remaining > 0) {
+                            const secs = Math.round(remaining / 1000);
+                            const display = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+                            return <span>{display}</span>;
+                          }
+                          return null;
+                        })()}
+                        <span>{optimiserProgress.bestScore.toFixed(1)}%</span>
+                      </div>
+                      <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-amber-500 transition-all duration-200 rounded-full"
+                          style={{ width: `${Math.min(100, (optimiserProgress.iteration / optimiserProgress.maxIterations) * 100)}%` }}
+                        />
+                      </div>
+                      <div className="flex gap-2 text-xs text-gray-500">
+                        <span>G: {optimiserProgress.currentScores.overall.toFixed(1)}%</span>
+                        <span>V: {optimiserProgress.currentScores.verschieben.toFixed(1)}%</span>
+                        <span>N: {optimiserProgress.currentScores.nacht.toFixed(1)}%</span>
+                        <span>F: {optimiserProgress.currentScores.frueh.toFixed(1)}%</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Result */}
+                  {optimiserResult && !isOptimising && (
+                    <div className="mt-2 text-xs text-amber-800 bg-amber-50 rounded p-2 space-y-0.5">
+                      <div className="font-medium">{optimiserResult.iterations.toLocaleString()} Iterationen</div>
+                      <div className="flex gap-2">
+                        <span>G: <strong>{optimiserResult.scores.overall.toFixed(1)}%</strong></span>
+                        <span>V: <strong>{optimiserResult.scores.verschieben.toFixed(1)}%</strong></span>
+                        <span>N: <strong>{optimiserResult.scores.nacht.toFixed(1)}%</strong></span>
+                        <span>F: <strong>{optimiserResult.scores.frueh.toFixed(1)}%</strong></span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Algorithm tag */}
+          {shiftPlan?.algorithm && (
+            <div className="mt-2 text-sm text-gray-600">
+              Aktueller Plan-Algorithmus: <strong>{shiftPlan.algorithm}</strong>
+            </div>
+          )}
         </div>
-
-        {/* Progress bar */}
-        {isOptimising && optimiserProgress && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs text-gray-600">
-              <span>Iteration {optimiserProgress.iteration.toLocaleString()} / {optimiserProgress.maxIterations.toLocaleString()}</span>
-              {(() => {
-                const remaining = optimiserProgress.estimatedTotalMs - optimiserProgress.elapsedMs;
-                if (remaining > 0) {
-                  const secs = Math.round(remaining / 1000);
-                  const display = secs >= 60 ? `${Math.floor(secs / 60)} Min ${secs % 60} Sek` : `${secs} Sek`;
-                  return <span>Verbleibend: {display}</span>;
-                }
-                return null;
-              })()}
-              <span>Bester Score: {optimiserProgress.bestScore.toFixed(1)} %</span>
-            </div>
-            <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-amber-500 transition-all duration-200 rounded-full"
-                style={{ width: `${Math.min(100, (optimiserProgress.iteration / optimiserProgress.maxIterations) * 100)}%` }}
-              />
-            </div>
-            <div className="flex gap-3 text-xs text-gray-500">
-              <span>Gesamt: {optimiserProgress.currentScores.overall.toFixed(1)}%</span>
-              <span>Versetzt: {optimiserProgress.currentScores.verschieben.toFixed(1)}%</span>
-              <span>Nacht: {optimiserProgress.currentScores.nacht.toFixed(1)}%</span>
-              <span>Früh: {optimiserProgress.currentScores.frueh.toFixed(1)}%</span>
-            </div>
-          </div>
-        )}
-
-        {/* Result display */}
-        {optimiserResult && !isOptimising && (
-          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-1">
-            <p className="text-sm font-medium text-amber-900">
-              Optimierung abgeschlossen nach {optimiserResult.iterations.toLocaleString()} Iterationen
-            </p>
-            <div className="flex gap-4 text-sm text-amber-800">
-              <span>Gesamt: <strong>{optimiserResult.scores.overall.toFixed(1)}%</strong></span>
-              <span>Versetzt: <strong>{optimiserResult.scores.verschieben.toFixed(1)}%</strong></span>
-              <span>Nacht: <strong>{optimiserResult.scores.nacht.toFixed(1)}%</strong></span>
-              <span>Früh/WE: <strong>{optimiserResult.scores.frueh.toFixed(1)}%</strong></span>
-            </div>
-          </div>
-        )}
-      </div>
-        {/* Algorithm info box */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mt-4">
-        <p className="text-sm text-gray-700">
-          Algorithmus des aktuellen Plans: <strong>{shiftPlan?.algorithm ?? 'unbekannt'}</strong>
-        </p>
       </div>
       {/* Generation Result */}
       {generationResult && (

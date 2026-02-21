@@ -153,6 +153,7 @@ export function startOptimisation(
   schedulerConfig: SchedulerConfig,
   year: number,
   startMonth: number,
+  baselineAssignments?: any[],
 ) {
   if (state.isOptimising) return;
 
@@ -181,6 +182,7 @@ export function startOptimisation(
       year,
       startMonth,
       months: 12,
+      ...(baselineAssignments ? { baselineAssignments } : {}),
     }),
     signal: abortController.signal,
   })

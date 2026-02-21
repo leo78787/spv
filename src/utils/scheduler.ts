@@ -715,3 +715,219 @@ export function generateAutomaticShiftPlan(
   
   return { assignments, violations };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EQUALITY OPTIMISER — minimise the range (max - min) of shift counts
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface EqualityProgress {
+  iteration: number;
+  maxIterations: number;
+  improvements: number;
+  ranges: Record<ShiftType, number>;
+  done: boolean;
+}
+
+export interface EqualityResult {
+  assignments: ShiftAssignment[];
+  iterations: number;
+  improvements: number;
+  ranges: Record<ShiftType, number>;
+}
+
+/**
+ * Run the equality optimiser.
+ *
+ * Takes a baseline set of assignments and tries to reduce the "shift-count
+ * range" (max − min assignments per employee) for each shift type by swapping
+ * employees between assignments.
+ *
+ * For 'verschieben' with reserveOver55SlotsForVerschieben enabled, it balances
+ * the Ü55 pool and the non-Ü55 pool separately.
+ *
+ * All active scheduler rules are respected: a swap is only accepted if the
+ * receiving employee passes getAvailableEmployeesSorted for that period.
+ */
+export function runEqualityOptimiser(
+  employees: Employee[],
+  baselineAssignments: ShiftAssignment[],
+  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
+  maxIterations = 500,
+  onProgress?: (p: EqualityProgress) => void,
+): EqualityResult {
+  // Deep-clone assignments so the baseline is not mutated
+  let assignments = baselineAssignments.map(a => ({
+    ...a,
+    employees: [...a.employees],
+  }));
+
+  const { rules } = config;
+
+  const shiftTypes: ShiftType[] = ['verschieben', 'nachtbereitschaft', 'fruehschicht'];
+
+  // Helper: count assignments of a given type for an employee
+  const countFor = (empId: string, st: ShiftType, assgn: ShiftAssignment[]) =>
+    assgn.filter(a => a.shiftType === st && a.employees.includes(empId)).length;
+
+  // Helper: compute range per shift type
+  function computeRanges(assgn: ShiftAssignment[]): Record<ShiftType, number> {
+    const result: Record<string, number> = {};
+    for (const st of shiftTypes) {
+      const pool = relevantPool(st);
+      if (pool.length === 0) { result[st] = 0; continue; }
+      const counts = pool.map(e => countFor(e.id, st, assgn));
+      result[st] = Math.max(...counts) - Math.min(...counts);
+    }
+    return result as Record<ShiftType, number>;
+  }
+
+  // For verschieben with Ü55-slots: separate pools
+  function relevantPool(st: ShiftType): Employee[] {
+    if (st === 'verschieben') return employees; // ranges computed on full pool first
+    // nacht/früh: only eligible employees (not Ü55, has L2 — when rule active)
+    if (rules.over55AndNoL2OnlyVerschieben) {
+      return employees.filter(e => !e.isOver55 && e.hasL2);
+    }
+    return employees;
+  }
+
+  // For verschieben, optionally split into two sub-pools
+  function verschiebenPools(): Employee[][] {
+    if (rules.reserveOver55SlotsForVerschieben) {
+      return [
+        employees.filter(e => e.isOver55),
+        employees.filter(e => !e.isOver55),
+      ];
+    }
+    return [employees];
+  }
+
+  // Check if an employee can be added to a specific assignment without
+  // violating any active rule.  Uses getAvailableEmployeesSorted which
+  // applies all toggleable rules.
+  function canTakeSlot(emp: Employee, assignment: ShiftAssignment, assgn: ShiftAssignment[]): boolean {
+    // Already assigned here?
+    if (assignment.employees.includes(emp.id)) return false;
+    // Build a temporary assignment list WITHOUT this assignment (to avoid self-conflict)
+    const otherAssignments = assgn.filter(a => a.id !== assignment.id);
+    const available = getAvailableEmployeesSorted(
+      [emp],
+      assignment.shiftType,
+      new Date(assignment.startDate),
+      new Date(assignment.endDate),
+      otherAssignments,
+      config,
+    );
+    return available.length > 0;
+  }
+
+  let improvements = 0;
+  let iter = 0;
+  const progressInterval = Math.max(1, Math.floor(maxIterations / 100));
+
+  for (iter = 0; iter < maxIterations; iter++) {
+    if (iter % progressInterval === 0 && onProgress) {
+      onProgress({
+        iteration: iter,
+        maxIterations,
+        improvements,
+        ranges: computeRanges(assignments),
+        done: false,
+      });
+    }
+
+    let madeProgress = false;
+
+    for (const st of shiftTypes) {
+      // Determine pools to balance
+      const pools = st === 'verschieben' ? verschiebenPools() : [relevantPool(st)];
+
+      for (const pool of pools) {
+        if (pool.length < 2) continue;
+
+        // Compute counts
+        const counted = pool.map(e => ({ emp: e, count: countFor(e.id, st, assignments) }));
+        counted.sort((a, b) => a.count - b.count);
+
+        const minCount = counted[0].count;
+        const maxCount = counted[counted.length - 1].count;
+
+        if (maxCount - minCount <= 1) continue; // already balanced
+
+        // Find an employee with the most shifts ("donor") and one with the
+        // least ("receiver").  Try to swap one assignment.
+        const donors = counted.filter(c => c.count === maxCount);
+        const receivers = counted.filter(c => c.count === minCount);
+
+        // Shuffle to avoid deterministic lock-in
+        for (let i = donors.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [donors[i], donors[j]] = [donors[j], donors[i]];
+        }
+
+        let swapped = false;
+        for (const donor of donors) {
+          if (swapped) break;
+          // Find assignments that include this donor
+          const donorAssignments = assignments.filter(
+            a => a.shiftType === st && a.employees.includes(donor.emp.id)
+          );
+          for (const assignment of donorAssignments) {
+            if (swapped) break;
+            // Shuffle receivers too
+            const shuffledReceivers = [...receivers];
+            for (let i = shuffledReceivers.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [shuffledReceivers[i], shuffledReceivers[j]] = [shuffledReceivers[j], shuffledReceivers[i]];
+            }
+            for (const receiver of shuffledReceivers) {
+              if (receiver.emp.id === donor.emp.id) continue;
+              if (assignment.employees.includes(receiver.emp.id)) continue;
+
+              // Check if receiver can take this slot
+              // Build temp assignments with donor removed from this assignment
+              const tempAssignments = assignments.map(a => {
+                if (a.id !== assignment.id) return a;
+                return { ...a, employees: a.employees.filter(id => id !== donor.emp.id) };
+              });
+
+              if (canTakeSlot(receiver.emp, assignment, tempAssignments)) {
+                // Execute the swap: remove donor, add receiver
+                const target = assignments.find(a => a.id === assignment.id)!;
+                target.employees = target.employees.filter(id => id !== donor.emp.id);
+                target.employees.push(receiver.emp.id);
+                improvements++;
+                swapped = true;
+                madeProgress = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // If no shift type made progress this iteration, we've converged
+    if (!madeProgress) {
+      iter++;
+      break;
+    }
+  }
+
+  if (onProgress) {
+    onProgress({
+      iteration: iter,
+      maxIterations,
+      improvements,
+      ranges: computeRanges(assignments),
+      done: true,
+    });
+  }
+
+  return {
+    assignments,
+    iterations: iter,
+    improvements,
+    ranges: computeRanges(assignments),
+  };
+}
