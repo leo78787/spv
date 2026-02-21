@@ -1300,7 +1300,7 @@ export function CalendarView() {
                         className={`p-3 rounded-lg border-2 transition-all ${
                           isOnVacation
                             ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-60'
-                            : (blockedByAdjacency || blockedByQualification || hasOtherOverlapping || blockedByVacationBoundary || blockedByAvoidance)
+                            : (!isEligible || blockedByAdjacency || blockedByQualification || hasOtherOverlapping || blockedByVacationBoundary || blockedByAvoidance)
                             ? 'bg-yellow-50 border-yellow-200 cursor-pointer opacity-90'
                             : isAssigned
                             ? 'bg-primary-50 border-primary-500 cursor-pointer hover:bg-primary-100'
@@ -1321,6 +1321,8 @@ export function CalendarView() {
                               {blockedByAvoidance && (<span className="px-2 py-0.5 bg-purple-100 text-purple-800 rounded text-xs">Vermeidet diese Schicht</span>)}
 
                               {hasOtherOverlapping && !isAssigned && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Andere Schicht vorhanden</span>)}
+
+                              {!isEligible && !isOnVacation && !blockedByAdjacency && !blockedByQualification && !hasOtherOverlapping && !blockedByVacationBoundary && !blockedByAvoidance && (<span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs font-medium">Regelverstoß</span>)}
 
                               {isEligible && needsDept && !hasOtherOverlapping && (<span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">Abteilung verfügbar</span>)}
 
