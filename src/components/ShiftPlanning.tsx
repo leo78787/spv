@@ -385,8 +385,9 @@ export function ShiftPlanning() {
     if (employees.length === 0) return;
     // Use current plan assignments as baseline (from equality step)
     const baseline = shiftPlan?.assignments;
-    startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline);
-  }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments]);
+    const baseViolations = shiftPlan?.violations;
+    startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline, baseViolations);
+  }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments, shiftPlan?.violations]);
 
   const handleCancelOptimiser = useCallback(() => {
     cancelOptimisation();
@@ -424,7 +425,7 @@ export function ShiftPlanning() {
         startMonth: selectedMonth,
         months: 12,
         schedulerConfig,
-        violations: [],
+        violations: shiftPlan.violations ?? [],
         assignments: revivedAssignments,
         algorithm: 'gleichheits-optimiert',
       } as any);

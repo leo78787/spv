@@ -154,6 +154,7 @@ export function startOptimisation(
   year: number,
   startMonth: number,
   baselineAssignments?: any[],
+  baselineViolations?: any[],
 ) {
   if (state.isOptimising) return;
 
@@ -183,6 +184,7 @@ export function startOptimisation(
       startMonth,
       months: 12,
       ...(baselineAssignments ? { baselineAssignments } : {}),
+      ...(baselineViolations ? { baselineViolations } : {}),
     }),
     signal: abortController.signal,
   })
@@ -376,12 +378,17 @@ function _handleSSEMessage(data: any) {
         startDate: new Date(a.startDate),
         endDate: new Date(a.endDate),
       }));
+      const revivedViolations = (result.violations || []).map((v: any) => ({
+        ...v,
+        startDate: new Date(v.startDate),
+        endDate: new Date(v.endDate),
+      }));
       store.setShiftPlan({
         year: ctx.year,
         startMonth: ctx.startMonth,
         months: ctx.months,
         schedulerConfig: ctx.schedulerConfig,
-        violations: [],
+        violations: revivedViolations,
         assignments: revivedAssignments,
         algorithm: 'fairness-optimiert',
       });

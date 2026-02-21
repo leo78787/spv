@@ -223,6 +223,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   const { maxIterations, targets } = optimiserConfig;
   // Optional: caller can supply a pre-optimised baseline (e.g. from the equality step)
   const suppliedBaseline: any[] | undefined = data.baselineAssignments;
+  const suppliedBaselineViolations: any[] | undefined = data.baselineViolations;
 
   // Create the persistent job record
   const job: OptimJob = {
@@ -261,11 +262,12 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   }
 
   // Baseline — use supplied baseline if available (from equality optimizer), otherwise generate fresh
-  const baseline = suppliedBaseline && suppliedBaseline.length > 0
-    ? suppliedBaseline
-    : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig).assignments;
-  let bestAssignments = baseline;
-  let bestScores = computeFairnessScores(employees, baseline);
+  const baselineResult = suppliedBaseline && suppliedBaseline.length > 0
+    ? { assignments: suppliedBaseline, violations: suppliedBaselineViolations || [] as any[] }
+    : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig);
+  let bestAssignments = baselineResult.assignments;
+  let bestViolations = baselineResult.violations;
+  let bestScores = computeFairnessScores(employees, bestAssignments);
   let bestComposite = compositeScore(bestScores, targets);
   job.bestScore = bestComposite;
   job.currentScores = { ...bestScores };
@@ -298,11 +300,12 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
         }
 
         const shuffled = shuffle([...employees]);
-        const { assignments: candidate } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig);
+        const { assignments: candidate, violations: candidateViolations } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig);
         const candidateScores = computeFairnessScores(employees, candidate);
         const candidateComposite = compositeScore(candidateScores, targets);
         if (candidateComposite > bestComposite) {
           bestAssignments = candidate;
+          bestViolations = candidateViolations;
           bestScores = { ...candidateScores };
           bestComposite = candidateComposite;
           job.bestScore = bestComposite;
@@ -317,7 +320,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
         job.elapsedMs = totalElapsed;
         job.estimatedTotalMs = totalElapsed;
         job.status = 'done';
-        job.result = { assignments: bestAssignments, scores: bestScores, iterations: maxIterations };
+        job.result = { assignments: bestAssignments, violations: bestViolations, scores: bestScores, iterations: maxIterations };
 
         const doneProgress = {
           iteration: maxIterations, maxIterations, bestScore: bestComposite,
@@ -334,7 +337,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
             startMonth,
             months,
             schedulerConfig,
-            violations: [],
+            violations: bestViolations,
             assignments: bestAssignments,
             algorithm: 'fairness-optimiert',
           } as any;

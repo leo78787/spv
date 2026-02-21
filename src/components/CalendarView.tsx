@@ -1318,7 +1318,7 @@ export function CalendarView() {
 
                   // sort the enriched list (keeps recommended at top within eligible)
                   enriched.sort((a, b) => {
-                    const score = (x: any) => (x.recommended ? 0 : x.isAssigned ? 1 : x.isEligible ? 2 : x.blockedByQualification || x.blockedByAdjacency || x.hasOtherOverlapping || x.blockedByAvoidance ? 3 : 4);
+                    const score = (x: any) => (x.recommended ? 0 : x.isAssigned ? 1 : x.isEligible ? 2 : x.blockedByQualification || x.blockedByAdjacency || x.hasOtherOverlapping || x.blockedByAvoidance || x.blockedByVacationBoundary ? 3 : 4);
                     const sa = score(a), sb = score(b);
                     if (sa !== sb) return sa - sb;
                     if (a.recommended !== b.recommended) return (a.recommended ? -1 : 1);
@@ -1342,7 +1342,7 @@ export function CalendarView() {
                         className={`p-3 rounded-lg border-2 transition-all ${
                           isOnVacation
                             ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-60'
-                            : (blockedByAdjacency || blockedByQualification || hasOtherOverlapping)
+                            : (blockedByAdjacency || blockedByQualification || hasOtherOverlapping || blockedByVacationBoundary || blockedByAvoidance)
                             ? 'bg-yellow-50 border-yellow-200 cursor-pointer opacity-90'
                             : isAssigned
                             ? 'bg-primary-50 border-primary-500 cursor-pointer hover:bg-primary-100'
