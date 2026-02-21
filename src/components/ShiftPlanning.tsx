@@ -11,6 +11,7 @@ import {
   subscribeOptimiser,
   startOptimisation,
   cancelOptimisation,
+  checkAndResumeOptimisation,
   setMaxIterations,
   setTargets,
   calibrate,
@@ -153,6 +154,12 @@ export function ShiftPlanning() {
   // ── Optimizer state (persisted in module-level manager) ─────────────────
   const [optimiserState, setOptimiserState] = useState<OptimiserManagerState>(getOptimiserState);
   useEffect(() => subscribeOptimiser(setOptimiserState), []);
+
+  // On page load, check if the server has a running/finished job and restore it
+  useEffect(() => {
+    checkAndResumeOptimisation();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { isOptimising, progress: optimiserProgress, result: optimiserResult,
           maxIterations: optimiserMaxIter, targets: optimiserTargets,
           msPerIteration } = optimiserState;
@@ -609,6 +616,8 @@ export function ShiftPlanning() {
                   { key: 'noNachtAfterVerschieben',             label: 'Keine Nacht in der Folgewoche nach Versetzt-Woche (7-Tage-Sperre)' },
                   { key: 'noVerschiebenAfterNacht',             label: 'Kein Versetzt-Dienst in der Woche nach Nachtbereitschaft (7-Tage-Sperre)' },
                   { key: 'noConsecutiveVerschieben',            label: 'Keine zwei Versetzt-Wochen hintereinander (für dieselbe Person)' },
+                  { key: 'noConsecutiveNacht',                  label: 'Keine zwei Nachtschichten hintereinander (für dieselbe Person)' },
+                  { key: 'noConsecutiveFruehschicht',            label: 'Keine zwei Frühschichten (Wochenende) hintereinander (für dieselbe Person)' },
                   { key: 'over55AndNoL2OnlyVerschieben',        label: 'Ü55-Mitarbeiter und ohne L2 nur versetzte Schichten' },
                   { key: 'reserveOver55SlotsForVerschieben',    label: 'Ü55-Slot-Reservierung in versetzter Schicht' },
                   { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen' },

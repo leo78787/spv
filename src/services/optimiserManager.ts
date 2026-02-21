@@ -39,8 +39,12 @@ let abortController: AbortController | null = null;
 let applyContext: {
   year: number;
   startMonth: number;
+  months: number;
   schedulerConfig: SchedulerConfig;
 } | null = null;
+
+/** Whether a resume-check has already been done this page load. */
+let resumeChecked = false;
 
 const state: OptimiserManagerState = {
   isOptimising: false,
@@ -158,7 +162,7 @@ export function startOptimisation(
   state.generationMessage = null;
   notify();
 
-  applyContext = { year, startMonth, schedulerConfig };
+  applyContext = { year, startMonth, months: 12, schedulerConfig };
 
   abortController = new AbortController();
 
@@ -181,7 +185,13 @@ export function startOptimisation(
     signal: abortController.signal,
   })
     .then(async (response) => {
-      const reader = response.body!.getReader();
+      if (response.status === 409) {
+        // Already running on server — subscribe instead
+        _connectSubscribeStream(token!);
+        return;
+      }
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -189,64 +199,16 @@ export function startOptimisation(
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE lines
         const lines = buffer.split('\n');
-        buffer = lines.pop() ?? ''; // keep incomplete line in buffer
+        buffer = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           let data: any;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-
-          if (data.type === 'progress' && data.progress) {
-            state.progress = data.progress;
-            if (data.progress.iteration > 0 && data.progress.elapsedMs > 0) {
-              state.msPerIteration = data.progress.elapsedMs / data.progress.iteration;
-            }
-            notify();
-          } else if (data.type === 'result' && data.result) {
-            const result = reviveDates(data.result) as OptimiserResult;
-            state.result = result;
-            state.progress = null;
-            state.isOptimising = false;
-
-            // Apply result to Zustand store — atomic via setShiftPlan
-            // (avoids race condition from concurrent saveToServer calls)
-            const ctx = applyContext;
-            if (ctx) {
-              const store = useStore.getState();
-              const revivedAssignments = result.assignments.map((a: any) => ({
-                ...a,
-                startDate: new Date(a.startDate),
-                endDate: new Date(a.endDate),
-              }));
-              store.setShiftPlan({
-                year: ctx.year,
-                startMonth: ctx.startMonth,
-                months: 12,
-                schedulerConfig: ctx.schedulerConfig,
-                violations: [],
-                assignments: revivedAssignments,
-                algorithm: 'fairness-optimiert',
-              });
-            }
-
-            state.generationMessage = {
-              success: true,
-              message: `Optimierter Schichtplan – ${result.iterations.toLocaleString()} Iterationen`,
-              assignmentCount: result.assignments.length,
-            };
-            notify();
-          } else if (data.type === 'error') {
-            console.error('[optimiser server]', data.error);
-            state.isOptimising = false;
-            state.progress = null;
-            notify();
-          }
+          _handleSSEMessage(data);
         }
       }
 
-      // If stream ended without a result event
       if (state.isOptimising) {
         state.isOptimising = false;
         state.progress = null;
@@ -254,7 +216,7 @@ export function startOptimisation(
       }
     })
     .catch((err) => {
-      if (err.name === 'AbortError') return; // user cancelled
+      if (err.name === 'AbortError') return;
       console.error('[optimiser fetch]', err);
       state.isOptimising = false;
       state.progress = null;
@@ -262,7 +224,7 @@ export function startOptimisation(
     });
 }
 
-/** Cancel a running optimisation (aborts the fetch / SSE stream). */
+/** Cancel a running optimisation (aborts the fetch / SSE stream + server-side job). */
 export function cancelOptimisation() {
   if (abortController) {
     abortController.abort();
@@ -271,4 +233,179 @@ export function cancelOptimisation() {
   state.isOptimising = false;
   state.progress = null;
   notify();
+
+  // Also cancel the server-side job so it stops consuming CPU
+  const token = getAuthToken();
+  if (token) {
+    fetch('/api/optimize/cancel', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {});
+  }
+}
+
+/**
+ * Check whether the server has a running or recently-finished optimisation
+ * job and restore state accordingly.  Call once on page load.
+ */
+export async function checkAndResumeOptimisation(): Promise<void> {
+  if (resumeChecked) return;
+  resumeChecked = true;
+
+  const token = getAuthToken();
+  if (!token) return;
+
+  let job: any;
+  try {
+    const resp = await fetch('/api/optimize/status', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return;
+    job = await resp.json();
+  } catch {
+    return;
+  }
+
+  if (!job || job.status === 'idle') return;
+
+  if (job.status === 'running') {
+    // Restore running state from server
+    state.isOptimising = true;
+    state.maxIterations = job.maxIterations;
+    state.targets = job.targets;
+    state.progress = {
+      iteration: job.iter,
+      maxIterations: job.maxIterations,
+      bestScore: job.bestScore,
+      currentScores: job.currentScores,
+      elapsedMs: job.elapsedMs,
+      estimatedTotalMs: job.estimatedTotalMs,
+      done: false,
+    };
+    applyContext = { year: job.year, startMonth: job.startMonth, months: job.months, schedulerConfig: job.schedulerConfig };
+    notify();
+
+    // Subscribe to live SSE stream
+    _connectSubscribeStream(token);
+  } else if (job.status === 'done' && job.hasResult) {
+    // Server finished while we were away — fetch the result via subscribe endpoint
+    // which sends the cached result immediately
+    applyContext = { year: job.year, startMonth: job.startMonth, months: job.months, schedulerConfig: job.schedulerConfig };
+    state.isOptimising = true; // will be cleared when result event arrives
+    state.maxIterations = job.maxIterations;
+    state.progress = {
+      iteration: job.iter, maxIterations: job.maxIterations,
+      bestScore: job.bestScore, currentScores: job.currentScores,
+      elapsedMs: job.elapsedMs, estimatedTotalMs: job.elapsedMs, done: true,
+    };
+    notify();
+    _connectSubscribeStream(token);
+  } else if (job.status === 'cancelled' || job.status === 'error') {
+    // Nothing to restore — clear any stale UI state
+    state.isOptimising = false;
+    state.progress = null;
+    notify();
+  }
+}
+
+function _connectSubscribeStream(token: string) {
+  if (abortController) abortController.abort();
+  abortController = new AbortController();
+
+  fetch('/api/optimize/subscribe', {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: abortController.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          let data: any;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+          _handleSSEMessage(data);
+        }
+      }
+
+      if (state.isOptimising) {
+        state.isOptimising = false;
+        state.progress = null;
+        notify();
+      }
+    })
+    .catch((err) => {
+      if (err.name === 'AbortError') return;
+      console.error('[optimiser subscribe]', err);
+      state.isOptimising = false;
+      state.progress = null;
+      notify();
+    });
+}
+
+function _handleSSEMessage(data: any) {
+  if (data.type === 'progress' && data.progress) {
+    state.progress = data.progress;
+    if (data.progress.iteration > 0 && data.progress.elapsedMs > 0) {
+      state.msPerIteration = data.progress.elapsedMs / data.progress.iteration;
+    }
+    notify();
+  } else if (data.type === 'result' && data.result) {
+    const result = reviveDates(data.result) as OptimiserResult;
+    state.result = result;
+    state.progress = null;
+    state.isOptimising = false;
+
+    // The server already auto-saved — but we still update the Zustand store
+    // so the UI reflects the new plan without waiting for the next poll.
+    const ctx = applyContext;
+    if (ctx) {
+      const store = useStore.getState();
+      const revivedAssignments = result.assignments.map((a: any) => ({
+        ...a,
+        startDate: new Date(a.startDate),
+        endDate: new Date(a.endDate),
+      }));
+      store.setShiftPlan({
+        year: ctx.year,
+        startMonth: ctx.startMonth,
+        months: ctx.months,
+        schedulerConfig: ctx.schedulerConfig,
+        violations: [],
+        assignments: revivedAssignments,
+        algorithm: 'fairness-optimiert',
+      });
+    }
+
+    state.generationMessage = {
+      success: true,
+      message: `Optimierter Schichtplan – ${result.iterations.toLocaleString()} Iterationen`,
+      assignmentCount: result.assignments.length,
+    };
+
+    // Clear the server-side job record now that we've applied the result.
+    const token = getAuthToken();
+    if (token) {
+      fetch('/api/optimize', { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    }
+
+    notify();
+  } else if (data.type === 'error') {
+    console.error('[optimiser server]', data.error);
+    state.isOptimising = false;
+    state.progress = null;
+    notify();
+  } else if (data.type === 'cancelled' || data.type === 'idle') {
+    state.isOptimising = false;
+    state.progress = null;
+    notify();
+  }
 }

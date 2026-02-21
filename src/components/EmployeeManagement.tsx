@@ -699,7 +699,7 @@ export function EmployeeManagement() {
               </div>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
               {(formData.vacationRanges || []).map((r, index) => (
                 <div key={`r-${index}`} className="flex gap-2 items-center">
                   <div className="flex-1 grid grid-cols-1 gap-2">
@@ -785,7 +785,7 @@ export function EmployeeManagement() {
 
             </div>
 
-            <div className="mt-2 text-xs text-gray-500">Einzelne Tage bitte als Zeitraum mit gleichem Start‑ und Enddatum eingeben (z. B. 20.–20.).</div>
+            <div className="mt-2 text-xs text-gray-500">Einzelner Tag: denselben Tag zweimal anklicken.</div>
           </div>
           
           {/* Preferences */}
@@ -800,7 +800,7 @@ export function EmployeeManagement() {
                 + Präferenz hinzufügen
               </button>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
               {(formData.preferences || []).map((pref, index) => (
                 <div key={index} className="border border-gray-200 p-3 rounded-md">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
@@ -931,24 +931,26 @@ export function EmployeeManagement() {
                         </span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleResend(editingId)}
-                      disabled={invitingId === editingId}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                    >
-                      <RefreshCw size={14} className={invitingId === editingId ? 'animate-spin' : ''} />
-                      {invitingId === editingId ? 'Wird gesendet…' : 'Neue Zugangsdaten senden'}
-                    </button>
-                    {formData.portalStatus === 'submitted' && (
+                    <div className="flex flex-wrap items-center gap-4">
                       <button
                         type="button"
-                        onClick={() => handleResetStatus(editingId)}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-amber-400 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
+                        onClick={() => handleResend(editingId)}
+                        disabled={invitingId === editingId}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
                       >
-                        Zurück in Entwurf
+                        <RefreshCw size={14} className={invitingId === editingId ? 'animate-spin' : ''} />
+                        {invitingId === editingId ? 'Wird gesendet…' : 'Neue Zugangsdaten senden'}
                       </button>
-                    )}
+                      {formData.portalStatus === 'submitted' && (
+                        <button
+                          type="button"
+                          onClick={() => handleResetStatus(editingId)}
+                          className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-amber-400 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors ml-8"
+                        >
+                          Zurück in Entwurf
+                        </button>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <>

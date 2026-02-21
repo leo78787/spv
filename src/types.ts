@@ -17,6 +17,10 @@ export interface SchedulerRules {
   noVerschiebenAfterNacht: boolean;
   /** No two consecutive Verschieben weeks for the same employee */
   noConsecutiveVerschieben: boolean;
+  /** No two consecutive Nachtbereitschaft weeks for the same employee */
+  noConsecutiveNacht: boolean;
+  /** No two consecutive weekend Frühschicht shifts for the same employee */
+  noConsecutiveFruehschicht: boolean;
   /** Ü55 and employees without L2 may only work verschieben */
   over55AndNoL2OnlyVerschieben: boolean;
   /** Reserve slots in verschieben specifically for Ü55 employees */
@@ -51,6 +55,8 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
     noNachtAfterVerschieben: true,
     noVerschiebenAfterNacht: true,
     noConsecutiveVerschieben: true,
+    noConsecutiveNacht: true,
+    noConsecutiveFruehschicht: true,
     over55AndNoL2OnlyVerschieben: true,
     reserveOver55SlotsForVerschieben: true,
     respectAvoidancePreferences: true,

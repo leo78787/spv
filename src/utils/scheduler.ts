@@ -191,6 +191,50 @@ export function isBlockedFromConsecutiveVerschieben(
 }
 
 /**
+ * Block consecutive Nachtbereitschaft weeks for the same employee.
+ * If an employee had a nacht shift ending within 7 days before the new nacht
+ * start date, they are blocked.
+ */
+export function isBlockedFromConsecutiveNacht(
+  employee: Employee,
+  nachtStartDate: Date,
+  assignments: ShiftAssignment[]
+): boolean {
+  return assignments.some(a => {
+    if (a.shiftType !== 'nachtbereitschaft') return false;
+    if (!a.employees.includes(employee.id)) return false;
+    const nEnd = new Date(a.endDate);
+    const daysDiff = Math.round(
+      (nachtStartDate.getTime() - nEnd.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    // Nacht ends Sat, next starts Sat → daysDiff = 7 → blocked
+    return daysDiff >= 1 && daysDiff <= 7;
+  });
+}
+
+/**
+ * Block consecutive Frühschicht (weekend early shift) for the same employee.
+ * If an employee had a Frühschicht ending within 7 days before the new Frühschicht
+ * start date, they are blocked.
+ */
+export function isBlockedFromConsecutiveFruehschicht(
+  employee: Employee,
+  fruehStartDate: Date,
+  assignments: ShiftAssignment[]
+): boolean {
+  return assignments.some(a => {
+    if (a.shiftType !== 'fruehschicht') return false;
+    if (!a.employees.includes(employee.id)) return false;
+    const fEnd = new Date(a.endDate);
+    const daysDiff = Math.round(
+      (fruehStartDate.getTime() - fEnd.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    // Früh ends Sun, next starts Sat → daysDiff = 6 → blocked
+    return daysDiff >= 1 && daysDiff <= 7;
+  });
+}
+
+/**
  * Block Verschieben when the employee just finished a Nachtbereitschaft week.
  * Symmetric to isBlockedFromNachtAfterVerschieben:
  * if an employee had a nacht shift ending at date N, they may NOT start a
@@ -240,7 +284,7 @@ export function isBlockedFromNachtAfterVerschieben(
 /**
  * Get available employees for a shift, sorted by workload for that shift type
  */
-function getAvailableEmployeesSorted(
+export function getAvailableEmployeesSorted(
   employees: Employee[],
   shiftType: ShiftType,
   startDate: Date,
@@ -312,6 +356,16 @@ function getAvailableEmployeesSorted(
     // Verschieben: forbid two consecutive verschieben weeks for the same employee (toggleable)
     if (rules.noConsecutiveVerschieben && shiftType === 'verschieben') {
       if (isBlockedFromConsecutiveVerschieben(emp, startDate, existingAssignments)) return false;
+    }
+
+    // Nachtbereitschaft: forbid two consecutive nacht weeks for the same employee (toggleable)
+    if (rules.noConsecutiveNacht && shiftType === 'nachtbereitschaft') {
+      if (isBlockedFromConsecutiveNacht(emp, startDate, existingAssignments)) return false;
+    }
+
+    // Frühschicht: forbid two consecutive weekend early shifts for the same employee (toggleable)
+    if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht') {
+      if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
     }
 
     return true;
@@ -574,6 +628,8 @@ export function generateAutomaticShiftPlan(
     noNachtAfterVerschieben: 'Keine Nacht nach Versetzt-Woche',
     noVerschiebenAfterNacht: 'Kein Versetzt nach Nacht-Woche',
     noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
+    noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
+    noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
     over55AndNoL2OnlyVerschieben: 'Ü55 / kein L2 nur versetzt',
     noWeekendAroundVacation: 'Kein WE um Urlaub',
     noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',

@@ -15,6 +15,8 @@ var DEFAULT_SCHEDULER_CONFIG = {
     noNachtAfterVerschieben: true,
     noVerschiebenAfterNacht: true,
     noConsecutiveVerschieben: true,
+    noConsecutiveNacht: true,
+    noConsecutiveFruehschicht: true,
     over55AndNoL2OnlyVerschieben: true,
     reserveOver55SlotsForVerschieben: true,
     respectAvoidancePreferences: true,
@@ -205,6 +207,28 @@ function isBlockedFromConsecutiveVerschieben(employee, verschiebenStartDate, ass
     return daysDiff >= 1 && daysDiff <= 7;
   });
 }
+function isBlockedFromConsecutiveNacht(employee, nachtStartDate, assignments) {
+  return assignments.some((a) => {
+    if (a.shiftType !== "nachtbereitschaft") return false;
+    if (!a.employees.includes(employee.id)) return false;
+    const nEnd = new Date(a.endDate);
+    const daysDiff = Math.round(
+      (nachtStartDate.getTime() - nEnd.getTime()) / (1e3 * 60 * 60 * 24)
+    );
+    return daysDiff >= 1 && daysDiff <= 7;
+  });
+}
+function isBlockedFromConsecutiveFruehschicht(employee, fruehStartDate, assignments) {
+  return assignments.some((a) => {
+    if (a.shiftType !== "fruehschicht") return false;
+    if (!a.employees.includes(employee.id)) return false;
+    const fEnd = new Date(a.endDate);
+    const daysDiff = Math.round(
+      (fruehStartDate.getTime() - fEnd.getTime()) / (1e3 * 60 * 60 * 24)
+    );
+    return daysDiff >= 1 && daysDiff <= 7;
+  });
+}
 function isBlockedFromVerschiebenAfterNacht(employee, verschiebenStartDate, assignments) {
   return assignments.some((a) => {
     if (a.shiftType !== "nachtbereitschaft") return false;
@@ -267,6 +291,12 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
     }
     if (rules.noConsecutiveVerschieben && shiftType === "verschieben") {
       if (isBlockedFromConsecutiveVerschieben(emp, startDate, existingAssignments)) return false;
+    }
+    if (rules.noConsecutiveNacht && shiftType === "nachtbereitschaft") {
+      if (isBlockedFromConsecutiveNacht(emp, startDate, existingAssignments)) return false;
+    }
+    if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
+      if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
     }
     return true;
   });
@@ -403,6 +433,8 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
     noNachtAfterVerschieben: "Keine Nacht nach Versetzt-Woche",
     noVerschiebenAfterNacht: "Kein Versetzt nach Nacht-Woche",
     noConsecutiveVerschieben: "Keine zwei Versetzt-Wochen hintereinander",
+    noConsecutiveNacht: "Keine zwei Nachtschichten hintereinander",
+    noConsecutiveFruehschicht: "Keine zwei Fr\xFChschichten hintereinander",
     over55AndNoL2OnlyVerschieben: "\xDC55 / kein L2 nur versetzt",
     noWeekendAroundVacation: "Kein WE um Urlaub",
     noFruehschichtAdjacentToVerschieben: "Keine Fr\xFChschicht angrenzend an Versetzt",

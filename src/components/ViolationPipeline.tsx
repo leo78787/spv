@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, X, ChevronLeft, ChevronRight, CheckCircle } from 'lucide-react';
+import { AlertTriangle, X, ChevronLeft, ChevronRight, CheckCircle, Eye } from 'lucide-react';
 import { SchedulerViolation, Employee, ShiftType } from '../types';
 
 interface ViolationPipelineProps {
@@ -7,6 +7,8 @@ interface ViolationPipelineProps {
   employees: Employee[];
   onAcknowledge: (id: string) => void;
   onClose: () => void;
+  /** Optional callback to navigate to the violation in the calendar */
+  onView?: (violation: SchedulerViolation) => void;
 }
 
 const shiftTypeLabel: Record<ShiftType, string> = {
@@ -31,6 +33,7 @@ export default function ViolationPipeline({
   employees,
   onAcknowledge,
   onClose,
+  onView,
 }: ViolationPipelineProps) {
   const [index, setIndex] = useState(0);
 
@@ -145,6 +148,15 @@ export default function ViolationPipeline({
 
       {/* Footer actions */}
       <div className="px-5 py-4 border-t border-gray-200 bg-gray-50 space-y-2">
+        {onView && (
+          <button
+            onClick={() => onView(violation)}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+          >
+            <Eye size={17} />
+            Anschauen
+          </button>
+        )}
         <button
           onClick={handleAcknowledge}
           className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"

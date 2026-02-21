@@ -34,10 +34,46 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
 
 const app = express();
-const PORT = 3001;
+const PORT = 3002;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// ═══════════════════════════════════════════════════════════════════════
+// PERSISTENT BACKGROUND OPTIMISATION JOB
+// ═══════════════════════════════════════════════════════════════════════
+
+interface OptimJob {
+  id: string;
+  status: 'running' | 'done' | 'error' | 'cancelled';
+  startedAt: number;
+  iter: number;
+  maxIterations: number;
+  bestScore: number;
+  currentScores: Record<string, number>;
+  elapsedMs: number;
+  estimatedTotalMs: number;
+  year: number;
+  startMonth: number;
+  months: number;
+  schedulerConfig: any;
+  targets: any;
+  result?: { assignments: any[]; scores: any; iterations: number };
+  error?: string;
+}
+
+let currentJob: OptimJob | null = null;
+
+/** All SSE responses that are currently subscribed to job progress. */
+const sseOptimClients = new Set<any>();
+
+function broadcastOptimSSE(payload: any) {
+  if (sseOptimClients.size === 0) return;
+  const line = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of sseOptimClients) {
+    try { res.write(line); } catch { /* client gone, will be removed on close */ }
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // AUTH
@@ -139,30 +175,50 @@ app.post('/api/generate', authMiddleware, (req, res) => {
   }
 });
 
-// ── Optimise (SSE stream via worker_threads) ────────────────────────
+// ── Optimise — starts/joins a persistent background job ─────────────────
 
 app.post('/api/optimize', authMiddleware, (req, res) => {
-  // Set SSE headers
-  res.status(200);
-  res.set({
+  // If a job is already running, reject (client should subscribe instead)
+  if (currentJob?.status === 'running') {
+    res.status(409).json({ error: 'Optimierung läuft bereits', jobId: currentJob.id });
+    return;
+  }
+
+  // Set SSE headers so the initiating response also gets the stream
+  res.status(200).set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
   });
   res.flushHeaders();
 
-  let closed = false;
-  res.on('close', () => { closed = true; });
+  sseOptimClients.add(res);
+  res.on('close', () => sseOptimClients.delete(res));
 
-  // Run the optimiser in async chunks to keep the event loop responsive
-  // and allow SSE progress events to be flushed to the client.
   const data = reviveDates(req.body);
-  const { employees, schedulerConfig, year, startMonth, months } = data;
+  const { employees, schedulerConfig, year, startMonth } = data;
+  const months = data.months ?? 12;
   const optimiserConfig = data.optimiserConfig ?? { maxIterations: 5000, targets: { overall: true, verschieben: true, nacht: true, frueh: true } };
   const { maxIterations, targets } = optimiserConfig;
 
-  // Run optimiser logic inline with async yielding
-  const genPlan = generateAutomaticShiftPlan;
+  // Create the persistent job record
+  const job: OptimJob = {
+    id: Date.now().toString(),
+    status: 'running',
+    startedAt: Date.now(),
+    iter: 0,
+    maxIterations,
+    bestScore: 0,
+    currentScores: {},
+    elapsedMs: 0,
+    estimatedTotalMs: 0,
+    year,
+    startMonth,
+    months,
+    schedulerConfig,
+    targets,
+  };
+  currentJob = job;
 
   function shuffle<T>(arr: T[]): T[] {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -182,10 +238,12 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   }
 
   // Baseline
-  const { assignments: baseline } = genPlan(employees, year, startMonth, months, schedulerConfig);
+  const { assignments: baseline } = generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig);
   let bestAssignments = baseline;
   let bestScores = computeFairnessScores(employees, baseline);
   let bestComposite = compositeScore(bestScores, targets);
+  job.bestScore = bestComposite;
+  job.currentScores = { ...bestScores };
 
   const progressInterval = Math.max(1, Math.floor(maxIterations / 200));
   const CHUNK_SIZE = Math.max(1, Math.min(10, progressInterval));
@@ -193,7 +251,8 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   let iter = 0;
 
   function runChunk() {
-    if (closed) return;
+    // Stop if job was cancelled or replaced
+    if (job !== currentJob || job.status === 'cancelled') return;
 
     try {
       const chunkEnd = Math.min(iter + CHUNK_SIZE, maxIterations);
@@ -206,52 +265,175 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
             iteration: iter, maxIterations, bestScore: bestComposite,
             currentScores: { ...bestScores }, elapsedMs, estimatedTotalMs, done: false,
           };
-          if (!closed) res.write(`data: ${JSON.stringify({ type: 'progress', progress })}\n\n`);
+          // Update persistent job state
+          job.iter = iter;
+          job.elapsedMs = elapsedMs;
+          job.estimatedTotalMs = estimatedTotalMs;
+          broadcastOptimSSE({ type: 'progress', progress });
         }
 
         const shuffled = shuffle([...employees]);
-        const { assignments: candidate } = genPlan(shuffled, year, startMonth, months, schedulerConfig);
+        const { assignments: candidate } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig);
         const candidateScores = computeFairnessScores(employees, candidate);
         const candidateComposite = compositeScore(candidateScores, targets);
         if (candidateComposite > bestComposite) {
           bestAssignments = candidate;
           bestScores = { ...candidateScores };
           bestComposite = candidateComposite;
+          job.bestScore = bestComposite;
+          job.currentScores = { ...bestScores };
         }
       }
 
       if (iter >= maxIterations) {
-        // Done
+        // Done — update job
         const totalElapsed = Date.now() - t0;
+        job.iter = maxIterations;
+        job.elapsedMs = totalElapsed;
+        job.estimatedTotalMs = totalElapsed;
+        job.status = 'done';
+        job.result = { assignments: bestAssignments, scores: bestScores, iterations: maxIterations };
+
         const doneProgress = {
           iteration: maxIterations, maxIterations, bestScore: bestComposite,
           currentScores: { ...bestScores }, elapsedMs: totalElapsed, estimatedTotalMs: totalElapsed, done: true,
         };
-        if (!closed) {
-          res.write(`data: ${JSON.stringify({ type: 'progress', progress: doneProgress })}\n\n`);
-          res.write(`data: ${JSON.stringify({ type: 'result', result: { assignments: bestAssignments, scores: bestScores, iterations: maxIterations } })}\n\n`);
+        broadcastOptimSSE({ type: 'progress', progress: doneProgress });
+        broadcastOptimSSE({ type: 'result', result: job.result });
+
+        // ── Auto-save the optimised plan to state.json ───────────────────
+        try {
+          const st = loadState();
+          st.shiftPlan = {
+            year,
+            startMonth,
+            months,
+            schedulerConfig,
+            violations: [],
+            assignments: bestAssignments,
+            algorithm: 'fairness-optimiert',
+          } as any;
+          saveState(st);
+        } catch (saveErr) {
+          console.error('[optimize] auto-save failed:', saveErr);
         }
-        res.end();
+
+        // Close all subscriber streams
+        for (const client of sseOptimClients) {
+          try { client.end(); } catch {}
+        }
+        sseOptimClients.clear();
       } else {
-        // Yield to the event loop, then continue
         setImmediate(runChunk);
       }
     } catch (chunkErr) {
-      if (!closed) {
-        res.write(`data: ${JSON.stringify({ type: 'error', error: String(chunkErr) })}\n\n`);
+      job.status = 'error';
+      job.error = String(chunkErr);
+      broadcastOptimSSE({ type: 'error', error: String(chunkErr) });
+      for (const client of sseOptimClients) {
+        try { client.end(); } catch {}
       }
-      res.end();
+      sseOptimClients.clear();
     }
   }
 
   try {
     runChunk();
   } catch (err) {
-    if (!closed) {
-      res.write(`data: ${JSON.stringify({ type: 'error', error: String(err) })}\n\n`);
-    }
+    job.status = 'error';
+    job.error = String(err);
+    broadcastOptimSSE({ type: 'error', error: String(err) });
     res.end();
   }
+});
+
+// ── Get current optimisation job status (poll endpoint) ─────────────────────
+
+app.get('/api/optimize/status', authMiddleware, (_req, res) => {
+  if (!currentJob) {
+    res.json({ status: 'idle' });
+    return;
+  }
+  res.json({
+    id: currentJob.id,
+    status: currentJob.status,
+    startedAt: currentJob.startedAt,
+    iter: currentJob.iter,
+    maxIterations: currentJob.maxIterations,
+    bestScore: currentJob.bestScore,
+    currentScores: currentJob.currentScores,
+    elapsedMs: currentJob.elapsedMs,
+    estimatedTotalMs: currentJob.estimatedTotalMs,
+    year: currentJob.year,
+    startMonth: currentJob.startMonth,
+    months: currentJob.months,
+    schedulerConfig: currentJob.schedulerConfig,
+    targets: currentJob.targets,
+    hasResult: !!currentJob.result,
+    error: currentJob.error,
+  });
+});
+
+// ── Subscribe to live optimisation progress (SSE reconnect) ─────────────────
+
+app.get('/api/optimize/subscribe', authMiddleware, (req, res) => {
+  res.status(200).set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  res.flushHeaders();
+
+  if (!currentJob || currentJob.status !== 'running') {
+    // Send current snapshot and close immediately if not running
+    if (currentJob?.status === 'done' && currentJob.result) {
+      const doneProgress = {
+        iteration: currentJob.maxIterations, maxIterations: currentJob.maxIterations,
+        bestScore: currentJob.bestScore, currentScores: currentJob.currentScores,
+        elapsedMs: currentJob.elapsedMs, estimatedTotalMs: currentJob.elapsedMs, done: true,
+      };
+      res.write(`data: ${JSON.stringify({ type: 'progress', progress: doneProgress })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'result', result: currentJob.result })}\n\n`);
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'idle' })}\n\n`);
+    }
+    res.end();
+    return;
+  }
+
+  // Send current progress immediately so UI restores state without a gap
+  const currentProgress = {
+    iteration: currentJob.iter, maxIterations: currentJob.maxIterations,
+    bestScore: currentJob.bestScore, currentScores: currentJob.currentScores,
+    elapsedMs: currentJob.elapsedMs, estimatedTotalMs: currentJob.estimatedTotalMs, done: false,
+  };
+  res.write(`data: ${JSON.stringify({ type: 'progress', progress: currentProgress })}\n\n`);
+
+  sseOptimClients.add(res);
+  res.on('close', () => sseOptimClients.delete(res));
+});
+
+// ── Cancel running optimisation ──────────────────────────────────────────────
+
+app.post('/api/optimize/cancel', authMiddleware, (_req, res) => {
+  if (currentJob?.status === 'running') {
+    currentJob.status = 'cancelled';
+    broadcastOptimSSE({ type: 'cancelled' });
+    for (const client of sseOptimClients) {
+      try { client.end(); } catch {}
+    }
+    sseOptimClients.clear();
+  }
+  res.json({ ok: true });
+});
+
+// ── Clear finished job record ────────────────────────────────────────────────
+
+app.delete('/api/optimize', authMiddleware, (_req, res) => {
+  if (currentJob?.status !== 'running') {
+    currentJob = null;
+  }
+  res.json({ ok: true });
 });
 
 // ── Fairness impact preview (runs in worker thread to keep event loop free) ──
@@ -591,7 +773,7 @@ app.post('/api/portal/notify', authMiddleware, async (req, res) => {
 const PORTAL_DIR = path.join(__dirname, '..', 'dist', 'portal');
 
 app.use('/portal', express.static(PORTAL_DIR));
-app.get('/portal/{*path}', (_req, res) => {
+app.use('/portal', (_req, res) => {
   const indexPath = path.join(PORTAL_DIR, 'index.html');
   if (fs.existsSync(indexPath)) {
     res.sendFile(indexPath);
