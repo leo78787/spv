@@ -4,7 +4,7 @@ import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Departmen
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Send, Lock, Unlock, AlertTriangle } from 'lucide-react';
 import ViolationPipeline from './ViolationPipeline';
-import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG } from '../utils/scheduler';
+import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, isBlockedFromVerschiebenDueToAdjacentFruehschicht, isBlockedFromVerschiebenAfterNacht, isBlockedFromConsecutiveVerschieben, hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG, canWorkOnDate } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
 import * as XLSX from 'xlsx-js-style';
 
@@ -22,7 +22,8 @@ import {
   startOfDay,
   endOfDay,
   isWithinInterval,
-  getISOWeek
+  getISOWeek,
+  startOfWeek
 } from 'date-fns';
 
 export function CalendarView() {
@@ -50,6 +51,9 @@ export function CalendarView() {
     assignment: ShiftAssignment;
     date: Date;
   } | null>(null);
+
+  // Day for which the "pick a shift type" dropdown is shown under the ! badge
+  const [mismatchPickerDay, setMismatchPickerDay] = useState<Date | null>(null);
 
   // State for in-modal override confirmation (replaces browser confirm)
   const [overrideConfirm, setOverrideConfirm] = useState<{
@@ -822,8 +826,20 @@ export function CalendarView() {
                         if (!covered) {
                           const required = shiftPlan?.schedulerConfig?.shiftCounts[st] ?? SHIFT_REQUIREMENTS[st]?.count ?? 0;
                           if (required > 0) {
+                            // Compute proper period dates for the missing shift type
+                            let pStart: Date;
+                            let pEnd: Date;
+                            if (st === 'verschieben') {
+                              pStart = startOfWeek(day, { weekStartsOn: 1 }); // Monday
+                              pEnd = addDays(pStart, 4);                       // Friday
+                            } else {
+                              pStart = startOfWeek(day, { weekStartsOn: 6 }); // nearest Saturday
+                              pEnd = st === 'nachtbereitschaft' ? addDays(pStart, 6) : addDays(pStart, 1);
+                            }
+                            // Stable deterministic ID so re-renders stay consistent
+                            const synthId = `synth-${st}-${format(pStart, 'yyyy-MM-dd')}`;
                             mismatches.push({
-                              assignment: { id: '', shiftType: st, startDate: day, endDate: day, employees: [], confirmed: false } as ShiftAssignment,
+                              assignment: { id: synthId, shiftType: st, startDate: pStart, endDate: pEnd, employees: [], confirmed: false } as ShiftAssignment,
                               required,
                               actual: 0,
                               diff: required,
@@ -845,17 +861,17 @@ export function CalendarView() {
                         <div className="text-xs">{weekDayLabelsMon[dowIndexMonFirst]}</div>
                         <div className="text-sm">{format(day, 'd')}</div>
 
-                        {/* Mismatch indicator under the day (click opens the first mismatched assignment) */}
+                        {/* Mismatch indicator: single ! badge opens a per-shift-type picker dropdown */}
                         {hasMismatch && (
-                          <div className="mt-1 flex items-center justify-center gap-2">
+                          <div className="mt-1 flex items-center justify-center relative">
                             <button
-                              title={mismatches.map(m => `${m.assignment.shiftType}: ${m.diff > 0 ? `fehlend ${m.diff}` : `zu viel ${-m.diff}`}`).join('\n')}
-                              onClick={() => {
-                                // open first mismatched assignment in editor (skip synthetic ones)
-                                const real = mismatches.find(m => m.assignment.id !== '');
-                                if (real) {
-                                  setEditingShift({ assignment: real.assignment as ShiftAssignment, date: day });
-                                }
+                              title={mismatches.map(m => {
+                                const lbl = m.assignment.shiftType === 'fruehschicht' ? 'Frühschicht' : m.assignment.shiftType === 'verschieben' ? 'Tagdienst' : 'Nachtbereitschaft';
+                                return `${lbl}: ${m.diff > 0 ? `fehlend ${m.diff}` : `zu viel ${-m.diff}`}`;
+                              }).join('\n')}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMismatchPickerDay(prev => prev && isSameDay(prev, day) ? null : day);
                               }}
                               className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-800 text-xs rounded border border-amber-100 hover:bg-amber-100"
                             >
@@ -863,99 +879,41 @@ export function CalendarView() {
                               <span>{mismatches.reduce((acc, m) => acc + Math.abs(m.diff), 0)}</span>
                             </button>
 
-                            {/* quick auto action: + to add when missing, - to remove when too many */}
-                            {mismatches[0].diff > 0 && mismatches[0].assignment.id !== '' ? (
-                              <button
-                                title="Automatisch ergänzen (empfohlene Mitarbeiter)"
-                                onClick={() => {
-                                  const m = mismatches[0];
-                                  if (!m) return;
-                                  const a = m.assignment;
-
-                                  // Use the full scheduler rule-set to find eligible candidates
-                                  const config = shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG;
-                                  const allAssignments = shiftPlan?.assignments || [];
-                                  const alreadyAssigned = new Set(a.employees || []);
-
-                                  // getAvailableEmployeesSorted applies ALL configured rules
-                                  // (vacation, over55/L2, adjacency, consecutiveVerschieben,
-                                  //  verschiebenAfterNacht, avoidancePreferences, etc.)
-                                  const eligibleSorted = getAvailableEmployeesSorted(
-                                    employees,
-                                    a.shiftType as any,
-                                    new Date(a.startDate),
-                                    new Date(a.endDate),
-                                    allAssignments,
-                                    config
-                                  ).filter(e => !alreadyAssigned.has(e.id));
-
-                                  const end = endOfDay(new Date(a.endDate));
-                                  const start = startOfDay(new Date(a.startDate));
-
-                                  // Secondary sort: prefer departments not yet covered for this shift
-                                  const deptNeeds = (empId: string) => {
-                                    const emp = employees.find(x => x.id === empId);
-                                    if (!emp) return false;
-                                    return !(allAssignments).some(x => {
-                                      if (x.shiftType !== a.shiftType) return false;
-                                      const xs = new Date(x.startDate);
-                                      const xe = new Date(x.endDate);
-                                      const overlaps = xs <= end && xe >= start;
-                                      return overlaps && x.employees.some(id => employees.find(e => e.id === id)?.department === emp.department);
-                                    });
-                                  };
-
-                                  const ranked = eligibleSorted.sort((x, y) => {
-                                    const xDept = deptNeeds(x.id) ? 0 : 1;
-                                    const yDept = deptNeeds(y.id) ? 0 : 1;
-                                    if (xDept !== yDept) return xDept - yDept;
-                                    // getAvailableEmployeesSorted already sorted by fewest shifts;
-                                    // only break remaining ties alphabetically
-                                    return x.name.localeCompare(y.name, 'de');
-                                  });
-
-                                  const need = Math.max(0, m.required - m.actual);
-                                  const toAdd = ranked.slice(0, need).map(e => e.id);
-
-                                  if (toAdd.length === 0) {
-                                    alert('Keine geeigneten Kandidaten gefunden, öffne Schicht‑Editor.');
-                                    setEditingShift({ assignment: a, date: day });
-                                    return;
-                                  }
-
-                                  const updated = { ...a, employees: Array.from(new Set([...(a.employees || []), ...toAdd])) } as ShiftAssignment;
-                                  updateShiftAssignment(updated);
-                                  if (editingShift?.assignment.id === a.id) setEditingShift({ assignment: updated, date: day });
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary-50 text-primary-700 text-xs rounded border border-primary-100 hover:bg-primary-100"
+                            {/* Dropdown: one row per affected shift type */}
+                            {mismatchPickerDay && isSameDay(mismatchPickerDay, day) && (
+                              <div
+                                className="absolute top-full left-1/2 -translate-x-1/2 z-50 mt-1 bg-white rounded-lg shadow-xl border border-gray-200 min-w-[200px] py-1"
+                                onClick={e => e.stopPropagation()}
                               >
-                                +
-                              </button>
-                            ) : mismatches[0].diff < 0 && mismatches[0].assignment.id !== '' ? (
-                              <button
-                                title="Automatisch entfernen (Mitarbeiter mit den meisten Schichten abziehen)"
-                                onClick={() => {
-                                  const m = mismatches[0];
-                                  if (!m) return;
+                                <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                                  Schicht bearbeiten
+                                </div>
+                                {mismatches.map((m, mi) => {
                                   const a = m.assignment;
-                                  const excess = Math.abs(m.diff);
-                                  const assigned = (a.employees || []).slice();
-                                  if (assigned.length === 0) { alert('Keine zu entfernenden Mitarbeiter gefunden.'); return; }
-
-                                  // compute shift count per assigned employee and remove those with highest counts
-                                  const empCounts = assigned.map(id => ({ id, count: (shiftPlan?.assignments || []).filter(z => z.shiftType === a.shiftType && z.employees.includes(id)).length }));
-                                  empCounts.sort((x, y) => y.count - x.count || (employees.find(e => e.id === x.id)?.name || '').localeCompare(employees.find(e => e.id === y.id)?.name || '', 'de'));
-                                  const toRemove = empCounts.slice(0, excess).map(e => e.id);
-
-                                  const updated = { ...a, employees: (a.employees || []).filter(id => !toRemove.includes(id)) } as ShiftAssignment;
-                                  updateShiftAssignment(updated);
-                                  if (editingShift?.assignment.id === a.id) setEditingShift({ assignment: updated, date: day });
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-700 text-xs rounded border border-rose-100 hover:bg-rose-100"
-                              >
-                                -
-                              </button>
-                            ) : null}
+                                  const label = a.shiftType === 'fruehschicht' ? 'Frühschicht' : a.shiftType === 'verschieben' ? 'Tagdienst' : 'Nachtbereitschaft';
+                                  const isShort = m.diff > 0;
+                                  return (
+                                    <button
+                                      key={mi}
+                                      className="w-full flex items-center justify-between gap-3 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors"
+                                      onClick={() => {
+                                        setEditingShift({ assignment: a as ShiftAssignment, date: day });
+                                        setMismatchPickerDay(null);
+                                      }}
+                                    >
+                                      <span className="font-medium text-gray-800">{label}</span>
+                                      <span className={`text-xs px-1.5 py-0.5 rounded font-semibold ${
+                                        isShort
+                                          ? 'bg-amber-100 text-amber-800'
+                                          : 'bg-rose-100 text-rose-700'
+                                      }`}>
+                                        {isShort ? `−${m.diff}` : `+${-m.diff}`}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         )}
                       </th>
@@ -1172,6 +1130,11 @@ export function CalendarView() {
       )}
       
       {/* Edit Shift Modal */}
+      {/* Backdrop to close the mismatch picker when clicking outside */}
+      {mismatchPickerDay && (
+        <div className="fixed inset-0 z-40" onClick={() => setMismatchPickerDay(null)} />
+      )}
+
       {editingShift && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
@@ -1242,21 +1205,65 @@ export function CalendarView() {
                       return s <= assignmentEnd && e >= assignmentStart;
                     });
 
-                    const blockedByAdj = editingShift.assignment.shiftType === 'fruehschicht'
-                      ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, shiftPlan?.assignments || [])
-                      : editingShift.assignment.shiftType === 'verschieben'
-                        ? isBlockedByAdjacentVerschieben(emp.id)
-                        : editingShift.assignment.shiftType === 'nachtbereitschaft'
-                          ? isBlockedFromNachtAfterVerschieben(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-                          : false;
-                    const blockedConsecutive = editingShift.assignment.shiftType === 'nachtbereitschaft'
-                      ? isBlockedFromConsecutiveNacht(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-                      : editingShift.assignment.shiftType === 'fruehschicht'
-                        ? isBlockedFromConsecutiveFruehschicht(emp, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-                        : false;
-                    const blockedByAdjacency = blockedByAdj || blockedConsecutive;
+                    const allAssignments = shiftPlan?.assignments || [];
+                    const shiftType = editingShift.assignment.shiftType;
+                    const rules = shiftPlan?.schedulerConfig?.rules ?? DEFAULT_SCHEDULER_CONFIG.rules;
 
-                    const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
+                    // Frühschicht <-> Verschieben adjacency (both directions, one toggle)
+                    const blockedFruehVerschAdj = rules.noFruehschichtAdjacentToVerschieben && (
+                      shiftType === 'fruehschicht'
+                        ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, allAssignments)
+                        : shiftType === 'verschieben'
+                          ? isBlockedFromVerschiebenDueToAdjacentFruehschicht(emp, assignmentStart, new Date(editingShift.assignment.endDate), allAssignments)
+                          : false
+                    );
+
+                    // Nacht <-> Verschieben transition rules
+                    const blockedNachtAfterVerschieben = rules.noNachtAfterVerschieben
+                      && shiftType === 'nachtbereitschaft'
+                      && isBlockedFromNachtAfterVerschieben(emp, assignmentStart, allAssignments);
+                    const blockedVerschiebenAfterNacht = rules.noVerschiebenAfterNacht
+                      && shiftType === 'verschieben'
+                      && isBlockedFromVerschiebenAfterNacht(emp, assignmentStart, allAssignments);
+
+                    // Consecutive shift rules
+                    const blockedConsecVerschieben = rules.noConsecutiveVerschieben
+                      && shiftType === 'verschieben'
+                      && isBlockedFromConsecutiveVerschieben(emp, assignmentStart, allAssignments);
+                    const blockedConsecNacht = rules.noConsecutiveNacht
+                      && shiftType === 'nachtbereitschaft'
+                      && isBlockedFromConsecutiveNacht(emp, assignmentStart, allAssignments);
+                    const blockedConsecFrueh = rules.noConsecutiveFruehschicht
+                      && shiftType === 'fruehschicht'
+                      && isBlockedFromConsecutiveFruehschicht(emp, assignmentStart, allAssignments);
+
+                    const blockedByAdjacency = blockedFruehVerschAdj || blockedNachtAfterVerschieben
+                      || blockedVerschiebenAfterNacht || blockedConsecVerschieben
+                      || blockedConsecNacht || blockedConsecFrueh;
+
+                    // Qualification rule
+                    const blockedByQualification = rules.over55AndNoL2OnlyVerschieben
+                      && shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
+
+                    // Vacation boundary (toggle-aware)
+                    const assignmentDaysList = eachDayOfInterval({ start: assignmentStart, end: new Date(editingShift.assignment.endDate) });
+                    const blockedByVacationBoundary = !isOnVacation
+                      && rules.noWeekendAroundVacation
+                      && assignmentDaysList.some(d => !canWorkOnDate(emp, d, true));
+
+                    // Avoidance preference
+                    const blockedByAvoidance = rules.respectAvoidancePreferences
+                      && assignmentDaysList.some(d => hasAvoidancePreference(emp, shiftType as ShiftType, d));
+
+                    // Compute adjacency reason label for display
+                    const adjacencyLabel = blockedFruehVerschAdj
+                      ? (shiftType === 'fruehschicht' ? 'Gesperrt: angrenz. Schicht' : 'Gesperrt: angrenz. Frühschicht')
+                      : blockedNachtAfterVerschieben ? 'Keine Nacht nach Verschieben'
+                      : blockedVerschiebenAfterNacht ? 'Kein Verschieben nach Nacht'
+                      : blockedConsecVerschieben    ? 'Aufeinandf. Verschieben'
+                      : blockedConsecNacht          ? 'Aufeinandf. Nacht'
+                      : blockedConsecFrueh          ? 'Aufeinandf. Frühschicht'
+                      : '';
 
                     const hasOtherOverlapping = (shiftPlan?.assignments || []).some(a => {
                       if (a.id === editingShift.assignment.id) return false;
@@ -1272,7 +1279,7 @@ export function CalendarView() {
                     ).length;
 
                     // determine eligibility and recommendation flag
-                    const isEligible = !isOnVacation && !blockedByAdjacency && !blockedByQualification && !hasOtherOverlapping;
+                    const isEligible = !isOnVacation && !blockedByVacationBoundary && !blockedByAdjacency && !blockedByQualification && !hasOtherOverlapping && !blockedByAvoidance;
 
                     const departmentHasCoverage = (shiftPlan?.assignments || []).some(a => {
                       if (a.shiftType !== editingShift.assignment.shiftType) return false;
@@ -1286,8 +1293,11 @@ export function CalendarView() {
                       emp,
                       isAssigned,
                       isOnVacation,
+                      blockedByVacationBoundary,
                       blockedByAdjacency,
+                      adjacencyLabel,
                       blockedByQualification,
+                      blockedByAvoidance,
                       hasOtherOverlapping,
                       shiftCount,
                       isEligible,
@@ -1308,7 +1318,7 @@ export function CalendarView() {
 
                   // sort the enriched list (keeps recommended at top within eligible)
                   enriched.sort((a, b) => {
-                    const score = (x: any) => (x.recommended ? 0 : x.isAssigned ? 1 : x.isEligible ? 2 : x.blockedByQualification || x.blockedByAdjacency || x.hasOtherOverlapping ? 3 : 4);
+                    const score = (x: any) => (x.recommended ? 0 : x.isAssigned ? 1 : x.isEligible ? 2 : x.blockedByQualification || x.blockedByAdjacency || x.hasOtherOverlapping || x.blockedByAvoidance ? 3 : 4);
                     const sa = score(a), sb = score(b);
                     if (sa !== sb) return sa - sb;
                     if (a.recommended !== b.recommended) return (a.recommended ? -1 : 1);
@@ -1322,7 +1332,7 @@ export function CalendarView() {
                   const excluded = enriched.filter(e => e.isOnVacation);
 
                   const renderCard = (item: any) => {
-                    const { emp, isAssigned, isOnVacation, blockedByAdjacency, blockedByQualification, hasOtherOverlapping, shiftCount, isEligible, needsDept } = item;
+                    const { emp, isAssigned, isOnVacation, blockedByVacationBoundary, blockedByAdjacency, adjacencyLabel, blockedByQualification, blockedByAvoidance, hasOtherOverlapping, shiftCount, isEligible, needsDept } = item;
                     const hasLowShiftCount = item.recommended;
 
                     return (
@@ -1347,8 +1357,10 @@ export function CalendarView() {
                               {emp.isOver55 && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>)}
                               {emp.hasL2 && (<span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>)}
                               {isOnVacation && (<span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded text-xs">Im Urlaub</span>)}
-                              {blockedByAdjacency && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">{editingShift.assignment.shiftType === 'fruehschicht' ? 'Gesperrt: angrenzende Schicht' : editingShift.assignment.shiftType === 'verschieben' ? 'Konflikt: Wochenende' : 'Konflikt: zeitliche Nähe'}</span>)}
+                              {blockedByVacationBoundary && !isOnVacation && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Kein WE um Urlaub</span>)}
+                              {blockedByAdjacency && adjacencyLabel && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">{adjacencyLabel}</span>)}
                               {blockedByQualification && (<span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">Nur versch.</span>)}
+                              {blockedByAvoidance && (<span className="px-2 py-0.5 bg-purple-100 text-purple-800 rounded text-xs">Vermeidet diese Schicht</span>)}
 
                               {hasOtherOverlapping && !isAssigned && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">Andere Schicht vorhanden</span>)}
 

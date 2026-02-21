@@ -30,7 +30,7 @@ import {
  * Check if employee can work on a specific date considering vacation boundaries
  * Rule: No weekend work before or after vacation
  */
-function canWorkOnDate(employee: Employee, date: Date, respectVacationWeekend = true): boolean {
+export function canWorkOnDate(employee: Employee, date: Date, respectVacationWeekend = true): boolean {
   // helper: check single-day + ranges using normalized day boundaries
   const d = startOfDay(date);
 
@@ -74,7 +74,7 @@ function canWorkOnDate(employee: Employee, date: Date, respectVacationWeekend = 
 /**
  * Check if employee wants to avoid this shift type
  */
-function hasAvoidancePreference(employee: Employee, shiftType: ShiftType, date: Date): boolean {
+export function hasAvoidancePreference(employee: Employee, shiftType: ShiftType, date: Date): boolean {
   return employee.preferences.some(pref => 
     pref.shiftType === shiftType &&
     pref.preferred === false &&
