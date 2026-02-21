@@ -691,11 +691,17 @@ export function detectViolations(
     for (const period of periodList) {
       const required = requiredCounts[shiftType];
 
-      // Find matching assignment by shift type and date range
+      // Find matching assignment by shift type and date range.
+      // Compare only the date parts (year/month/day) because stored assignments may have
+      // a different time component (T12:00:00Z vs T00:00:00Z) depending on the client timezone.
+      const sameDay = (a: Date, b: Date) =>
+        a.getUTCFullYear() === b.getUTCFullYear() &&
+        a.getUTCMonth() === b.getUTCMonth() &&
+        a.getUTCDate() === b.getUTCDate();
       const matchingAssignment = assignments.find(a =>
         a.shiftType === shiftType &&
-        new Date(a.startDate).getTime() === period.startDate.getTime() &&
-        new Date(a.endDate).getTime() === period.endDate.getTime()
+        sameDay(new Date(a.startDate), period.startDate) &&
+        sameDay(new Date(a.endDate), period.endDate)
       );
 
       const assigned = matchingAssignment ? matchingAssignment.employees.length : 0;

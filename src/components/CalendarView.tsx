@@ -674,17 +674,28 @@ export function CalendarView() {
               {planReleased ? <><Unlock size={14} /> Freigabe aufheben</> : <><Lock size={14} /> Freigeben</>}
             </button>
 
-            {/* Violation pipeline badge */}
-            {(shiftPlan?.violations?.length ?? 0) > 0 && (
-              <button
-                onClick={() => setShowPipeline(v => !v)}
-                className="px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 transition-colors"
-                title="Regelprobleme bei der Generierung anzeigen"
-              >
-                <AlertTriangle size={14} />
-                {shiftPlan!.violations!.length} {shiftPlan!.violations!.length === 1 ? 'Problem' : 'Probleme'}
-              </button>
-            )}
+            {/* Violation pipeline badge — only violations within the planned period */}
+            {(() => {
+              const planYear = shiftPlan?.year ?? new Date().getFullYear();
+              const planStartMonth = shiftPlan?.startMonth ?? 0;
+              const planMonths = shiftPlan?.months ?? 12;
+              const planPeriodStart = new Date(planYear, planStartMonth, 1);
+              const planPeriodEnd = new Date(planYear, planStartMonth + planMonths, 0);
+              const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+                const vDate = new Date(v.startDate);
+                return vDate >= planPeriodStart && vDate <= planPeriodEnd;
+              });
+              return filteredViolations.length > 0 ? (
+                <button
+                  onClick={() => setShowPipeline(v => !v)}
+                  className="px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 transition-colors"
+                  title="Regelprobleme bei der Generierung anzeigen"
+                >
+                  <AlertTriangle size={14} />
+                  {filteredViolations.length} {filteredViolations.length === 1 ? 'Problem' : 'Probleme'}
+                </button>
+              ) : null;
+            })()}
           </div>
         </div>
         
@@ -1418,9 +1429,19 @@ export function CalendarView() {
       )}
 
       {/* Violation Pipeline */}
-      {showPipeline && (shiftPlan?.violations?.length ?? 0) > 0 && (
+      {showPipeline && (() => {
+        const planYear = shiftPlan?.year ?? new Date().getFullYear();
+        const planStartMonth = shiftPlan?.startMonth ?? 0;
+        const planMonths = shiftPlan?.months ?? 12;
+        const planPeriodStart = new Date(planYear, planStartMonth, 1);
+        const planPeriodEnd = new Date(planYear, planStartMonth + planMonths, 0);
+        const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+          const vDate = new Date(v.startDate);
+          return vDate >= planPeriodStart && vDate <= planPeriodEnd;
+        });
+        return filteredViolations.length > 0 ? (
         <ViolationPipeline
-          violations={shiftPlan!.violations!}
+          violations={filteredViolations}
           employees={employees}
           onAcknowledge={(id) => acknowledgeViolation(id)}
           onClose={() => setShowPipeline(false)}
@@ -1434,7 +1455,8 @@ export function CalendarView() {
             setShowPipeline(false);
           }}
         />
-      )}
+        ) : null;
+      })()}
     </div>
   );
 }

@@ -77,8 +77,6 @@ export function Login({ onSuccess }: Props) {
           </button>
           <div className="text-xs text-gray-500">Kontakt: Admin, falls Probleme auftreten.</div>
         </div>
-
-        <div className="mt-4 text-xs text-gray-400">Hinweis: Demo‑Anmeldung erforderlich, Username & Passwort sind vorab bekannt.</div>
       </form>
       <div className="absolute bottom-6 left-0 right-0 text-center text-xs text-gray-400">
         <p>Schichtplan Manager &copy; 2026</p>

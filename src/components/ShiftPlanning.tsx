@@ -456,7 +456,11 @@ export function ShiftPlanning() {
   }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
 
   const planStart = new Date(selectedYear, selectedMonth, 1);
-  const planEnd = new Date(selectedYear, selectedMonth + 12, 0); // last day of the 12-month range
+  const planEnd = new Date(selectedYear, selectedMonth + (shiftPlan?.months ?? 12), 0); // last day of the n-month range
+  const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+    const vDate = new Date(v.startDate);
+    return vDate >= planStart && vDate <= planEnd;
+  });
 
   const currentYearAssignments = shiftPlan?.assignments.filter((assignment) => {
     const aStart = new Date(assignment.startDate);
@@ -775,14 +779,14 @@ export function ShiftPlanning() {
             </div>
           )}
 
-          {(shiftPlan?.violations?.length ?? 0) > 0 && (
+          {filteredViolations.length > 0 && (
             <button
               onClick={() => setShowPipeline(true)}
               className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-md hover:bg-amber-600 font-medium text-sm transition-colors"
               title="Regelprobleme anzeigen"
             >
               <AlertTriangle className="h-4 w-4" />
-              {shiftPlan!.violations!.length} Regelverstoß{shiftPlan!.violations!.length !== 1 ? 'e' : ''}
+              {filteredViolations.length} Regelverstoß{filteredViolations.length !== 1 ? 'e' : ''}
             </button>
           )}
 
@@ -1114,9 +1118,9 @@ export function ShiftPlanning() {
     </div>
 
     {/* Violation Pipeline slide-over */}
-    {showPipeline && (shiftPlan?.violations?.length ?? 0) > 0 && (
+    {showPipeline && filteredViolations.length > 0 && (
       <ViolationPipeline
-        violations={shiftPlan!.violations!}
+        violations={filteredViolations}
         employees={employees}
         onAcknowledge={(id) => acknowledgeViolation(id)}
         onClose={() => setShowPipeline(false)}
