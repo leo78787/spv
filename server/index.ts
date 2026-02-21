@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { loadState, saveState } from './db.js';
-import { generateAutomaticShiftPlan, runEqualityOptimiser } from '../src/utils/scheduler.js';
+import { generateAutomaticShiftPlan, runEqualityOptimiser, detectViolations } from '../src/utils/scheduler.js';
 import { computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
 import {
@@ -182,6 +182,9 @@ app.post('/api/optimize-equality', authMiddleware, (req, res) => {
     const data = reviveDates(req.body);
     const { employees, schedulerConfig, baselineAssignments } = data;
     const maxIterations = data.maxIterations ?? 500;
+    const year = data.year ?? new Date().getFullYear();
+    const startMonth = data.startMonth ?? 0;
+    const months = data.months ?? 12;
 
     const result = runEqualityOptimiser(
       employees,
@@ -190,7 +193,17 @@ app.post('/api/optimize-equality', authMiddleware, (req, res) => {
       maxIterations,
     );
 
-    res.json(result);
+    // Recompute violations for the optimised assignments
+    const violations = detectViolations(
+      employees,
+      result.assignments,
+      schedulerConfig,
+      year,
+      startMonth,
+      months,
+    );
+
+    res.json({ ...result, violations });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -411,6 +411,9 @@ export function ShiftPlanning() {
           schedulerConfig,
           baselineAssignments: shiftPlan.assignments,
           maxIterations: 500,
+          year: selectedYear,
+          startMonth: selectedMonth,
+          months: 12,
         }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -420,12 +423,18 @@ export function ShiftPlanning() {
         startDate: new Date(a.startDate),
         endDate: new Date(a.endDate),
       }));
+      // Revive violation dates from JSON
+      const revivedViolations = (data.violations || []).map((v: any) => ({
+        ...v,
+        startDate: new Date(v.startDate),
+        endDate: new Date(v.endDate),
+      }));
       setShiftPlan({
         year: selectedYear,
         startMonth: selectedMonth,
         months: 12,
         schedulerConfig,
-        violations: shiftPlan.violations ?? [],
+        violations: revivedViolations,
         assignments: revivedAssignments,
         algorithm: 'gleichheits-optimiert',
       } as any);

@@ -279,90 +279,87 @@ export function CalendarView() {
     const empObj = employees.find(e => e.id === employeeId);
     if (!empObj) return;
 
-    const blockedAdj = editingShift.assignment.shiftType === 'fruehschicht'
-      ? isBlockedFromFruehschichtDueToAdjacency(empObj, editingShift.date, shiftPlan?.assignments || [])
-      : editingShift.assignment.shiftType === 'verschieben'
-        ? isBlockedByAdjacentVerschieben(employeeId)
-        : editingShift.assignment.shiftType === 'nachtbereitschaft'
-          ? isBlockedFromNachtAfterVerschieben(empObj, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-          : false;
-    const blockedConsecutive = editingShift.assignment.shiftType === 'nachtbereitschaft'
-      ? isBlockedFromConsecutiveNacht(empObj, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-      : editingShift.assignment.shiftType === 'fruehschicht'
-        ? isBlockedFromConsecutiveFruehschicht(empObj, new Date(editingShift.assignment.startDate), shiftPlan?.assignments || [])
-        : false;
-    const blocked = blockedAdj || blockedConsecutive;
-
-    const blockedByQualification = editingShift.assignment.shiftType !== 'verschieben' && (empObj.isOver55 || !empObj.hasL2);
-
-    // Vacation always blocks
-    const isEmpOnVacation = (() => {
-      const start = startOfDay(new Date(editingShift.assignment.startDate));
-      const end = endOfDay(new Date(editingShift.assignment.endDate));
-      // single days overlapping range
-      const singleOverlap = (empObj.vacationDays || []).some(vacDay => {
-        const vac = startOfDay(new Date(vacDay));
-        return isWithinInterval(vac, { start, end });
-      });
-      if (singleOverlap) return true;
-      // ranges overlapping
-      const rangeOverlap = (empObj.vacationRanges || []).some(r => {
-        const s = startOfDay(new Date(r.startDate));
-        const e = endOfDay(new Date(r.endDate));
-        return s <= end && e >= start;
-      });
-      return rangeOverlap;
-    })();
-    if (isEmpOnVacation) return;
-
-    // Check: does the employee already have a different/overlapping assignment in this period?
+    const rules = shiftPlan?.schedulerConfig?.rules ?? DEFAULT_SCHEDULER_CONFIG.rules;
+    const shiftType = editingShift.assignment.shiftType;
+    const allAssignments = shiftPlan?.assignments || [];
     const assignmentStart = new Date(editingShift.assignment.startDate);
     const assignmentEnd = new Date(editingShift.assignment.endDate);
-    const hasOverlappingAssignment = (shiftPlan?.assignments || []).some(a => {
-      if (a.id === editingShift.assignment.id) return false; // ignore current assignment
+    const assignmentDays = eachDayOfInterval({ start: startOfDay(assignmentStart), end: assignmentEnd });
+
+    // Vacation always blocks (no toggle)
+    const isEmpOnVacation = (empObj.vacationDays || []).some(vacDay => {
+      const vac = startOfDay(new Date(vacDay));
+      return isWithinInterval(vac, { start: startOfDay(assignmentStart), end: endOfDay(assignmentEnd) });
+    }) || (empObj.vacationRanges || []).some(r => {
+      const s = startOfDay(new Date(r.startDate));
+      const e = endOfDay(new Date(r.endDate));
+      return s <= endOfDay(assignmentEnd) && e >= startOfDay(assignmentStart);
+    });
+    if (isEmpOnVacation) return;
+
+    // Adjacency checks — gated by rule toggles
+    const blockedFruehVerschAdj = rules.noFruehschichtAdjacentToVerschieben && (
+      shiftType === 'fruehschicht'
+        ? isBlockedFromFruehschichtDueToAdjacency(empObj, editingShift.date, allAssignments)
+        : shiftType === 'verschieben'
+          ? isBlockedFromVerschiebenDueToAdjacentFruehschicht(empObj, assignmentStart, assignmentEnd, allAssignments)
+          : false
+    );
+    const blockedNachtAfterVersch = rules.noNachtAfterVerschieben
+      && shiftType === 'nachtbereitschaft'
+      && isBlockedFromNachtAfterVerschieben(empObj, assignmentStart, allAssignments);
+    const blockedVerschAfterNacht = rules.noVerschiebenAfterNacht
+      && shiftType === 'verschieben'
+      && isBlockedFromVerschiebenAfterNacht(empObj, assignmentStart, allAssignments);
+    const blockedConsecVersch = rules.noConsecutiveVerschieben
+      && shiftType === 'verschieben'
+      && isBlockedFromConsecutiveVerschieben(empObj, assignmentStart, allAssignments);
+    const blockedConsecNacht = rules.noConsecutiveNacht
+      && shiftType === 'nachtbereitschaft'
+      && isBlockedFromConsecutiveNacht(empObj, assignmentStart, allAssignments);
+    const blockedConsecFrueh = rules.noConsecutiveFruehschicht
+      && shiftType === 'fruehschicht'
+      && isBlockedFromConsecutiveFruehschicht(empObj, assignmentStart, allAssignments);
+    const blocked = blockedFruehVerschAdj || blockedNachtAfterVersch || blockedVerschAfterNacht
+      || blockedConsecVersch || blockedConsecNacht || blockedConsecFrueh;
+
+    // Qualification — gated by rule toggle
+    const blockedByQualification = rules.over55AndNoL2OnlyVerschieben
+      && shiftType !== 'verschieben' && (empObj.isOver55 || !empObj.hasL2);
+
+    // Vacation boundary — gated by rule toggle
+    const blockedByVacBoundary = rules.noWeekendAroundVacation
+      && assignmentDays.some(d => !canWorkOnDate(empObj, d, true));
+
+    // Avoidance preference — gated by rule toggle
+    const blockedByAvoidance = rules.respectAvoidancePreferences
+      && assignmentDays.some(d => hasAvoidancePreference(empObj, shiftType as ShiftType, d));
+
+    // Overlapping assignment (always enforced)
+    const hasOverlappingAssignment = allAssignments.some(a => {
+      if (a.id === editingShift.assignment.id) return false;
       if (!a.employees.includes(empObj.id)) return false;
-      const aStart = new Date(a.startDate);
-      const aEnd = new Date(a.endDate);
-      return aStart <= assignmentEnd && aEnd >= assignmentStart;
+      const aS = new Date(a.startDate);
+      const aE = new Date(a.endDate);
+      return aS <= assignmentEnd && aE >= assignmentStart;
     });
 
-    if (blocked || blockedByQualification || hasOverlappingAssignment) {
+    if (blocked || blockedByQualification || hasOverlappingAssignment || blockedByVacBoundary || blockedByAvoidance) {
       const reasons: string[] = [];
 
-      // Specific adjacency reasons
-      if (blocked) {
-        if (editingShift.assignment.shiftType === 'fruehschicht') {
-          // determine whether it's adjacency to verschieben or recent night-week
-          const saturday = new Date(editingShift.assignment.startDate);
-          const hasVerschAdj = (shiftPlan?.assignments || []).some(a => {
-            if (a.shiftType !== 'verschieben') return false;
-            if (!a.employees.includes(empObj.id)) return false;
-            const vStart = new Date(a.startDate);
-            const vEnd = new Date(a.endDate);
-            const saturdayBefore = addDays(vStart, -2);
-            const saturdayAfter = addDays(vEnd, 1);
-            return isSameDay(saturday, saturdayBefore) || isSameDay(saturday, saturdayAfter);
-          });
-          const hasRecentNight = (shiftPlan?.assignments || []).some(a => {
-            if (a.shiftType !== 'nachtbereitschaft') return false;
-            if (!a.employees.includes(empObj.id)) return false;
-            const end = new Date(a.endDate);
-            return isSameDay(saturday, end) || isSameDay(saturday, addDays(end, 1));
-          });
-
-          if (hasVerschAdj) reasons.push('Keine Wochenend‑Frühschicht — angrenzende verschobene Schicht');
-          else if (hasRecentNight) reasons.push('Keine Wochenend‑Frühschicht direkt nach Nachtwoche');
-          else reasons.push('Zeitliche Nähe zu anderen Schichten');
-        } else if (editingShift.assignment.shiftType === 'verschieben') {
-          reasons.push('Konflikt: Frühschicht am angrenzenden Wochenende');
-        } else if (editingShift.assignment.shiftType === 'nachtbereitschaft') {
-          reasons.push('Keine Nachtwoche direkt nach einer Verschobenen (Mo–Fr) Woche');
-        } else {
-          reasons.push('Regelkonflikt (zeitliche Nähe)');
-        }
+      // Adjacency reasons
+      if (blockedFruehVerschAdj) {
+        reasons.push(shiftType === 'fruehschicht'
+          ? 'Keine Wochenend‑Frühschicht — angrenzende verschobene Schicht'
+          : 'Konflikt: Frühschicht am angrenzenden Wochenende');
       }
+      if (blockedNachtAfterVersch) reasons.push('Keine Nachtwoche direkt nach Verschieben-Woche');
+      if (blockedVerschAfterNacht) reasons.push('Kein Verschieben direkt nach Nacht-Woche');
+      if (blockedConsecVersch) reasons.push('Keine zwei aufeinanderfolgenden Verschieben-Wochen');
+      if (blockedConsecNacht) reasons.push('Keine zwei aufeinanderfolgenden Nachtwochen');
+      if (blockedConsecFrueh) reasons.push('Keine zwei aufeinanderfolgenden Frühschichten');
 
-      // Qualification reasons (clear messages)
+      // Qualification reasons
       if (blockedByQualification) {
         if (empObj.isOver55 && !empObj.hasL2) {
           reasons.push('Ü55 und kein L2 — nur verschobene Schichten erlaubt');
@@ -370,18 +367,20 @@ export function CalendarView() {
           reasons.push('Ü55 — nur verschobene Schichten erlaubt');
         } else if (!empObj.hasL2) {
           reasons.push('Keine L2 — nur verschobene Schichten erlaubt');
-        } else {
-          reasons.push('Qualifikationsregel verletzt');
         }
       }
 
-      // Existing/overlapping assignment reason
-      if (hasOverlappingAssignment) {
-        reasons.push('Mitarbeiter hat bereits eine andere Schicht in diesem Zeitraum');
-      }
+      // Vacation boundary
+      if (blockedByVacBoundary) reasons.push('Kein Wochenenddienst um Urlaub herum');
+
+      // Avoidance
+      if (blockedByAvoidance) reasons.push('Mitarbeiter vermeidet diese Schichtart');
+
+      // Overlapping
+      if (hasOverlappingAssignment) reasons.push('Mitarbeiter hat bereits eine andere Schicht in diesem Zeitraum');
 
       setOverrideConfirm({ employeeId, reasons });
-      return; // wait for in-modal confirmation
+      return;
     }
 
     // No block — assign

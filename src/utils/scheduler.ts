@@ -580,6 +580,82 @@ export interface AutoScheduleResult {
 }
 
 /**
+ * Detect violations (understaffing) for a given set of assignments.
+ * Generates all expected shift periods, then checks each period against
+ * the required staffing levels from the config.
+ */
+export function detectViolations(
+  employees: Employee[],
+  assignments: ShiftAssignment[],
+  config: SchedulerConfig,
+  startYear: number,
+  startMonth: number,
+  months: number,
+): SchedulerViolation[] {
+  const violations: SchedulerViolation[] = [];
+  const startDate = new Date(startYear, startMonth, 1);
+  const periods = generateShiftPeriodsForRange(startDate, months);
+  const { shiftCounts, rules } = config;
+
+  const requiredCounts: Record<ShiftType, number> = {
+    verschieben: shiftCounts.verschieben,
+    nachtbereitschaft: shiftCounts.nachtbereitschaft,
+    fruehschicht: shiftCounts.fruehschicht,
+  };
+
+  const ruleLabels: Partial<Record<keyof typeof rules, string>> = {
+    noNachtAfterVerschieben: 'Keine Nacht nach Versetzt-Woche',
+    noVerschiebenAfterNacht: 'Kein Versetzt nach Nacht-Woche',
+    noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
+    noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
+    noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
+    over55AndNoL2OnlyVerschieben: 'Ü55 / kein L2 nur versetzt',
+    noWeekendAroundVacation: 'Kein WE um Urlaub',
+    noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',
+    respectAvoidancePreferences: 'Vermeidungspräferenzen',
+    departmentDiversity: 'Abteilungsvielfalt',
+    reserveOver55SlotsForVerschieben: 'Ü55-Slot-Reservierung',
+  };
+
+  for (const [shiftType, periodList] of periods.entries()) {
+    for (const period of periodList) {
+      const required = requiredCounts[shiftType];
+
+      // Find matching assignment by shift type and date range
+      const matchingAssignment = assignments.find(a =>
+        a.shiftType === shiftType &&
+        new Date(a.startDate).getTime() === period.startDate.getTime() &&
+        new Date(a.endDate).getTime() === period.endDate.getTime()
+      );
+
+      const assigned = matchingAssignment ? matchingAssignment.employees.length : 0;
+
+      if (assigned < required) {
+        const activatedRuleKeys = (Object.keys(rules) as Array<keyof typeof rules>).filter(k => rules[k]);
+        const blockedRules: string[] = [];
+        for (const ruleKey of activatedRuleKeys) {
+          const label = ruleLabels[ruleKey];
+          if (label) blockedRules.push(label);
+        }
+
+        violations.push({
+          id: `violation-${shiftType}-${period.startDate.toISOString()}`,
+          shiftType,
+          startDate: period.startDate,
+          endDate: period.endDate,
+          required,
+          assigned,
+          assignedEmployeeIds: matchingAssignment ? matchingAssignment.employees : [],
+          blockedRules,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
+/**
  * Automatically generate complete shift plan for the entire year
  * Order: 1. Night shifts, 2. Late shifts, 3. Early (weekend) shifts
  * Returns both the assignments and any periods that could not be fully staffed.
