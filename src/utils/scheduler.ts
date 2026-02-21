@@ -123,12 +123,18 @@ export function isBlockedFromFruehschichtDueToAdjacency(
 
   if (hasAdjacentVerschieben) return true;
 
-  // Check nachtbereitschaft adjacency — block weekend directly after night-week (endDate and following Sunday)
+  // Check nachtbereitschaft adjacency — block the Frühschicht weekend directly after nacht ends.
+  // Nacht typically ends on Saturday; the next Frühschicht slot is Sat+7 (daysDiff=7) and Sun+8 (daysDiff=8).
+  // Use a daysDiff range (consistent with all other adjacency helpers) so the full following weekend is covered.
   const hasRecentNightWeek = assignments.some(a => {
     if (!a.employees.includes(employee.id) || a.shiftType !== 'nachtbereitschaft') return false;
     const end = new Date(a.endDate); // typically a Saturday
-    const afterEndSun = addDays(end, 1); // Sunday following end
-    return isSameDay(date, end) || isSameDay(date, afterEndSun);
+    const daysDiff = Math.round((date.getTime() - end.getTime()) / (1000 * 60 * 60 * 24));
+    // daysDiff 0 = same Sat as nacht end (already blocked by conflicting-shift check)
+    // daysDiff 1 = Sun right after nacht
+    // daysDiff 7 = following Sat (first available Frühschicht weekend)
+    // daysDiff 8 = following Sun
+    return daysDiff >= 0 && daysDiff <= 8;
   });
 
   if (hasRecentNightWeek) return true;
@@ -192,8 +198,9 @@ export function isBlockedFromConsecutiveVerschieben(
 
 /**
  * Block consecutive Nachtbereitschaft weeks for the same employee.
- * If an employee had a nacht shift ending within 7 days before the new nacht
- * start date, they are blocked.
+ * Nacht runs Sat→Fri (7 days). The next available Nacht slot starts the
+ * following Saturday = daysDiff of 8 after endDate (Fri+8 = next Sat).
+ * Using <= 8 so the full immediately-following week is blocked.
  */
 export function isBlockedFromConsecutiveNacht(
   employee: Employee,
@@ -207,8 +214,8 @@ export function isBlockedFromConsecutiveNacht(
     const daysDiff = Math.round(
       (nachtStartDate.getTime() - nEnd.getTime()) / (1000 * 60 * 60 * 24)
     );
-    // Nacht ends Sat, next starts Sat → daysDiff = 7 → blocked
-    return daysDiff >= 1 && daysDiff <= 7;
+    // Nacht ends Fri, next nacht starts following Sat → daysDiff = 8 → blocked
+    return daysDiff >= 1 && daysDiff <= 8;
   });
 }
 
@@ -272,12 +279,12 @@ export function isBlockedFromNachtAfterVerschieben(
     if (a.shiftType !== 'verschieben') return false;
     if (!a.employees.includes(employee.id)) return false;
     const vEnd = new Date(a.endDate);
-    // Block if the nacht starts on the day directly after verschieben ends
-    // OR within the 7 calendar days that follow (= the entire next week)
+    // Verschieben ends Fri; the next Nacht slot starts the following Sat = daysDiff 8.
+    // Use <= 8 so the entire immediately-following week is blocked.
     const daysDiff = Math.round(
       (nachtStartDate.getTime() - vEnd.getTime()) / (1000 * 60 * 60 * 24)
     );
-    return daysDiff >= 1 && daysDiff <= 7;
+    return daysDiff >= 1 && daysDiff <= 8;
   });
 }
 
