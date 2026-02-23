@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runOptimiser, OptimiserConfig, DEFAULT_OPTIMISER_CONFIG } from '../utils/optimizer';
+import { runOptimiser } from '../utils/optimizer';
 import { computeFairnessScores } from '../utils/fairnessImpact';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig, generateAutomaticShiftPlan } from '../utils/scheduler';
 import { Employee } from '../types';
@@ -43,21 +43,26 @@ describe('Fairness Optimizer', () => {
     expect(result.iterations).toBeGreaterThan(0);
   });
 
-  it('respects hard rules — Ü55 employees only in verschieben', () => {
+  it('respects per-employee allowedShiftTypes', () => {
+    // Create employees with restricted shift types
+    const restrictedEmployees = employees.map((e, i) =>
+      i < 3 ? { ...e, allowedShiftTypes: ['verschieben' as const] } : e
+    );
+    const config = { ...DEFAULT_SCHEDULER_CONFIG, rules: { ...DEFAULT_SCHEDULER_CONFIG.rules, respectEmployeeShiftTypes: true } };
     const result = runOptimiser(
-      employees,
+      restrictedEmployees,
       2026,
       0,
       2,
-      DEFAULT_SCHEDULER_CONFIG,
+      config,
       { maxIterations: 20, targets: { overall: true, verschieben: true, nacht: true, frueh: true } }
     );
 
-    const over55Ids = new Set(employees.filter(e => e.isOver55).map(e => e.id));
+    const restrictedIds = new Set(restrictedEmployees.filter(e => e.allowedShiftTypes?.length === 1).map(e => e.id));
     for (const a of result.assignments) {
       if (a.shiftType !== 'verschieben') {
         for (const empId of a.employees) {
-          expect(over55Ids.has(empId)).toBe(false);
+          expect(restrictedIds.has(empId)).toBe(false);
         }
       }
     }
@@ -83,7 +88,7 @@ describe('Fairness Optimizer', () => {
         empSlots[empId].push({ start: s, end: e });
       }
     }
-    for (const [empId, slots] of Object.entries(empSlots)) {
+    for (const [_empId, slots] of Object.entries(empSlots)) {
       slots.sort((a, b) => a.start - b.start);
       for (let i = 1; i < slots.length; i++) {
         expect(slots[i].start).toBeGreaterThan(slots[i - 1].end);
@@ -215,7 +220,7 @@ describe('Fairness Optimizer', () => {
       }
     }
 
-    for (const [empId, slots] of Object.entries(empAssignments)) {
+    for (const [_empId, slots] of Object.entries(empAssignments)) {
       slots.sort((a, b) => a.start.getTime() - b.start.getTime());
       for (let i = 1; i < slots.length; i++) {
         const prev = slots[i - 1];

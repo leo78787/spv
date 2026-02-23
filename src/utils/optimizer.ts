@@ -20,6 +20,7 @@ import {
   Employee,
   ShiftAssignment,
   SchedulerConfig,
+  Department,
 } from '../types';
 import {
   generateAutomaticShiftPlan,
@@ -61,6 +62,7 @@ export interface OptimiserResult {
   assignments: ShiftAssignment[];
   scores: FairnessScores;
   iterations: number;
+  violations?: any[];
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -106,13 +108,14 @@ export function runOptimiser(
   months: number,
   schedulerConfig: SchedulerConfig,
   optimiserConfig: OptimiserConfig = DEFAULT_OPTIMISER_CONFIG,
-  onProgress?: (p: OptimiserProgress) => void
+  onProgress?: (p: OptimiserProgress) => void,
+  departments?: Department[]
 ): OptimiserResult {
   const { maxIterations, targets } = optimiserConfig;
 
   // ── Step 1: baseline with original order ──────────────────────────────
   const { assignments: baseline } = generateAutomaticShiftPlan(
-    employees, year, startMonth, months, schedulerConfig
+    employees, year, startMonth, months, schedulerConfig, departments
   );
   let bestAssignments = baseline;
   let bestScores = computeFairnessScores(employees, baseline);
@@ -141,7 +144,7 @@ export function runOptimiser(
     // ── generate a new random valid plan ─────────────────────────────
     const shuffled = shuffle([...employees]);
     const { assignments: candidate } = generateAutomaticShiftPlan(
-      shuffled, year, startMonth, months, schedulerConfig
+      shuffled, year, startMonth, months, schedulerConfig, departments
     );
 
     const candidateScores = computeFairnessScores(employees, candidate);

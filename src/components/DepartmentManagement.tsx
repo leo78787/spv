@@ -8,7 +8,7 @@ export function DepartmentManagement() {
   const { departments, employees, addDepartment, updateDepartment, deleteDepartment } = useStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [formData, setFormData] = useState({ name: '' });
+  const [formData, setFormData] = useState<{ name: string }>({ name: '' });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,7 +21,7 @@ export function DepartmentManagement() {
     } else {
       const newDepartment: Department = {
         id: generateId(),
-        name: formData.name
+        name: formData.name,
       };
       addDepartment(newDepartment);
     }
@@ -85,7 +85,7 @@ export function DepartmentManagement() {
               type="text"
               required
               value={formData.name}
-              onChange={e => setFormData({ name: e.target.value })}
+              onChange={e => setFormData({ ...formData, name: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
               placeholder="z.B. Abteilung A"
             />

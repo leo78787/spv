@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useStore } from '../store';
 import { ShiftType, SHIFT_LABELS, ShiftPreference } from '../types';
 

@@ -5,6 +5,7 @@ import {
   SchedulerConfig,
   DEFAULT_SCHEDULER_CONFIG,
   SchedulerViolation,
+  Department,
 } from '../types';
 
 // Re-export so existing callers (ShiftPlanning, tests) only need one import
@@ -279,17 +280,45 @@ export function isBlockedFromNachtAfterVerschieben(
     if (a.shiftType !== 'verschieben') return false;
     if (!a.employees.includes(employee.id)) return false;
     const vEnd = new Date(a.endDate);
-    // Verschieben ends Fri; the next Nacht slot starts the following Sat = daysDiff 8.
-    // Use <= 8 so the entire immediately-following week is blocked.
+    // Block nacht for 7 days after verschieben ends (one full rest week).
     const daysDiff = Math.round(
       (nachtStartDate.getTime() - vEnd.getTime()) / (1000 * 60 * 60 * 24)
     );
-    return daysDiff >= 1 && daysDiff <= 8;
+    return daysDiff >= 1 && daysDiff <= 7;
   });
 }
 
 /**
- * Get available employees for a shift, sorted by workload for that shift type
+ * Block Nachtbereitschaft when the employee has vacation starting within 7 days
+ * after the nacht period ends.  "No night shift in the week before vacation."
+ */
+export function isBlockedFromNachtBeforeVacation(
+  employee: Employee,
+  nachtEndDate: Date,
+): boolean {
+  const checkDay = (day: Date) => {
+    const dayStart = startOfDay(day);
+    const single = (employee.vacationDays || []).some(
+      vacDay => startOfDay(new Date(vacDay)).getTime() === dayStart.getTime()
+    );
+    if (single) return true;
+    return (employee.vacationRanges || []).some(r => {
+      const s = startOfDay(new Date(r.startDate));
+      const e = endOfDay(new Date(r.endDate));
+      return isWithinInterval(dayStart, { start: s, end: e });
+    });
+  };
+
+  // Check the 7 days following the nacht end date for vacation
+  for (let d = 1; d <= 7; d++) {
+    if (checkDay(addDays(nachtEndDate, d))) return true;
+  }
+  return false;
+}
+
+/**
+ * Get available employees for a shift, sorted by workload for that shift type.
+ * Optionally filters by department's allowed shift types.
  */
 export function getAvailableEmployeesSorted(
   employees: Employee[],
@@ -297,11 +326,18 @@ export function getAvailableEmployeesSorted(
   startDate: Date,
   endDate: Date,
   existingAssignments: ShiftAssignment[],
-  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG
+  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
+  _departments?: Department[]
 ): Employee[] {
   const { rules } = config;
+
   // Filter available employees
   const available = employees.filter(emp => {
+    // Per-employee shift-type restriction
+    if (rules.respectEmployeeShiftTypes) {
+      const allowed = emp.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+      if (!allowed.includes(shiftType)) return false;
+    }
     // Check all days in the shift period
     const days: Date[] = [];
     for (let d = new Date(startDate); d <= endDate; d = addDays(d, 1)) {
@@ -316,12 +352,6 @@ export function getAvailableEmployeesSorted(
     if (rules.respectAvoidancePreferences) {
       const wantsToAvoid = days.some(day => hasAvoidancePreference(emp, shiftType, day));
       if (wantsToAvoid) return false;
-    }
-
-    // Qualification / age rule: Mitarbeiter Ü55 und Mitarbeiter ohne L2 dürfen
-    // ausschließlich 'verschieben' (Mo–Fr) zugewiesen werden (toggleable).
-    if (rules.over55AndNoL2OnlyVerschieben) {
-      if ((emp.isOver55 || !emp.hasL2) && shiftType !== 'verschieben') return false;
     }
     
     // CRITICAL: Must not already have a shift on any of these days (always enforced)
@@ -373,6 +403,11 @@ export function getAvailableEmployeesSorted(
     // Frühschicht: forbid two consecutive weekend early shifts for the same employee (toggleable)
     if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht') {
       if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
+    }
+
+    // Nachtbereitschaft: forbid if employee has vacation starting within 7 days after nacht ends (toggleable)
+    if (rules.noNachtBeforeVacation && shiftType === 'nachtbereitschaft') {
+      if (isBlockedFromNachtBeforeVacation(emp, endDate)) return false;
     }
 
     // ── FORWARD-LOOKING CHECKS ───────────────────────────────────────────────
@@ -486,66 +521,7 @@ function selectEmployeesWithDepartmentDiversity(
   return selected;
 }
 
-/**
- * Select employees for 'verschieben' weeks, ensuring exactly `requiredOver55Count`
- * slots are filled by ü55 employees (best-effort: uses as many ü55 as available).
- * Department diversity is enforced across both sub-pools combined.
- */
-function selectVerschiebenEmployees(
-  availableEmployees: Employee[],
-  requiredCount: number,
-  requiredOver55Count: number,
-  useDiversity = true
-): Employee[] {
-  const over55Pool = availableEmployees.filter(e => e.isOver55);
-  const othersPool  = availableEmployees.filter(e => !e.isOver55);
-
-  // --- Select Ü55 slots with diversity ---
-  const selectedOver55: Employee[] = [];
-  const usedDepartments = new Set<string>();
-
-  if (useDiversity) {
-    // First pass: one per department
-    for (const emp of over55Pool) {
-      if (selectedOver55.length >= requiredOver55Count) break;
-      if (!usedDepartments.has(emp.department)) {
-        selectedOver55.push(emp);
-        usedDepartments.add(emp.department);
-      }
-    }
-    // Second pass: fill remaining
-    for (const emp of over55Pool) {
-      if (selectedOver55.length >= requiredOver55Count) break;
-      if (!selectedOver55.includes(emp)) selectedOver55.push(emp);
-    }
-  } else {
-    selectedOver55.push(...over55Pool.slice(0, requiredOver55Count));
-  }
-
-  // --- Select remaining slots from non-Ü55 pool, respecting already-used departments ---
-  const remainingCount = requiredCount - selectedOver55.length;
-  const selectedOthers: Employee[] = [];
-
-  if (useDiversity) {
-    // First pass: prefer departments not yet represented
-    for (const emp of othersPool) {
-      if (selectedOthers.length >= remainingCount) break;
-      if (!usedDepartments.has(emp.department)) {
-        selectedOthers.push(emp);
-        usedDepartments.add(emp.department);
-      }
-    }
-    // Second pass: fill remaining ignoring department
-    for (const emp of othersPool) {
-      if (selectedOthers.length >= remainingCount) break;
-      if (!selectedOthers.includes(emp)) selectedOthers.push(emp);
-    }
-  } else {
-    selectedOthers.push(...othersPool.slice(0, remainingCount));
-  }
-
-  return [...selectedOver55, ...selectedOthers];
-}
+// selectVerschiebenEmployees removed – per-employee allowedShiftTypes replaces Ü55 pool logic
 
 /**
  * Generate all shift periods for a year
@@ -655,7 +631,7 @@ export interface AutoScheduleResult {
  * the required staffing levels from the config.
  */
 export function detectViolations(
-  employees: Employee[],
+  _employees: Employee[],
   assignments: ShiftAssignment[],
   config: SchedulerConfig,
   startYear: number,
@@ -679,12 +655,12 @@ export function detectViolations(
     noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
     noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
     noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
-    over55AndNoL2OnlyVerschieben: 'Ü55 / kein L2 nur versetzt',
+    noNachtBeforeVacation: 'Keine Nacht in der Woche vor Urlaub',
+    respectEmployeeShiftTypes: 'Erlaubte Schichttypen pro MA',
     noWeekendAroundVacation: 'Kein WE um Urlaub',
     noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',
     respectAvoidancePreferences: 'Vermeidungspräferenzen',
     departmentDiversity: 'Abteilungsvielfalt',
-    reserveOver55SlotsForVerschieben: 'Ü55-Slot-Reservierung',
   };
 
   for (const [shiftType, periodList] of periods.entries()) {
@@ -741,13 +717,14 @@ export function generateAutomaticShiftPlan(
   startYear: number,
   startMonth = 0, // 0 = Januar
   months = 12,
-  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG
+  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
+  departments?: Department[]
 ): AutoScheduleResult {
   const assignments: ShiftAssignment[] = [];
   const violations: SchedulerViolation[] = [];
   const startDate = new Date(startYear, startMonth, 1);
   const periods = generateShiftPeriodsForRange(startDate, months);
-  const { shiftCounts, over55VerschiebenSlots, rules } = config;
+  const { shiftCounts, rules } = config;
 
   // Build a flat list of all periods with their requirements, then sort
   // chronologically by start date, so each nacht week is already committed to the
@@ -782,12 +759,12 @@ export function generateAutomaticShiftPlan(
     noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
     noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
     noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
-    over55AndNoL2OnlyVerschieben: 'Ü55 / kein L2 nur versetzt',
+    noNachtBeforeVacation: 'Keine Nacht in der Woche vor Urlaub',
+    respectEmployeeShiftTypes: 'Erlaubte Schichttypen pro MA',
     noWeekendAroundVacation: 'Kein WE um Urlaub',
     noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',
     respectAvoidancePreferences: 'Vermeidungspräferenzen',
     departmentDiversity: 'Abteilungsvielfalt',
-    reserveOver55SlotsForVerschieben: 'Ü55-Slot-Reservierung',
   };
   
   for (const period of allPeriods) {
@@ -801,14 +778,30 @@ export function generateAutomaticShiftPlan(
         period.startDate,
         period.endDate,
         assignments,
-        config
+        config,
+        departments
       );
       
-      // Select employees
+      // Select employees — with Ü55 slot reservation for verschieben
       const useDiversity = rules.departmentDiversity;
-      const selected = (shiftType === 'verschieben' && rules.reserveOver55SlotsForVerschieben)
-        ? selectVerschiebenEmployees(available, requiredCount, over55VerschiebenSlots, useDiversity)
-        : selectEmployeesWithDepartmentDiversity(available, requiredCount, useDiversity);
+      let selected: Employee[];
+
+      if (shiftType === 'verschieben' && config.over55VerschiebenSlots > 0) {
+        // Ensure at least N Ü55 employees per verschieben week (minimum, not exact)
+        const over55Available = available.filter(e => e.isOver55);
+        const minOver55 = Math.min(config.over55VerschiebenSlots, requiredCount);
+
+        // First fill the minimum Ü55 slots
+        const over55Selected = selectEmployeesWithDepartmentDiversity(over55Available, minOver55, useDiversity);
+        // Then fill remaining slots from ALL remaining available employees (preserving workload order)
+        const remainingCount = requiredCount - over55Selected.length;
+        const selectedIds = new Set(over55Selected.map(e => e.id));
+        const remainingPool = available.filter(e => !selectedIds.has(e.id));
+        const restSelected = selectEmployeesWithDepartmentDiversity(remainingPool, remainingCount, useDiversity);
+        selected = [...over55Selected, ...restSelected];
+      } else {
+        selected = selectEmployeesWithDepartmentDiversity(available, requiredCount, useDiversity);
+      }
 
       if (selected.length >= requiredCount) {
         assignments.push({
@@ -821,19 +814,6 @@ export function generateAutomaticShiftPlan(
         });
       } else {
         // Determine which active rules are causing the shortage
-        const allCandidates = employees.filter(emp => {
-          // Vacation / conflict check only (always-on rules)
-          const days: Date[] = [];
-          for (let d = new Date(period.startDate); d <= period.endDate; d = addDays(d, 1)) days.push(new Date(d));
-          if (!days.every(day => canWorkOnDate(emp, day, false))) return false;
-          const hasConflictingShift = assignments.some(a => {
-            if (!a.employees.includes(emp.id)) return false;
-            const aS = new Date(a.startDate), aE = new Date(a.endDate);
-            return days.some(day => day >= aS && day <= aE);
-          });
-          return !hasConflictingShift;
-        });
-        const shortage = requiredCount - selected.length;
         const blockedRules: string[] = [];
         const activatedRuleKeys = (Object.keys(rules) as Array<keyof typeof rules>).filter(k => rules[k]);
         for (const ruleKey of activatedRuleKeys) {
@@ -887,6 +867,216 @@ export interface EqualityResult {
   ranges: Record<ShiftType, number>;
 }
 
+export interface TotalBalanceResult {
+  assignments: ShiftAssignment[];
+  iterations: number;
+  improvements: number;
+  ranges: Record<string, number>;       // per pool & shift-type, e.g. "L2:verschieben"
+  totalRange: Record<string, number>;   // per employee-type group
+}
+
+/**
+ * Run the total-balance optimiser.
+ *
+ * Takes the equality-optimised baseline and tries to reduce the **total-shift
+ * range** (max − min of total assignments across ALL shift types) per employee
+ * type group.
+ *
+ * Constraint: the per-shift-type range **per employee-type pool** may NEVER
+ * increase compared to the input baseline — only the total range across
+ * types is reduced.
+ *
+ * Works by finding donors (most total shifts) and receivers (fewest total
+ * shifts) within each employee-type pool, then attempting to move a single
+ * assignment slot from donor to receiver (any shift type) while respecting
+ * all active scheduler rules.
+ */
+export function runTotalBalanceOptimiser(
+  employees: Employee[],
+  baselineAssignments: ShiftAssignment[],
+  config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
+  maxIterations = 500,
+  departments?: Department[],
+): TotalBalanceResult {
+  // Deep-clone
+  let assignments = baselineAssignments.map(a => ({
+    ...a,
+    employees: [...a.employees],
+  }));
+
+  const { rules: _rules } = config;
+  const shiftTypes: ShiftType[] = ['verschieben', 'nachtbereitschaft', 'fruehschicht'];
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+
+  const countFor = (empId: string, st: ShiftType, a: ShiftAssignment[]) =>
+    a.filter(x => x.shiftType === st && x.employees.includes(empId)).length;
+
+  const totalCountFor = (empId: string, a: ShiftAssignment[]) =>
+    a.filter(x => x.employees.includes(empId)).length;
+
+  function perTypeRange(pool: Employee[], a: ShiftAssignment[]): Record<ShiftType, number> {
+    const r: Record<string, number> = {};
+    for (const st of shiftTypes) {
+      if (pool.length === 0) { r[st] = 0; continue; }
+      const counts = pool.map(e => countFor(e.id, st, a));
+      r[st] = Math.max(...counts) - Math.min(...counts);
+    }
+    return r as Record<ShiftType, number>;
+  }
+
+  function computeTotalRange(pool: Employee[], a: ShiftAssignment[]): number {
+    if (pool.length === 0) return 0;
+    const counts = pool.map(e => totalCountFor(e.id, a));
+    return Math.max(...counts) - Math.min(...counts);
+  }
+
+  function canTakeSlot(emp: Employee, assignment: ShiftAssignment, assgn: ShiftAssignment[]): boolean {
+    if (assignment.employees.includes(emp.id)) return false;
+    const otherAssignments = assgn.filter(a => a.id !== assignment.id);
+    const available = getAvailableEmployeesSorted(
+      [emp], assignment.shiftType,
+      new Date(assignment.startDate), new Date(assignment.endDate),
+      otherAssignments, config, departments,
+    );
+    return available.length > 0;
+  }
+
+  // ── employee-type pools ──────────────────────────────────────────────────
+  // Group employees by their attribute signature (allowedShiftTypes + isOver55)
+  // so each pool is balanced independently.
+
+  const groupKey = (e: Employee): string => {
+    const allowed = [...(e.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'])].sort().join(',');
+    return `${allowed}|${e.isOver55 ? '55+' : '<55'}`;
+  };
+
+  const poolMap = new Map<string, Employee[]>();
+  for (const emp of employees) {
+    const key = groupKey(emp);
+    if (!poolMap.has(key)) poolMap.set(key, []);
+    poolMap.get(key)!.push(emp);
+  }
+
+  const pools: { label: string; pool: Employee[] }[] = Array.from(poolMap.entries()).map(
+    ([key, pool]) => ({ label: key, pool })
+  );
+
+  // Record baseline per-type ranges PER POOL (must never be worsened)
+  const baselineRangesPerPool: Map<string, Record<ShiftType, number>> = new Map();
+  for (const { label, pool } of pools) {
+    baselineRangesPerPool.set(label, perTypeRange(pool, assignments));
+  }
+
+  let improvements = 0;
+  let iter = 0;
+
+  for (iter = 0; iter < maxIterations; iter++) {
+    let madeProgress = false;
+
+    for (const { pool } of pools) {
+      if (pool.length < 2) continue;
+
+      // Compute total counts for this pool
+      const counted = pool.map(e => ({ emp: e, total: totalCountFor(e.id, assignments) }));
+      counted.sort((a, b) => a.total - b.total);
+
+      const minTotal = counted[0].total;
+      const maxTotal = counted[counted.length - 1].total;
+      if (maxTotal - minTotal <= 1) continue;
+
+      const donors = counted.filter(c => c.total === maxTotal);
+      const receivers = counted.filter(c => c.total === minTotal);
+
+      // Shuffle for non-determinism
+      for (let i = donors.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [donors[i], donors[j]] = [donors[j], donors[i]];
+      }
+
+      let swapped = false;
+      for (const donor of donors) {
+        if (swapped) break;
+
+        // Try every shift type the donor has assignments for
+        for (const st of shiftTypes) {
+          if (swapped) break;
+
+          const donorAssigs = assignments.filter(
+            a => a.shiftType === st && a.employees.includes(donor.emp.id)
+          );
+
+          for (const assignment of donorAssigs) {
+            if (swapped) break;
+            const shuffledReceivers = [...receivers];
+            for (let i = shuffledReceivers.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [shuffledReceivers[i], shuffledReceivers[j]] = [shuffledReceivers[j], shuffledReceivers[i]];
+            }
+
+            for (const receiver of shuffledReceivers) {
+              if (receiver.emp.id === donor.emp.id) continue;
+              if (assignment.employees.includes(receiver.emp.id)) continue;
+
+              // Build temp assignments with donor removed
+              const tempAssignments = assignments.map(a => {
+                if (a.id !== assignment.id) return a;
+                return { ...a, employees: a.employees.filter(id => id !== donor.emp.id) };
+              });
+
+              if (!canTakeSlot(receiver.emp, assignment, tempAssignments)) continue;
+
+              // Tentatively apply swap and check per-type ranges
+              const tentative = tempAssignments.map(a => {
+                if (a.id !== assignment.id) return a;
+                return { ...a, employees: [...a.employees, receiver.emp.id] };
+              });
+
+              // CONSTRAINT: no per-type range PER POOL may increase
+              let worsens = false;
+              for (const { label: pLabel, pool: pPool } of pools) {
+                const baseR = baselineRangesPerPool.get(pLabel)!;
+                const newR = perTypeRange(pPool, tentative);
+                if (shiftTypes.some(t => newR[t] > baseR[t])) { worsens = true; break; }
+              }
+              if (worsens) continue;
+
+              // Accept: execute swap on real assignments
+              const target = assignments.find(a => a.id === assignment.id)!;
+              target.employees = target.employees.filter(id => id !== donor.emp.id);
+              target.employees.push(receiver.emp.id);
+              improvements++;
+              swapped = true;
+              madeProgress = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!madeProgress) { iter++; break; }
+  }
+
+  // Compute final total ranges per pool
+  const totalRangeMap: Record<string, number> = {};
+  for (const { label, pool } of pools) {
+    totalRangeMap[label] = computeTotalRange(pool, assignments);
+  }
+
+  return {
+    assignments,
+    iterations: iter,
+    improvements,
+    ranges: Object.fromEntries(
+      pools.flatMap(({ label, pool }) =>
+        shiftTypes.map(t => [`${label}:${t}`, perTypeRange(pool, assignments)[t]])
+      )
+    ) as any,
+    totalRange: totalRangeMap,
+  };
+}
+
 /**
  * Run the equality optimiser.
  *
@@ -894,8 +1084,7 @@ export interface EqualityResult {
  * range" (max − min assignments per employee) for each shift type by swapping
  * employees between assignments.
  *
- * For 'verschieben' with reserveOver55SlotsForVerschieben enabled, it balances
- * the Ü55 pool and the non-Ü55 pool separately.
+ * For 'verschieben' it balances all employees together.
  *
  * All active scheduler rules are respected: a swap is only accepted if the
  * receiving employee passes getAvailableEmployeesSorted for that period.
@@ -906,6 +1095,7 @@ export function runEqualityOptimiser(
   config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
   maxIterations = 500,
   onProgress?: (p: EqualityProgress) => void,
+  departments?: Department[],
 ): EqualityResult {
   // Deep-clone assignments so the baseline is not mutated
   let assignments = baselineAssignments.map(a => ({
@@ -913,7 +1103,7 @@ export function runEqualityOptimiser(
     employees: [...a.employees],
   }));
 
-  const { rules } = config;
+  const { rules: _rules } = config;
 
   const shiftTypes: ShiftType[] = ['verschieben', 'nachtbereitschaft', 'fruehschicht'];
 
@@ -933,25 +1123,18 @@ export function runEqualityOptimiser(
     return result as Record<ShiftType, number>;
   }
 
-  // For verschieben with Ü55-slots: separate pools
+  // All employees that can work a given shift type
   function relevantPool(st: ShiftType): Employee[] {
-    if (st === 'verschieben') return employees; // ranges computed on full pool first
-    // nacht/früh: only eligible employees (not Ü55, has L2 — when rule active)
-    if (rules.over55AndNoL2OnlyVerschieben) {
-      return employees.filter(e => !e.isOver55 && e.hasL2);
-    }
-    return employees;
+    return employees.filter(e => {
+      const allowed = e.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+      return allowed.includes(st);
+    });
   }
 
-  // For verschieben, optionally split into two sub-pools
+  // Pools for verschieben balancing — only employees allowed for verschieben
   function verschiebenPools(): Employee[][] {
-    if (rules.reserveOver55SlotsForVerschieben) {
-      return [
-        employees.filter(e => e.isOver55),
-        employees.filter(e => !e.isOver55),
-      ];
-    }
-    return [employees];
+    const pool = relevantPool('verschieben');
+    return pool.length > 0 ? [pool] : [];
   }
 
   // Check if an employee can be added to a specific assignment without
@@ -969,6 +1152,7 @@ export function runEqualityOptimiser(
       new Date(assignment.endDate),
       otherAssignments,
       config,
+      departments,
     );
     return available.length > 0;
   }

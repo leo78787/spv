@@ -1,19 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { EmployeeManagement } from './components/EmployeeManagement';
 import { DepartmentManagement } from './components/DepartmentManagement';
 import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
-import { ViewTab } from './types';
-import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut } from 'lucide-react';
+import { ViewTab, DEFAULT_TAB_VISIBILITY } from './types';
+import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight } from 'lucide-react';
+
+const SwapManagement = lazy(() => import('./components/SwapManagement').then(m => ({ default: m.SwapManagement })));
 import { HolidaySettings } from './components/HolidaySettings';
 import { Login } from './components/Login';
-import { getAuthToken, clearAuthToken, loadFromServer } from './store';
+import { getAuthToken, clearAuthToken, loadFromServer, useStore } from './store';
 
 function App() {
-  const [activeTab, setActiveTab] = useState<ViewTab>('employees');
+  const [activeTab, setActiveTab] = useState<ViewTab>(() => {
+    const saved = localStorage.getItem('spm-last-tab');
+    return (saved as ViewTab) || 'employees';
+  });
   const [showHolidaySettings, setShowHolidaySettings] = useState(false);
   const [stateLoaded, setStateLoaded] = useState(false);
+
+  // Persist last visited tab
+  const handleSetTab = (tab: ViewTab) => {
+    setActiveTab(tab);
+    localStorage.setItem('spm-last-tab', tab);
+  };
 
   // server-based auth — the auth token is stored in localStorage
   const [authenticated, setAuthenticated] = useState<boolean>(() => !!getAuthToken());
@@ -44,13 +55,21 @@ function App() {
   }, [authenticated]);
 
   
-  const tabs = [
+  const swapSettings = useStore(s => s.swapSettings);
+  const tabVisibility = useStore(s => s.tabVisibility) || DEFAULT_TAB_VISIBILITY;
+
+  const allTabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
     { id: 'departments' as ViewTab, label: 'Abteilungen', icon: Building2 },
     { id: 'planning' as ViewTab, label: 'Planung', icon: ClipboardList },
     { id: 'calendar' as ViewTab, label: 'Kalender', icon: Calendar },
     { id: 'kpis' as ViewTab, label: 'Fairness KPIs', icon: BarChart3 },
+    ...(swapSettings.enabled ? [{ id: 'swaps' as ViewTab, label: 'Tauschen', icon: ArrowLeftRight }] : []),
   ];
+
+  const tabs = allTabs.filter(t => {
+    return (tabVisibility as any)[t.id] !== false;
+  });
   
   const SettingsButton = () => (
     <button onClick={() => setShowHolidaySettings(true)} title="Einstellungen: Feiertage verwalten" className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600">
@@ -84,7 +103,7 @@ function App() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">Schichtplan Manager</h1>
-                <p className="text-sm text-gray-600">Intelligente Schichtplanung für Ihr Unternehmen</p>
+                <p className="text-sm text-gray-600">Der Schichtplanplaner</p>
               </div>
             </div>
           </div>
@@ -102,7 +121,7 @@ function App() {
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => handleSetTab(tab.id)}
                       className={`
                         flex items-center gap-2 px-6 py-4 font-medium transition-colors relative
                         ${isActive 
@@ -149,6 +168,11 @@ function App() {
         {activeTab === 'planning' && <ShiftPlanning />}
         {activeTab === 'calendar' && <CalendarView />}
         {activeTab === 'kpis' && <FairnessKPIs />}
+        {activeTab === 'swaps' && swapSettings.enabled && (
+          <Suspense fallback={<div className="p-6 text-gray-500">Lade Tausch-Verwaltung…</div>}>
+            <SwapManagement />
+          </Suspense>
+        )}
       </main>
       
       {/* Holiday settings modal */}

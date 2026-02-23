@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore, getAuthToken } from '../store';
 import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
-import { generateId, parseBoolean, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
+import { generateId, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
 import { UserPlus, Trash2, Edit2, Save, X, Mail, Send, RefreshCw, CheckCircle, AlertCircle, Lock, Unlock } from 'lucide-react';
 import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isSameDay } from 'date-fns';
 import * as XLSX from 'xlsx-js-style';
@@ -21,8 +21,7 @@ export function EmployeeManagement() {
     name: '',
     email: '',
     department: departments[0]?.id || '',
-    isOver55: false,
-    hasL2: false,
+    allowedShiftTypes: ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
     vacationDays: [],
     vacationRanges: [],
     preferences: []
@@ -34,6 +33,10 @@ export function EmployeeManagement() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [employeesLocked, setEmployeesLocked] = useState(false);
   const [lockLoading, setLockLoading] = useState(false);
+
+  // Delete confirmation modal state
+  const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
+  const [deleteNameInput, setDeleteNameInput] = useState('');
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToast({ type, text });
@@ -92,8 +95,7 @@ export function EmployeeManagement() {
         name: formData.name || '',
         email: formData.email || undefined,
         department: formData.department || departments[0]?.id || '',
-        isOver55: formData.isOver55 || false,
-        hasL2: formData.hasL2 || false,
+        allowedShiftTypes: formData.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
         vacationDays: formData.vacationDays || [],
         vacationRanges: formData.vacationRanges || [],
         preferences: formData.preferences || []
@@ -109,8 +111,7 @@ export function EmployeeManagement() {
       name: '',
       email: '',
       department: departments[0]?.id || '',
-      isOver55: false,
-      hasL2: false,
+      allowedShiftTypes: ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
       vacationDays: [],
       preferences: []
     });
@@ -119,6 +120,10 @@ export function EmployeeManagement() {
   };
 
   const handleInvite = async (empId: string) => {
+    // Save email first if it hasn't been persisted yet
+    if (formData.email) {
+      updateEmployee(empId, { email: formData.email });
+    }
     setInvitingId(empId);
     try {
       const token = getAuthToken();
@@ -212,13 +217,13 @@ export function EmployeeManagement() {
 
   // --- Excel/CSV template + upload support ---
   const downloadTemplate = (type: 'csv' | 'xlsx' = 'xlsx') => {
-    const headers = ['name','email','department','isOver55','hasL2','vacationRanges'];
+    const headers = ['name','email','department','isOver55','allowedShiftTypes','vacationRanges'];
     const sample = [{
       name: 'Max Mustermann',
       email: 'max@example.de',
       department: departments[0]?.name || 'Abteilung A',
-      isOver55: 'false',
-      hasL2: 'true',
+      isOver55: 'nein',
+      allowedShiftTypes: 'fruehschicht;verschieben;nachtbereitschaft',
       vacationRanges: '2026-02-20:2026-02-24;2026-07-01:2026-07-03'
     }];
 
@@ -259,11 +264,15 @@ export function EmployeeManagement() {
       const departmentName = String(row.department || row.Department || '').trim();
       if (!name) errors.push('Name fehlt');
       if (!departmentName) errors.push('Abteilung fehlt');
-      const isOver55 = parseBoolean(row.isOver55 || row.IsOver55 || row.Ü55 || row.ue55);
-      const hasL2 = parseBoolean(row.hasL2 || row.HasL2 || row.L2);
+      const allowedShiftTypesRaw = String(row.allowedShiftTypes || row.AllowedShiftTypes || row.Schichttypen || '').trim();
+      const allowedShiftTypes: ShiftType[] = allowedShiftTypesRaw
+        ? (allowedShiftTypesRaw.split(';').map(s => s.trim()).filter(s => ['fruehschicht','verschieben','nachtbereitschaft'].includes(s)) as ShiftType[])
+        : ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+      const isOver55Raw = String(row.isOver55 || row.IsÜ55 || row['Ü55'] || '').trim().toLowerCase();
+      const isOver55 = ['ja', 'yes', 'true', '1', 'x'].includes(isOver55Raw);
       const vacationRanges = parseVacationRanges(row.vacationRanges || row.VacationRanges || row.vacations || row.Urlaub);
       const duplicateInExisting = existingNames.has(lowerName);
-      return { rowIndex: index + 2, name, lowerName, email, departmentName, isOver55, hasL2, vacationRanges, errors, duplicateInExisting };
+      return { rowIndex: index + 2, name, lowerName, email, departmentName, allowedShiftTypes, isOver55, vacationRanges, errors, duplicateInExisting };
     });
 
     // mark duplicates within the import file
@@ -315,8 +324,8 @@ export function EmployeeManagement() {
         name: emp.name,
         email: emp.email,
         department: deptObj ? deptObj.id : 'dept-unknown',
-        isOver55: emp.isOver55,
-        hasL2: emp.hasL2,
+        isOver55: !!emp.isOver55,
+        allowedShiftTypes: emp.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
         vacationDays: [],
         vacationRanges: emp.vacationRanges,
         preferences: []
@@ -561,7 +570,25 @@ export function EmployeeManagement() {
             {employeesLocked ? 'Änderungen gesperrt' : 'Änderungen sperren'}
           </button>
           <button
-            onClick={() => setShowAddForm(!showAddForm)}
+            onClick={() => {
+              if (showAddForm) {
+                resetForm();
+              } else {
+                // Reset form to blank state before opening
+                setFormData({
+                  name: '',
+                  email: '',
+                  department: departments[0]?.id || '',
+                  isOver55: false,
+                  allowedShiftTypes: ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
+                  vacationDays: [],
+                  vacationRanges: [],
+                  preferences: []
+                });
+                setEditingId(null);
+                setShowAddForm(true);
+              }
+            }}
             className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
           >
             {showAddForm ? <X size={20} /> : <UserPlus size={20} />}
@@ -661,26 +688,41 @@ export function EmployeeManagement() {
             </div>
           </div>
           
-          <div className="flex gap-6 mb-4">
-            <label className="flex items-center gap-2">
+          <div className="mb-4">
+            <label className="flex items-center gap-2 mb-3">
               <input
                 type="checkbox"
-                checked={formData.isOver55}
+                checked={!!formData.isOver55}
                 onChange={e => setFormData({ ...formData, isOver55: e.target.checked })}
-                className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                className="w-4 h-4 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
               />
-              <span className="text-sm font-medium text-gray-700">Über 55 Jahre</span>
+              <span className="text-sm font-medium text-gray-700">Ü55 Mitarbeiter</span>
             </label>
-            
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={formData.hasL2}
-                onChange={e => setFormData({ ...formData, hasL2: e.target.checked })}
-                className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-              />
-              <span className="text-sm font-medium text-gray-700">L2-Zertifizierung</span>
-            </label>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Erlaubte Schichttypen</label>
+            <div className="flex gap-4">
+              {(['fruehschicht', 'verschieben', 'nachtbereitschaft'] as ShiftType[]).map(st => (
+                <label key={st} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={(formData.allowedShiftTypes || []).includes(st)}
+                    onChange={e => {
+                      const current = formData.allowedShiftTypes || [];
+                      setFormData({
+                        ...formData,
+                        allowedShiftTypes: e.target.checked
+                          ? [...current, st]
+                          : current.filter(t => t !== st)
+                      });
+                    }}
+                    className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">{SHIFT_LABELS[st]}</span>
+                </label>
+              ))}
+            </div>
           </div>
           
 {/* Urlaubszeiträume (inkl. eintägiger Bereiche) */}
@@ -1037,7 +1079,7 @@ export function EmployeeManagement() {
                     <Edit2 size={16} />
                   </button>
                   <button
-                    onClick={() => deleteEmployee(employee.id)}
+                    onClick={() => { setDeleteTarget(employee); setDeleteNameInput(''); }}
                     className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"
                   >
                     <Trash2 size={16} />
@@ -1048,10 +1090,12 @@ export function EmployeeManagement() {
               <div className="space-y-1 text-sm">
                 <div className="flex flex-wrap gap-2">
                   {employee.isOver55 && (
-                    <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs">Ü55</span>
+                    <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs font-semibold">Ü55</span>
                   )}
-                  {employee.hasL2 && (
-                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded-md text-xs">L2</span>
+                  {(employee.allowedShiftTypes && employee.allowedShiftTypes.length < 3) && (
+                    <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs">
+                      Nur: {employee.allowedShiftTypes.map(t => SHIFT_LABELS[t]).join(', ')}
+                    </span>
                   )}
                   {employee.portalStatus === 'invited' && (
                     <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-xs">Eingeladen</span>
@@ -1100,6 +1144,58 @@ export function EmployeeManagement() {
         <div className="text-center py-12 text-gray-500">
           <p>Noch keine Mitarbeiter angelegt.</p>
           <p className="text-sm">Klicken Sie auf "Mitarbeiter hinzufügen" um zu beginnen.</p>
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-red-700 mb-3">Mitarbeiter löschen</h3>
+            <p className="text-gray-600 mb-4">
+              Möchten Sie <strong>{deleteTarget.name}</strong> wirklich unwiderruflich löschen?
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Geben Sie den Namen <span className="font-semibold text-red-600">{deleteTarget.name}</span> zur Bestätigung ein:
+              </label>
+              <input
+                type="text"
+                value={deleteNameInput}
+                onChange={e => setDeleteNameInput(e.target.value)}
+                placeholder={deleteTarget.name}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && deleteNameInput === deleteTarget.name) {
+                    deleteEmployee(deleteTarget.id);
+                    setDeleteTarget(null);
+                    setDeleteNameInput('');
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setDeleteTarget(null); setDeleteNameInput(''); }}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={() => {
+                  if (deleteNameInput === deleteTarget.name) {
+                    deleteEmployee(deleteTarget.id);
+                    setDeleteTarget(null);
+                    setDeleteNameInput('');
+                  }
+                }}
+                disabled={deleteNameInput !== deleteTarget.name}
+                className={`px-4 py-2 rounded-md text-white font-medium ${deleteNameInput === deleteTarget.name ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-400 cursor-not-allowed'}`}
+              >
+                Endgültig löschen
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

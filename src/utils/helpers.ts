@@ -103,9 +103,10 @@ export function processImportPreview(parsedRows: Array<any>, existingEmployees: 
     employeesToAdd.push({
       originalName: r.name,
       name: uniqueName,
+      email: r.email,
       departmentName: deptName,
       isOver55: !!r.isOver55,
-      hasL2: !!r.hasL2,
+      allowedShiftTypes: r.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
       vacationRanges: r.vacationRanges || []
     });
   });

@@ -141,7 +141,7 @@ function CountImpactBadges({
 }
 
 export function ShiftPlanning() {
-  const { employees, departments, shiftPlan, createShiftPlan, addEmployee, addDepartment, setShiftPlan, updateShiftAssignment, addLabel, addCalendarLabel, acknowledgeViolation } = useStore();
+  const { employees, departments, shiftPlan, addEmployee, addDepartment, setShiftPlan, addLabel, addCalendarLabel, acknowledgeViolation } = useStore();
   const [selectedYear, setSelectedYear] = useState(() => shiftPlan?.year ?? new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number>(() => shiftPlan?.startMonth ?? 0);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -187,11 +187,23 @@ export function ShiftPlanning() {
     assignmentCount: number;
   } | null>(null);
 
+  // Modal dialog states
+  const [releaseWarningOpen, setReleaseWarningOpen] = useState(false);
+  const [deletePlanOpen, setDeletePlanOpen] = useState(false);
+
   // ── Equality optimizer state ───────────────────────────────────────────────
   const [isEqualizing, setIsEqualizing] = useState(false);
   const [equalityResult, setEqualityResult] = useState<{
     improvements: number;
     ranges: Record<string, number>;
+  } | null>(null);
+
+  // ── Total-balance optimizer state (Step 2b) ────────────────────────────────
+  const [isTotalBalancing, setIsTotalBalancing] = useState(false);
+  const [totalBalanceResult, setTotalBalanceResult] = useState<{
+    improvements: number;
+    ranges: Record<string, number>;
+    totalRange: Record<string, number>;
   } | null>(null);
 
   // ── Impact factor state ───────────────────────────────────────────────────
@@ -248,7 +260,7 @@ export function ShiftPlanning() {
 
     // Build a compact, stable snapshot of the inputs we care about
     const empSummary = employees
-      .map(e => ({ id: e.id, isOver55: e.isOver55, hasL2: e.hasL2, department: e.department, prefs: e.preferences?.length ?? 0 }))
+      .map(e => ({ id: e.id, allowedShiftTypes: e.allowedShiftTypes, department: e.department, prefs: e.preferences?.length ?? 0 }))
       .sort((a, b) => a.id.localeCompare(b.id));
     const snapshot = JSON.stringify({ employees: empSummary, schedulerConfig, selectedYear, selectedMonth });
 
@@ -288,9 +300,6 @@ export function ShiftPlanning() {
   const setRule = (rule: keyof SchedulerConfig['rules'], val: boolean) =>
     setSchedulerConfig(c => ({ ...c, rules: { ...c.rules, [rule]: val } }));
 
-  const setOver55Slots = (val: number) =>
-    setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: val }));
-
   // Persist current schedulerConfig to module cache so edits survive unmounts
   useEffect(() => {
     moduleCachedSchedulerConfig = schedulerConfig;
@@ -305,6 +314,35 @@ export function ShiftPlanning() {
       });
       return;
     }
+
+    // Warn if plan is currently released
+    try {
+      const token = getAuthToken();
+      const relResp = await fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } });
+      if (relResp.ok) {
+        const { released } = await relResp.json();
+        if (released) {
+          setReleaseWarningOpen(true);
+          return;
+        }
+      }
+    } catch { /* ignore release-check errors */ }
+
+    doGenerate();
+  };
+
+  const doGenerate = async () => {
+    setReleaseWarningOpen(false);
+
+    // Revoke release if currently released
+    try {
+      const token = getAuthToken();
+      await fetch('/api/plan/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ released: false }),
+      });
+    } catch { /* ignore */ }
 
     setIsGenerating(true);
     setGenerationResult(null);
@@ -455,6 +493,67 @@ export function ShiftPlanning() {
     }
   }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
 
+  // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
+  const handleTotalBalance = useCallback(async () => {
+    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    setIsTotalBalancing(true);
+    setTotalBalanceResult(null);
+    const token = getAuthToken();
+    try {
+      const resp = await fetch('/api/optimize-total-balance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          employees,
+          schedulerConfig,
+          baselineAssignments: shiftPlan.assignments,
+          maxIterations: 500,
+          year: selectedYear,
+          startMonth: selectedMonth,
+          months: 12,
+        }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const revivedAssignments = (data.assignments || []).map((a: any) => ({
+        ...a,
+        startDate: new Date(a.startDate),
+        endDate: new Date(a.endDate),
+      }));
+      const revivedViolations = (data.violations || []).map((v: any) => ({
+        ...v,
+        startDate: new Date(v.startDate),
+        endDate: new Date(v.endDate),
+      }));
+      setShiftPlan({
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations: revivedViolations,
+        assignments: revivedAssignments,
+        algorithm: 'gesamt-balanciert',
+      } as any);
+      setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
+      setGenerationResult({
+        success: true,
+        message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+        assignmentCount: revivedAssignments.length,
+      });
+    } catch (err) {
+      setGenerationResult({
+        success: false,
+        message: `Gesamt-Balancierung fehlgeschlagen: ${err}`,
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsTotalBalancing(false);
+    }
+  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+
   const planStart = new Date(selectedYear, selectedMonth, 1);
   const planEnd = new Date(selectedYear, selectedMonth + (shiftPlan?.months ?? 12), 0); // last day of the n-month range
   const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
@@ -511,8 +610,9 @@ export function ShiftPlanning() {
             id: generateId(),
             name: ie.name,
             department: deptMap[ie.department] || departments[0]?.id || '',
-            isOver55: !!ie.isOver55,
-            hasL2: !!ie.hasL2,
+            isOver55: false,
+            hasL2: false,
+            allowedShiftTypes: ie.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
             vacationDays: (ie.vacationDays || []).map((d: any) => new Date(d)),
             vacationRanges: (ie.vacationRanges || []).map((r: any) => ({ startDate: new Date(r.startDate), endDate: new Date(r.endDate) })),
             preferences: (ie.preferences || []).map((p: any) => ({ ...p, startDate: new Date(p.startDate), endDate: new Date(p.endDate) }))
@@ -663,22 +763,22 @@ export function ShiftPlanning() {
                   <CountImpactBadges ci={impactFactors?.counts.fruehschicht} baseline={impactFactors?.baseline} loading={isComputingImpact} />
                 </div>
 
-                {/* Ü55-Slots */}
-                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+                {/* Shift count inputs end here */}
+
+                {/* Ü55 Verschieben-Slots */}
+                <div className="bg-amber-50 rounded-lg p-3 border border-amber-200 space-y-2">
                   <label className="flex flex-col gap-1">
-                    <span className="text-sm font-medium text-gray-700">Ü55-Slots (Versetzt reserviert)</span>
+                    <span className="text-sm font-medium text-amber-800">Ü55 Verschieben-Plätze</span>
                     <input
                       type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
                       value={schedulerConfig.over55VerschiebenSlots}
-                      onChange={e => setOver55Slots(Math.min(schedulerConfig.shiftCounts.verschieben, Math.max(0, Number(e.target.value))))}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      disabled={!schedulerConfig.rules.reserveOver55SlotsForVerschieben}
+                      onChange={e => setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: Math.max(0, Math.min(c.shiftCounts.verschieben, Number(e.target.value))) }))}
+                      className="w-24 px-3 py-2 border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
                     />
                   </label>
-                  <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
-                  <CountImpactBadges ci={impactFactors?.counts.over55Slots} baseline={impactFactors?.baseline} loading={isComputingImpact} unit="Slot" />
+                  <p className="text-xs text-amber-600">Mindestanzahl Ü55-Mitarbeiter pro Versetzt-Woche</p>
+                  <CountImpactBadges ci={impactFactors?.counts.over55VerschiebenSlots} baseline={impactFactors?.baseline} loading={isComputingImpact} unit="Platz" />
                 </div>
-
               </div>
             </div>
 
@@ -694,12 +794,14 @@ export function ShiftPlanning() {
                   { key: 'noConsecutiveVerschieben',            label: 'Keine zwei Versetzt-Wochen hintereinander (für dieselbe Person)' },
                   { key: 'noConsecutiveNacht',                  label: 'Keine zwei Nachtschichten hintereinander (für dieselbe Person)' },
                   { key: 'noConsecutiveFruehschicht',            label: 'Keine zwei Frühschichten (Wochenende) hintereinander (für dieselbe Person)' },
-                  { key: 'over55AndNoL2OnlyVerschieben',        label: 'Ü55-Mitarbeiter und ohne L2 nur versetzte Schichten' },
-                  { key: 'reserveOver55SlotsForVerschieben',    label: 'Ü55-Slot-Reservierung in versetzter Schicht' },
-                  { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen' },
-                  { key: 'departmentDiversity',                 label: 'Abteilungsvielfalt bei der Auswahl bevorzugen' },
-                ] as { key: keyof SchedulerConfig['rules']; label: string }[]).map(({ key, label }) => (
-                  <div key={key} className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                  { key: 'noNachtBeforeVacation',                label: 'Keine Nachtbereitschaft in der Woche vor Urlaub' },
+                  { key: 'respectEmployeeShiftTypes',          label: 'Erlaubte Schichttypen pro Mitarbeiter berücksichtigen' },
+                  { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen', soft: true },
+                  { key: 'departmentDiversity',                 label: 'Abteilungsvielfalt bei der Auswahl bevorzugen', soft: true },
+                ] as { key: keyof SchedulerConfig['rules']; label: string; soft?: boolean }[]).map(({ key, label, soft }) => (
+                  <div key={key} className={`rounded-lg px-3 py-2 border ${
+                    soft ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'
+                  }`}>
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
@@ -738,7 +840,7 @@ export function ShiftPlanning() {
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════
-           3-Step Pipeline: Normal → Gleichheit → Fairness
+           4-Step Pipeline: Grundplan → Gleichheit → Gesamt-Balance → Fairness
            ═══════════════════════════════════════════════════════════════════ */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="space-y-4">
@@ -796,11 +898,12 @@ export function ShiftPlanning() {
             const hasPlan = (shiftPlan?.assignments?.length ?? 0) > 0;
             const algoTag = shiftPlan?.algorithm ?? '';
             const step1Done = hasPlan; // any plan exists from step 1
-            const step2Done = algoTag === 'gleichheits-optimiert' || algoTag === 'fairness-optimiert';
-            const step3Done = algoTag === 'fairness-optimiert';
+            const step2Done = algoTag === 'gleichheits-optimiert' || algoTag === 'gesamt-balanciert' || algoTag === 'fairness-optimiert';
+            const step3Done = algoTag === 'gesamt-balanciert' || algoTag === 'fairness-optimiert';
+            const step4Done = algoTag === 'fairness-optimiert';
 
             return (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-2">
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mt-2">
                 {/* ── Step 1: Normal ─────────────────────── */}
                 <div className={`rounded-lg border-2 p-4 ${step1Done ? 'border-green-300 bg-green-50/50' : 'border-gray-200'}`}>
                   <div className="flex items-center gap-2 mb-2">
@@ -812,7 +915,7 @@ export function ShiftPlanning() {
                   </p>
                   <button
                     onClick={handleGenerateFullPlan}
-                    disabled={isGenerating || isOptimising || isEqualizing || !hasEmployees}
+                    disabled={isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                   >
                     <Sparkles className="h-4 w-4" />
@@ -828,11 +931,10 @@ export function ShiftPlanning() {
                   </div>
                   <p className="text-xs text-gray-500 mb-3">
                     Minimiert die Spannweite (Max − Min) der Schichtzahlen je Typ durch regelkonforme Tausche.
-                    {schedulerConfig.rules.reserveOver55SlotsForVerschieben && ' Ü55 und Nicht-Ü55 werden getrennt balanciert.'}
                   </p>
                   <button
                     onClick={handleEquality}
-                    disabled={!step1Done || isGenerating || isOptimising || isEqualizing || !hasEmployees}
+                    disabled={!step1Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                   >
                     <Scale className="h-4 w-4" />
@@ -846,10 +948,61 @@ export function ShiftPlanning() {
                   )}
                 </div>
 
-                {/* ── Step 3: Fairness ───────────────────── */}
-                <div className={`rounded-lg border-2 p-4 ${!step1Done ? 'opacity-50 border-gray-200' : step3Done ? 'border-green-300 bg-green-50/50' : 'border-amber-200'}`}>
+                {/* ── Step 3: Gesamt-Balancierung ────────── */}
+                <div className={`rounded-lg border-2 p-4 ${!step2Done ? 'opacity-50 border-gray-200' : step3Done ? 'border-green-300 bg-green-50/50' : 'border-violet-200'}`}>
                   <div className="flex items-center gap-2 mb-2">
-                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step3Done ? 'bg-green-500 text-white' : step1Done ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-400'}`}>3</div>
+                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step3Done ? 'bg-green-500 text-white' : step2Done ? 'bg-violet-100 text-violet-700' : 'bg-gray-200 text-gray-400'}`}>3</div>
+                    <h4 className="font-semibold text-gray-900">Gesamt-Balancierung</h4>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Reduziert die Gesamtspannweite (alle Schichttypen zusammen) pro Mitarbeitertyp, ohne die Einzelspannweiten zu verschlechtern.
+                  </p>
+                  <button
+                    onClick={handleTotalBalance}
+                    disabled={!step2Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-md hover:bg-violet-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+                  >
+                    <Scale className="h-4 w-4" />
+                    {isTotalBalancing ? 'Optimiere...' : step3Done ? 'Erneut optimieren' : 'Gesamt balancieren'}
+                  </button>
+                  {totalBalanceResult && !isTotalBalancing && (
+                    <div className="mt-2 text-xs text-violet-800 bg-violet-50 rounded p-2 space-y-0.5 overflow-x-auto max-w-full">
+                      <div className="font-medium">{totalBalanceResult.improvements} Verbesserungen</div>
+                      <div>Typ-Spannweiten je Gruppe:</div>
+                      {Object.entries(totalBalanceResult.ranges).reduce((acc, [key, val]) => {
+                        const [group] = key.split(':');
+                        if (!acc.find(g => g.group === group)) acc.push({ group, items: [] });
+                        acc.find(g => g.group === group)!.items.push({ key, val: val as number });
+                        return acc;
+                      }, [] as { group: string; items: { key: string; val: number }[] }[]).map(g => {
+                        // Shorten group label: translate shift types, keep Ü55 marker
+                        const [stPart, agePart] = g.group.split('|');
+                        const stShort = stPart.split(',').map(t =>
+                          t === 'verschieben' ? 'V' : t === 'nachtbereitschaft' ? 'N' : t === 'fruehschicht' ? 'F' : t
+                        ).join(',');
+                        const shortLabel = `${stShort}|${agePart}`;
+                        return (
+                        <div key={g.group} className="ml-1 truncate" title={g.group}>{shortLabel}: {g.items.map(i => {
+                          const t = i.key.split(':')[1];
+                          const label = t === 'verschieben' ? 'V' : t === 'nachtbereitschaft' ? 'N' : 'F';
+                          return `${label}=${i.val}`;
+                        }).join(' · ')}</div>
+                      )})}
+                      <div className="truncate" title={Object.entries(totalBalanceResult.totalRange).map(([k, v]) => `${k}=${v}`).join(' · ')}>Gesamt: {Object.entries(totalBalanceResult.totalRange).map(([k, v]) => {
+                        const [stPart, agePart] = k.split('|');
+                        const stShort = stPart.split(',').map(t =>
+                          t === 'verschieben' ? 'V' : t === 'nachtbereitschaft' ? 'N' : t === 'fruehschicht' ? 'F' : t
+                        ).join(',');
+                        return `${stShort}|${agePart}=${v}`;
+                      }).join(' · ')}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Step 4: Fairness ───────────────────── */}
+                <div className={`rounded-lg border-2 p-4 ${!step1Done ? 'opacity-50 border-gray-200' : step4Done ? 'border-green-300 bg-green-50/50' : 'border-amber-200'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold ${step4Done ? 'bg-green-500 text-white' : step1Done ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-400'}`}>4</div>
                     <h4 className="font-semibold text-gray-900">Fairness-Optimierung</h4>
                   </div>
                   <p className="text-xs text-gray-500 mb-2">
@@ -904,11 +1057,11 @@ export function ShiftPlanning() {
                   {!isOptimising ? (
                     <button
                       onClick={handleOptimise}
-                      disabled={!step1Done || isGenerating || isEqualizing || !hasEmployees || !Object.values(optimiserTargets).some(Boolean)}
+                      disabled={!step3Done || isGenerating || isEqualizing || isTotalBalancing || !hasEmployees || !Object.values(optimiserTargets).some(Boolean)}
                       className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-md hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                     >
                       <Zap className="h-4 w-4" />
-                      {step3Done ? 'Erneut optimieren' : 'Fairness optimieren'}
+                      {step4Done ? 'Erneut optimieren' : 'Fairness optimieren'}
                     </button>
                   ) : (
                     <button
@@ -967,10 +1120,18 @@ export function ShiftPlanning() {
             );
           })()}
 
-          {/* Algorithm tag */}
+          {/* Algorithm tag + delete button */}
           {shiftPlan?.algorithm && (
-            <div className="mt-2 text-sm text-gray-600">
-              Aktueller Plan-Algorithmus: <strong>{shiftPlan.algorithm}</strong>
+            <div className="mt-2 flex items-center gap-4">
+              <span className="text-sm text-gray-600">
+                Aktueller Plan-Algorithmus: <strong>{shiftPlan.algorithm}</strong>
+              </span>
+              <button
+                onClick={() => setDeletePlanOpen(true)}
+                className="text-sm text-red-600 hover:text-red-800 underline"
+              >
+                Plan löschen
+              </button>
             </div>
           )}
         </div>
@@ -1063,7 +1224,7 @@ export function ShiftPlanning() {
         <ul className="space-y-2 text-sm text-gray-700">
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">1.</span>
-            <span><strong>Verschobene Schichten</strong> werden zuerst verteilt - <strong>exakt 5 Personen</strong> pro Woche (Mo-Fr, davon 2 Mitarbeiter Ü55); dadurch wird verhindert, dass danach direkt eine Nachtwoche folgt.</span>
+            <span><strong>Verschobene Schichten</strong> werden zuerst verteilt – die konfigurierte Anzahl Personen pro Woche (Mo-Fr); dadurch wird verhindert, dass danach direkt eine Nachtwoche folgt.</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">2.</span>
@@ -1091,7 +1252,7 @@ export function ShiftPlanning() {
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
-            <span>Mitarbeiter Ü55 und Mitarbeiter ohne L2-Zertifikat dürfen nur <strong>verschobene Schichten</strong> (Mo–Fr) erhalten; davon werden <strong>2 der 5 Plätze</strong> für Ü55-Mitarbeiter reserviert</span>
+            <span>Pro Mitarbeiter können erlaubte Schichttypen eingestellt werden – der Algorithmus berücksichtigt diese Einschränkungen automatisch</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary-600 font-bold">•</span>
@@ -1125,6 +1286,64 @@ export function ShiftPlanning() {
         onAcknowledge={(id) => acknowledgeViolation(id)}
         onClose={() => setShowPipeline(false)}
       />
+    )}
+
+    {/* Release warning modal (shown when generating while plan is released) */}
+    {releaseWarningOpen && (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div className="flex items-center gap-3 mb-3">
+            <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
+            <h3 className="text-lg font-semibold text-gray-800">Plan ist freigegeben</h3>
+          </div>
+          <p className="text-gray-600 mb-6">
+            Der aktuelle Plan ist für die Mitarbeitenden freigegeben. Beim Neugenerieren wird die Freigabe automatisch aufgehoben. Möchten Sie fortfahren?
+          </p>
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setReleaseWarningOpen(false)}
+              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+            >
+              Abbrechen
+            </button>
+            <button
+              onClick={doGenerate}
+              className="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 font-medium"
+            >
+              Trotzdem generieren
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Delete plan confirmation modal */}
+    {deletePlanOpen && (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div className="flex items-center gap-3 mb-3">
+            <AlertTriangle className="text-red-500 flex-shrink-0" size={24} />
+            <h3 className="text-lg font-semibold text-gray-800">Schichtplan löschen</h3>
+          </div>
+          <p className="text-gray-600 mb-6">
+            Möchten Sie den Schichtplan wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.
+          </p>
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setDeletePlanOpen(false)}
+              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+            >
+              Abbrechen
+            </button>
+            <button
+              onClick={() => { setShiftPlan(null as any); setDeletePlanOpen(false); }}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 font-medium"
+            >
+              Endgültig löschen
+            </button>
+          </div>
+        </div>
+      </div>
     )}
     </>
   );

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { loadState, saveState } from './db.js';
-import { generateAutomaticShiftPlan, runEqualityOptimiser, detectViolations } from '../src/utils/scheduler.js';
+import { generateAutomaticShiftPlan, runEqualityOptimiser, runTotalBalanceOptimiser, detectViolations, getAvailableEmployeesSorted } from '../src/utils/scheduler.js';
 import { computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
 import {
@@ -28,7 +28,7 @@ import {
   changePassword,
   getAllCredentialInfo,
 } from './portalAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail } from './mailer.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail } from './mailer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
@@ -124,6 +124,8 @@ app.put('/api/state', authMiddleware, (req, res) => {
     ...req.body,
     employeesLocked: existing.employeesLocked ?? false,
     planReleased: existing.planReleased ?? false,
+    swapOffers: existing.swapOffers ?? [],
+    swapMatches: existing.swapMatches ?? [],
   };
   saveState(merged);
   res.json({ success: true });
@@ -162,13 +164,23 @@ app.post('/api/generate', authMiddleware, (req, res) => {
   try {
     const { employees, year, startMonth, months, schedulerConfig } =
       reviveDates(req.body);
+    const state = loadState();
+    const departments = state.departments || [];
     const result = generateAutomaticShiftPlan(
       employees,
       year,
       startMonth,
       months,
       schedulerConfig,
+      departments,
     );
+
+    // Clear swap offers and matches when a new plan is generated
+    // (old assignments no longer exist in the new plan)
+    state.swapOffers = [];
+    state.swapMatches = [];
+    saveState(state);
+
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -185,15 +197,55 @@ app.post('/api/optimize-equality', authMiddleware, (req, res) => {
     const year = data.year ?? new Date().getFullYear();
     const startMonth = data.startMonth ?? 0;
     const months = data.months ?? 12;
+    const state = loadState();
+    const departments = state.departments || [];
 
     const result = runEqualityOptimiser(
       employees,
       baselineAssignments,
       schedulerConfig,
       maxIterations,
+      undefined,
+      departments,
     );
 
     // Recompute violations for the optimised assignments
+    const violations = detectViolations(
+      employees,
+      result.assignments,
+      schedulerConfig,
+      year,
+      startMonth,
+      months,
+    );
+
+    res.json({ ...result, violations });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── Total-balance optimiser (Step 2b) ───────────────────────────────────
+
+app.post('/api/optimize-total-balance', authMiddleware, (req, res) => {
+  try {
+    const data = reviveDates(req.body);
+    const { employees, schedulerConfig, baselineAssignments } = data;
+    const maxIterations = data.maxIterations ?? 500;
+    const year = data.year ?? new Date().getFullYear();
+    const startMonth = data.startMonth ?? 0;
+    const months = data.months ?? 12;
+    const state = loadState();
+    const departments = state.departments || [];
+
+    const result = runTotalBalanceOptimiser(
+      employees,
+      baselineAssignments,
+      schedulerConfig,
+      maxIterations,
+      departments,
+    );
+
     const violations = detectViolations(
       employees,
       result.assignments,
@@ -237,6 +289,8 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   // Optional: caller can supply a pre-optimised baseline (e.g. from the equality step)
   const suppliedBaseline: any[] | undefined = data.baselineAssignments;
   const suppliedBaselineViolations: any[] | undefined = data.baselineViolations;
+  const stateForDepts = loadState();
+  const departments = stateForDepts.departments || [];
 
   // Create the persistent job record
   const job: OptimJob = {
@@ -277,7 +331,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
   // Baseline — use supplied baseline if available (from equality optimizer), otherwise generate fresh
   const baselineResult = suppliedBaseline && suppliedBaseline.length > 0
     ? { assignments: suppliedBaseline, violations: suppliedBaselineViolations || [] as any[] }
-    : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig);
+    : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig, departments);
   let bestAssignments = baselineResult.assignments;
   let bestViolations = baselineResult.violations;
   let bestScores = computeFairnessScores(employees, bestAssignments);
@@ -313,7 +367,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
         }
 
         const shuffled = shuffle([...employees]);
-        const { assignments: candidate, violations: candidateViolations } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig);
+        const { assignments: candidate, violations: candidateViolations } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig, departments);
         const candidateScores = computeFairnessScores(employees, candidate);
         const candidateComposite = compositeScore(candidateScores, targets);
         if (candidateComposite > bestComposite) {
@@ -512,12 +566,14 @@ app.post('/api/calibrate', authMiddleware, (req, res) => {
   try {
     const { employees, schedulerConfig, year, startMonth, targets } =
       reviveDates(req.body);
+    const state = loadState();
+    const departments = state.departments || [];
     const CALIBRATION_ITERS = 3;
     const t0 = Date.now();
     runOptimiser(employees, year, startMonth, 12, schedulerConfig, {
       maxIterations: CALIBRATION_ITERS,
       targets,
-    });
+    }, undefined, departments);
     const elapsed = Date.now() - t0;
     res.json({ msPerIteration: elapsed / CALIBRATION_ITERS });
   } catch (err) {
@@ -645,6 +701,7 @@ app.get('/api/portal/my-data', portalAuthMiddleware, (req, res) => {
       department: dept?.name || '',
       isOver55: emp.isOver55,
       hasL2: emp.hasL2,
+      allowedShiftTypes: emp.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
       vacationDays: emp.vacationDays || [],
       vacationRanges: emp.vacationRanges || [],
       preferences: emp.preferences || [],
@@ -659,6 +716,8 @@ app.get('/api/portal/my-data', portalAuthMiddleware, (req, res) => {
     labels: released ? visibleLabels : [],
     calendarLabels: released ? myCalendarLabels : [],
     customHolidays: state.customHolidays || [],
+    swapSettings: state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false },
+    departmentId: emp.department || null,
   });
 });
 
@@ -805,6 +864,416 @@ app.post('/api/portal/notify', authMiddleware, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// SHIFT SWAP API
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Helper: load swap data from state (stored in state.swapOffers / state.swapMatches) */
+function loadSwapOffers(): any[] { return loadState().swapOffers || []; }
+function loadSwapMatches(): any[] { return loadState().swapMatches || []; }
+function saveSwapOffers(offers: any[]) { const s = loadState(); s.swapOffers = offers; saveState(s); }
+function saveSwapMatches(matches: any[]) { const s = loadState(); s.swapMatches = matches; saveState(s); }
+
+/** Admin: get all swap offers and matches */
+app.get('/api/swaps', authMiddleware, (_req, res) => {
+  const state = loadState();
+  res.json({
+    offers: state.swapOffers || [],
+    matches: state.swapMatches || [],
+    settings: state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false },
+  });
+});
+
+/** Portal: create a swap offer (employee wants to trade a shift) */
+app.post('/api/portal/swap-offer', portalAuthMiddleware, (req, res) => {
+  try {
+    const employeeId = (req as any).employeeId;
+    const state = loadState();
+
+    // Check swap is enabled
+    const swapSettings = state.swapSettings || { enabled: false };
+    if (!swapSettings.enabled) {
+      res.status(403).json({ error: 'Schichttausch ist nicht aktiviert.' });
+      return;
+    }
+
+    // Check plan is released
+    if (!state.planReleased) {
+      res.status(403).json({ error: 'Schichtplan ist noch nicht freigegeben.' });
+      return;
+    }
+
+    const { assignmentId, willingRanges, willingShiftTypes } = req.body;
+
+    // Find the assignment
+    const plan = state.shiftPlan;
+    if (!plan) { res.status(400).json({ error: 'Kein Schichtplan vorhanden.' }); return; }
+
+    const assignment = (plan.assignments || []).find((a: any) => a.id === assignmentId);
+    if (!assignment) { res.status(404).json({ error: 'Schicht nicht gefunden.' }); return; }
+    if (!assignment.employees.includes(employeeId)) {
+      res.status(403).json({ error: 'Sie sind dieser Schicht nicht zugewiesen.' });
+      return;
+    }
+
+    // Check for existing open offer from this employee for this assignment
+    const offers = state.swapOffers || [];
+    const existing = offers.find((o: any) => o.employeeId === employeeId && o.assignmentId === assignmentId && o.status === 'open');
+    if (existing) {
+      res.status(409).json({ error: 'Sie haben diese Schicht bereits zum Tausch angeboten.' });
+      return;
+    }
+
+    const offer = {
+      id: `swap-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      employeeId,
+      assignmentId,
+      shiftType: assignment.shiftType,
+      startDate: assignment.startDate,
+      endDate: assignment.endDate,
+      willingRanges: willingRanges || [],
+      willingShiftTypes: willingShiftTypes || [assignment.shiftType],
+      createdAt: new Date().toISOString(),
+      status: 'open',
+    };
+
+    offers.push(offer);
+    state.swapOffers = offers;
+    saveState(state);
+
+    // Try to find matches asynchronously
+    findAndCreateMatches(state);
+
+    res.json({ success: true, offer });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/** Portal: withdraw a swap offer */
+app.post('/api/portal/swap-offer/withdraw', portalAuthMiddleware, (req, res) => {
+  const employeeId = (req as any).employeeId;
+  const { offerId } = req.body;
+
+  const state = loadState();
+  const offers = state.swapOffers || [];
+  const offer = offers.find((o: any) => o.id === offerId);
+  if (!offer) { res.status(404).json({ error: 'Angebot nicht gefunden.' }); return; }
+  if (offer.employeeId !== employeeId) { res.status(403).json({ error: 'Nicht Ihr Angebot.' }); return; }
+  if (offer.status !== 'open') { res.status(400).json({ error: 'Angebot ist nicht mehr aktiv.' }); return; }
+
+  offer.status = 'withdrawn';
+  state.swapOffers = offers;
+  saveState(state);
+  res.json({ success: true });
+});
+
+/** Portal: get own swap offers */
+app.get('/api/portal/swap-offers', portalAuthMiddleware, (req, res) => {
+  const employeeId = (req as any).employeeId;
+  const state = loadState();
+  const offers = (state.swapOffers || []).filter((o: any) => o.employeeId === employeeId);
+  const matches = (state.swapMatches || []).filter((m: any) => {
+    const offerIds = offers.map((o: any) => o.id);
+    return offerIds.includes(m.offerA) || offerIds.includes(m.offerB);
+  });
+  res.json({
+    offers,
+    matches,
+    swapSettings: state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false },
+  });
+});
+
+/** Admin: check rule violations for a swap match before approving */
+app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
+  try {
+    const { matchId } = req.body;
+    const state = loadState();
+    const matches = state.swapMatches || [];
+    const match = matches.find((m: any) => m.id === matchId);
+    if (!match) { res.status(404).json({ error: 'Match nicht gefunden.' }); return; }
+
+    const offers = state.swapOffers || [];
+    const offerA = offers.find((o: any) => o.id === match.offerA);
+    const offerB = offers.find((o: any) => o.id === match.offerB);
+    if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.', violations: [] }); return; }
+
+    const plan = state.shiftPlan;
+    if (!plan) { res.status(400).json({ error: 'Kein Schichtplan.', violations: [] }); return; }
+
+    const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+    const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+    if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.', violations: [] }); return; }
+
+    // Simulate the swap
+    const tempAssignments = (plan.assignments || []).map((a: any) => ({
+      ...a,
+      employees: [...(a.employees || [])],
+      startDate: new Date(a.startDate),
+      endDate: new Date(a.endDate),
+    }));
+    const tA = tempAssignments.find((a: any) => a.id === offerA.assignmentId);
+    const tB = tempAssignments.find((a: any) => a.id === offerB.assignmentId);
+    if (tA && tB) {
+      tA.employees = tA.employees.filter((id: string) => id !== offerA.employeeId);
+      tA.employees.push(offerB.employeeId);
+      tB.employees = tB.employees.filter((id: string) => id !== offerB.employeeId);
+      tB.employees.push(offerA.employeeId);
+    }
+
+    const employees = state.employees || [];
+    const config = plan.schedulerConfig || state.schedulerConfig;
+    const departments = state.departments || [];
+
+    const SHIFT_LABELS: Record<string, string> = {
+      fruehschicht: 'Frühschicht (WE)',
+      verschieben: 'Verschobene Schicht',
+      nachtbereitschaft: 'Nachtbereitschaft',
+    };
+
+    const violationMessages: string[] = [];
+
+    // 1) Check if each swapped employee can actually work the new assignment
+    //    (respects ALL active rules: vacation, consecutive shifts, adjacency, etc.)
+    const empA = employees.find((e: any) => e.id === offerA.employeeId);
+    const empB = employees.find((e: any) => e.id === offerB.employeeId);
+    const assignmentsWithoutSwap = (plan.assignments || []).map((a: any) => ({
+      ...a,
+      employees: [...(a.employees || [])],
+      startDate: new Date(a.startDate),
+      endDate: new Date(a.endDate),
+    }));
+
+    // Check employee A taking B's shift
+    if (empA && assignmentB) {
+      const otherAssignments = assignmentsWithoutSwap
+        .filter((a: any) => a.id !== assignmentB.id)
+        .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerA.employeeId) }));
+      const canTake = getAvailableEmployeesSorted(
+        [empA], assignmentB.shiftType,
+        new Date(assignmentB.startDate), new Date(assignmentB.endDate),
+        otherAssignments, config, departments,
+      );
+      if (canTake.length === 0) {
+        const dt = new Date(assignmentB.startDate).toLocaleDateString('de-DE');
+        violationMessages.push(
+          `${empA.name} kann ${SHIFT_LABELS[assignmentB.shiftType] || assignmentB.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+        );
+      }
+    }
+
+    // Check employee B taking A's shift
+    if (empB && assignmentA) {
+      const otherAssignments = assignmentsWithoutSwap
+        .filter((a: any) => a.id !== assignmentA.id)
+        .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerB.employeeId) }));
+      const canTake = getAvailableEmployeesSorted(
+        [empB], assignmentA.shiftType,
+        new Date(assignmentA.startDate), new Date(assignmentA.endDate),
+        otherAssignments, config, departments,
+      );
+      if (canTake.length === 0) {
+        const dt = new Date(assignmentA.startDate).toLocaleDateString('de-DE');
+        violationMessages.push(
+          `${empB.name} kann ${SHIFT_LABELS[assignmentA.shiftType] || assignmentA.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+        );
+      }
+    }
+
+    // 2) Compare understaffing violations before vs after the swap
+    const beforeViolations = detectViolations(
+      employees, assignmentsWithoutSwap, config,
+      plan.year || new Date().getFullYear(),
+      plan.startMonth ?? 0,
+      plan.months ?? 12,
+    );
+    const afterViolations = detectViolations(
+      employees, tempAssignments, config,
+      plan.year || new Date().getFullYear(),
+      plan.startMonth ?? 0,
+      plan.months ?? 12,
+    );
+    // Find NEW violations that didn't exist before
+    const beforeIds = new Set(beforeViolations.map((v: any) => v.id));
+    const newViolations = afterViolations.filter((v: any) => !beforeIds.has(v.id));
+    for (const v of newViolations) {
+      const dt = new Date(v.startDate).toLocaleDateString('de-DE');
+      violationMessages.push(
+        `${SHIFT_LABELS[v.shiftType] || v.shiftType} ab ${dt}: Unterbesetzung (${v.assigned}/${v.required})`
+      );
+    }
+
+    res.json({ violations: violationMessages });
+  } catch (err) {
+    res.status(500).json({ error: 'Prüfung fehlgeschlagen.', violations: [] });
+  }
+});
+
+/** Admin: approve or reject a swap match */
+app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
+  try {
+    const { matchId, action } = req.body; // action = 'approve' | 'reject'
+    const state = loadState();
+    const matches = state.swapMatches || [];
+    const match = matches.find((m: any) => m.id === matchId);
+    if (!match) { res.status(404).json({ error: 'Match nicht gefunden.' }); return; }
+    if (match.status !== 'pending') { res.status(400).json({ error: 'Match wurde bereits bearbeitet.' }); return; }
+
+    if (action === 'reject') {
+      match.status = 'rejected';
+      match.resolvedAt = new Date().toISOString();
+      state.swapMatches = matches;
+      saveState(state);
+      res.json({ success: true, match });
+      return;
+    }
+
+    // Approve: execute the swap
+    const offers = state.swapOffers || [];
+    const offerA = offers.find((o: any) => o.id === match.offerA);
+    const offerB = offers.find((o: any) => o.id === match.offerB);
+    if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.' }); return; }
+
+    const plan = state.shiftPlan;
+    if (!plan) { res.status(400).json({ error: 'Kein Schichtplan.' }); return; }
+
+    const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+    const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+    if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.' }); return; }
+
+    // Execute swap: remove each employee from their original, add to the other
+    assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerA.employeeId);
+    assignmentA.employees.push(offerB.employeeId);
+    assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerB.employeeId);
+    assignmentB.employees.push(offerA.employeeId);
+
+    // Mark offers as matched
+    offerA.status = 'matched';
+    offerB.status = 'matched';
+    match.status = 'approved';
+    match.resolvedAt = new Date().toISOString();
+
+    state.swapOffers = offers;
+    state.swapMatches = matches;
+    saveState(state);
+
+    // Send emails to both employees
+    const employees = state.employees || [];
+    const empA = employees.find((e: any) => e.id === offerA.employeeId);
+    const empB = employees.find((e: any) => e.id === offerB.employeeId);
+
+    if (empA?.email) {
+      try {
+        await sendSwapMatchEmail(empA.email, empA.name, empB?.name || 'Kollege/in', offerA, offerB);
+      } catch (e) { console.error('[swap] mail to A failed:', e); }
+    }
+    if (empB?.email) {
+      try {
+        await sendSwapMatchEmail(empB.email, empB.name, empA?.name || 'Kollege/in', offerB, offerA);
+      } catch (e) { console.error('[swap] mail to B failed:', e); }
+    }
+
+    res.json({ success: true, match });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/** Match-finding logic: check if two open offers are compatible */
+function findAndCreateMatches(state: any) {
+  const offers: any[] = state.swapOffers || [];
+  const matches: any[] = state.swapMatches || [];
+  const swapSettings = state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false };
+  const employees = state.employees || [];
+
+  const openOffers = offers.filter((o: any) => o.status === 'open');
+
+  for (let i = 0; i < openOffers.length; i++) {
+    for (let j = i + 1; j < openOffers.length; j++) {
+      const a = openOffers[i];
+      const b = openOffers[j];
+
+      // Don't match the same employee with themselves
+      if (a.employeeId === b.employeeId) continue;
+
+      // Check if already matched
+      const alreadyMatched = matches.some((m: any) =>
+        (m.offerA === a.id && m.offerB === b.id) || (m.offerA === b.id && m.offerB === a.id)
+      );
+      if (alreadyMatched) continue;
+
+      // Department constraint
+      if (swapSettings.onlyWithinDepartment) {
+        const empA = employees.find((e: any) => e.id === a.employeeId);
+        const empB = employees.find((e: any) => e.id === b.employeeId);
+        if (empA?.department !== empB?.department) continue;
+      }
+
+      // Shift type constraint
+      if (swapSettings.onlyWithinShiftType) {
+        if (a.shiftType !== b.shiftType) continue;
+      }
+
+      // Check mutual compatibility:
+      // A wants to get rid of their shift and is willing to work in B's timeframe (and vice versa)
+      // A's willing ranges must overlap with B's shift dates
+      // B's willing ranges must overlap with A's shift dates
+      const aWillingForB = checkWillingMatch(a, b, swapSettings);
+      const bWillingForA = checkWillingMatch(b, a, swapSettings);
+
+      if (aWillingForB && bWillingForA) {
+        const newMatch = {
+          id: `match-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          offerA: a.id,
+          offerB: b.id,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+        matches.push(newMatch);
+      }
+    }
+  }
+
+  state.swapMatches = matches;
+  saveState(state);
+}
+
+/** Check if offer A is willing to take offer B's shift */
+function checkWillingMatch(offerA: any, offerB: any, swapSettings: any): boolean {
+  // A must be willing to work the shift type of B
+  if (swapSettings.onlyWithinShiftType) {
+    // Already checked above, but double-check
+    if (offerA.shiftType !== offerB.shiftType) return false;
+  } else {
+    // A must list B's shift type as acceptable
+    const willingTypes = offerA.willingShiftTypes || [offerA.shiftType];
+    if (!willingTypes.includes(offerB.shiftType)) return false;
+  }
+
+  // A's willing ranges must overlap with B's shift dates
+  const bStart = offerB.startDate;
+  const bEnd = offerB.endDate;
+
+  if (!offerA.willingRanges || offerA.willingRanges.length === 0) return false;
+
+  return offerA.willingRanges.some((range: any) => {
+    const rStart = range.startDate;
+    const rEnd = range.endDate;
+    // B's shift must fall within A's willing range
+    return rStart <= bStart && rEnd >= bEnd;
+  });
+}
+
+/** Admin: trigger manual match scan */
+app.post('/api/swaps/scan', authMiddleware, (_req, res) => {
+  const state = loadState();
+  findAndCreateMatches(state);
+  res.json({
+    offers: state.swapOffers || [],
+    matches: state.swapMatches || [],
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

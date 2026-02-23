@@ -21,10 +21,10 @@ export interface SchedulerRules {
   noConsecutiveNacht: boolean;
   /** No two consecutive weekend Frühschicht shifts for the same employee */
   noConsecutiveFruehschicht: boolean;
-  /** Ü55 and employees without L2 may only work verschieben */
-  over55AndNoL2OnlyVerschieben: boolean;
-  /** Reserve slots in verschieben specifically for Ü55 employees */
-  reserveOver55SlotsForVerschieben: boolean;
+  /** No Nachtbereitschaft in the week before a vacation starts */
+  noNachtBeforeVacation: boolean;
+  /** Respect per-employee allowedShiftTypes (filter by qualification) */
+  respectEmployeeShiftTypes: boolean;
   /** Respect avoidance preferences */
   respectAvoidancePreferences: boolean;
   /** Prefer department diversity when selecting employees */
@@ -37,7 +37,7 @@ export interface SchedulerConfig {
     nachtbereitschaft: number;
     fruehschicht: number;
   };
-  /** How many of the verschieben slots are reserved for Ü55 employees */
+  /** How many of the verschieben slots per week are reserved for Ü55 employees */
   over55VerschiebenSlots: number;
   rules: SchedulerRules;
 }
@@ -57,8 +57,8 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
     noConsecutiveVerschieben: true,
     noConsecutiveNacht: true,
     noConsecutiveFruehschicht: true,
-    over55AndNoL2OnlyVerschieben: true,
-    reserveOver55SlotsForVerschieben: true,
+    noNachtBeforeVacation: true,
+    respectEmployeeShiftTypes: true,
     respectAvoidancePreferences: true,
     departmentDiversity: true,
   },
@@ -74,8 +74,11 @@ export interface Employee {
   name: string;
   email?: string;
   department: string;
-  isOver55: boolean;
-  hasL2: boolean;
+  /** Which shift types this employee is allowed to work */
+  allowedShiftTypes?: ShiftType[];
+  // Legacy fields kept for backward compatibility during migration
+  isOver55?: boolean;
+  hasL2?: boolean;
   vacationDays: Date[]; // single-day entries for backward compatibility
   vacationRanges?: VacationRange[]; // new: multi‑day ranges
   preferences: ShiftPreference[];
@@ -164,7 +167,74 @@ export interface CalendarLabel {
   labelId: string;             // references Label.id
 }
 
-export type ViewTab = 'employees' | 'departments' | 'planning' | 'calendar' | 'kpis';
+export type ViewTab = 'employees' | 'departments' | 'planning' | 'calendar' | 'kpis' | 'swaps';
+
+// ── Tab visibility settings ────────────────────────────────────────
+
+export interface TabVisibility {
+  employees: boolean;
+  departments: boolean;
+  planning: boolean;
+  calendar: boolean;
+  kpis: boolean;
+  swaps: boolean;
+}
+
+export const DEFAULT_TAB_VISIBILITY: TabVisibility = {
+  employees: true,
+  departments: true,
+  planning: true,
+  calendar: true,
+  kpis: true,
+  swaps: true,
+};
+
+// ── Swap settings ────────────────────────────────────────────────────
+
+export interface SwapSettings {
+  /** Master toggle for the swap feature */
+  enabled: boolean;
+  /** Only allow swaps within the same department */
+  onlyWithinDepartment: boolean;
+  /** Only allow swaps of the same shift type */
+  onlyWithinShiftType: boolean;
+}
+
+export const DEFAULT_SWAP_SETTINGS: SwapSettings = {
+  enabled: false,
+  onlyWithinDepartment: false,
+  onlyWithinShiftType: false,
+};
+
+// ── Swap requests & matches ─────────────────────────────────────────
+
+export interface SwapOffer {
+  id: string;
+  employeeId: string;
+  /** The assignment ID the employee wants to give away */
+  assignmentId: string;
+  shiftType: ShiftType;
+  startDate: string; // ISO date
+  endDate: string;   // ISO date
+  /** Timeframe(s) the employee is willing to work instead */
+  willingRanges: { startDate: string; endDate: string }[];
+  /** If shift-type change is allowed, which types the employee would accept */
+  willingShiftTypes?: ShiftType[];
+  /** Timestamp when the offer was created */
+  createdAt: string;
+  /** Whether this offer is still active */
+  status: 'open' | 'matched' | 'withdrawn';
+}
+
+export interface SwapMatch {
+  id: string;
+  offerA: string; // SwapOffer.id
+  offerB: string; // SwapOffer.id
+  /** Admin decision */
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  resolvedAt?: string;
+}
 
 // Shift requirements
 export const SHIFT_REQUIREMENTS: Record<ShiftType, { count: number; duration: string; days: string }> = {

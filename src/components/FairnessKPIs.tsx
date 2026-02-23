@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { ShiftType, SHIFT_LABELS, Employee } from '../types';
 import { BarChart3, TrendingUp, AlertCircle, Award } from 'lucide-react';
@@ -9,7 +9,6 @@ interface EmployeeShiftStats {
   employeeName: string;
   department: string;
   isOver55: boolean;
-  hasL2: boolean;
   totalShifts: number;
   shiftsByType: Record<ShiftType, number>;
   canWorkShifts: ShiftType[];
@@ -20,14 +19,10 @@ export function FairnessKPIs() {
   const { employees, departments, shiftPlan } = useStore();
   const [selectedShiftType, setSelectedShiftType] = useState<ShiftType | 'all'>('all');
   
-  // Determine if an employee can work a specific shift
-  // - Mitarbeiter Ü55 dürfen nur "verschieben"
-  // - Mitarbeiter ohne L2 dürfen nur "verschieben"
+  // Determine if an employee can work a specific shift based on allowedShiftTypes
   const canEmployeeWorkShift = (employee: Employee, shiftType: ShiftType): boolean => {
-    if (employee.isOver55 || !employee.hasL2) {
-      return shiftType === 'verschieben';
-    }
-    return true;
+    const allowed = employee.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+    return allowed.includes(shiftType);
   };
   
   // Calculate statistics for each employee
@@ -69,8 +64,7 @@ export function FairnessKPIs() {
         employeeId: employee.id,
         employeeName: employee.name,
         department: dept?.name || 'Unbekannt',
-        isOver55: employee.isOver55,
-        hasL2: employee.hasL2,
+        isOver55: !!employee.isOver55,
         totalShifts,
         shiftsByType,
         canWorkShifts,
@@ -231,7 +225,7 @@ export function FairnessKPIs() {
           <p className="text-sm text-gray-600 mt-1">
             {selectedShiftType === 'all' 
               ? `Zeigt alle ${employeeStats.length} Mitarbeiter`
-              : `Zeigt ${filteredStats.length} Mitarbeiter, die ${SHIFT_LABELS[selectedShiftType]} machen können (Ü55 / ohne L2 werden für diese Kategorie nicht berücksichtigt)`
+              : `Zeigt ${filteredStats.length} von ${employeeStats.length} Mitarbeitern, die ${SHIFT_LABELS[selectedShiftType]} ausführen dürfen`
             }
           </p>
         </div>
@@ -278,12 +272,6 @@ export function FairnessKPIs() {
                         <span>{stat.employeeName}</span>
                         {stat.isOver55 && (
                           <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
-                        )}
-                        {!stat.hasL2 && (
-                          <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700 border border-red-300">kein L2</span>
-                        )}
-                        {stat.hasL2 && (
-                          <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-700 border border-green-300">L2</span>
                         )}
                       </div>
                     </td>
@@ -347,12 +335,6 @@ export function FairnessKPIs() {
                       <span className="text-sm font-medium text-gray-700">{stat.employeeName}</span>
                       {stat.isOver55 && (
                         <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
-                      )}
-                      {!stat.hasL2 && (
-                        <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-red-100 text-red-700 border border-red-300">kein L2</span>
-                      )}
-                      {stat.hasL2 && (
-                        <span className="inline-block px-1.5 py-0.5 text-xs font-semibold rounded bg-green-100 text-green-700 border border-green-300">L2</span>
                       )}
                     </div>
                     <span className="text-sm text-gray-600">{shiftCount} Schichten</span>

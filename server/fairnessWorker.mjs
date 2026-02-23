@@ -17,8 +17,7 @@ var DEFAULT_SCHEDULER_CONFIG = {
     noConsecutiveVerschieben: true,
     noConsecutiveNacht: true,
     noConsecutiveFruehschicht: true,
-    over55AndNoL2OnlyVerschieben: true,
-    reserveOver55SlotsForVerschieben: true,
+    respectEmployeeShiftTypes: true,
     respectAvoidancePreferences: true,
     departmentDiversity: true
   }
@@ -177,8 +176,8 @@ function isBlockedFromFruehschichtDueToAdjacency(employee, date, assignments) {
   const hasRecentNightWeek = assignments.some((a) => {
     if (!a.employees.includes(employee.id) || a.shiftType !== "nachtbereitschaft") return false;
     const end = new Date(a.endDate);
-    const afterEndSun = addDays(end, 1);
-    return isSameDay(date, end) || isSameDay(date, afterEndSun);
+    const daysDiff = Math.round((date.getTime() - end.getTime()) / (1e3 * 60 * 60 * 24));
+    return daysDiff >= 0 && daysDiff <= 8;
   });
   if (hasRecentNightWeek) return true;
   return false;
@@ -215,7 +214,7 @@ function isBlockedFromConsecutiveNacht(employee, nachtStartDate, assignments) {
     const daysDiff = Math.round(
       (nachtStartDate.getTime() - nEnd.getTime()) / (1e3 * 60 * 60 * 24)
     );
-    return daysDiff >= 1 && daysDiff <= 7;
+    return daysDiff >= 1 && daysDiff <= 8;
   });
 }
 function isBlockedFromConsecutiveFruehschicht(employee, fruehStartDate, assignments) {
@@ -251,9 +250,13 @@ function isBlockedFromNachtAfterVerschieben(employee, nachtStartDate, assignment
     return daysDiff >= 1 && daysDiff <= 7;
   });
 }
-function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, existingAssignments, config2 = DEFAULT_SCHEDULER_CONFIG) {
+function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, existingAssignments, config2 = DEFAULT_SCHEDULER_CONFIG, _departments) {
   const { rules } = config2;
   const available = employees2.filter((emp) => {
+    if (rules.respectEmployeeShiftTypes) {
+      const allowed = emp.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
+      if (!allowed.includes(shiftType)) return false;
+    }
     const days = [];
     for (let d = new Date(startDate); d <= endDate; d = addDays(d, 1)) {
       days.push(new Date(d));
@@ -263,9 +266,6 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
     if (rules.respectAvoidancePreferences) {
       const wantsToAvoid = days.some((day) => hasAvoidancePreference(emp, shiftType, day));
       if (wantsToAvoid) return false;
-    }
-    if (rules.over55AndNoL2OnlyVerschieben) {
-      if ((emp.isOver55 || !emp.hasL2) && shiftType !== "verschieben") return false;
     }
     const hasConflictingShift = existingAssignments.some((assignment) => {
       if (!assignment.employees.includes(emp.id)) return false;
@@ -298,6 +298,55 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
     if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
       if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
     }
+    const daysDiffFromEnd = (a) => Math.round((new Date(a.startDate).getTime() - endDate.getTime()) / (1e3 * 60 * 60 * 24));
+    if (rules.noVerschiebenAfterNacht && shiftType === "nachtbereitschaft") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "verschieben" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+    if (rules.noNachtAfterVerschieben && shiftType === "verschieben") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "nachtbereitschaft" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === "nachtbereitschaft") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "fruehschicht" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 0 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+    if (rules.noConsecutiveNacht && shiftType === "nachtbereitschaft") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "nachtbereitschaft" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 1 && d <= 8;
+      });
+      if (blocked) return false;
+    }
+    if (rules.noConsecutiveVerschieben && shiftType === "verschieben") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "verschieben" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 1 && d <= 7;
+      });
+      if (blocked) return false;
+    }
+    if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
+      const blocked = existingAssignments.some((a) => {
+        if (a.shiftType !== "fruehschicht" || !a.employees.includes(emp.id)) return false;
+        const d = daysDiffFromEnd(a);
+        return d >= 1 && d <= 7;
+      });
+      if (blocked) return false;
+    }
     return true;
   });
   return available.sort((a, b) => {
@@ -326,45 +375,6 @@ function selectEmployeesWithDepartmentDiversity(employees2, requiredCount, useDi
     }
   }
   return selected;
-}
-function selectVerschiebenEmployees(availableEmployees, requiredCount, requiredOver55Count, useDiversity = true) {
-  const over55Pool = availableEmployees.filter((e) => e.isOver55);
-  const othersPool = availableEmployees.filter((e) => !e.isOver55);
-  const selectedOver55 = [];
-  const usedDepartments = /* @__PURE__ */ new Set();
-  if (useDiversity) {
-    for (const emp of over55Pool) {
-      if (selectedOver55.length >= requiredOver55Count) break;
-      if (!usedDepartments.has(emp.department)) {
-        selectedOver55.push(emp);
-        usedDepartments.add(emp.department);
-      }
-    }
-    for (const emp of over55Pool) {
-      if (selectedOver55.length >= requiredOver55Count) break;
-      if (!selectedOver55.includes(emp)) selectedOver55.push(emp);
-    }
-  } else {
-    selectedOver55.push(...over55Pool.slice(0, requiredOver55Count));
-  }
-  const remainingCount = requiredCount - selectedOver55.length;
-  const selectedOthers = [];
-  if (useDiversity) {
-    for (const emp of othersPool) {
-      if (selectedOthers.length >= remainingCount) break;
-      if (!usedDepartments.has(emp.department)) {
-        selectedOthers.push(emp);
-        usedDepartments.add(emp.department);
-      }
-    }
-    for (const emp of othersPool) {
-      if (selectedOthers.length >= remainingCount) break;
-      if (!selectedOthers.includes(emp)) selectedOthers.push(emp);
-    }
-  } else {
-    selectedOthers.push(...othersPool.slice(0, remainingCount));
-  }
-  return [...selectedOver55, ...selectedOthers];
 }
 function generateShiftPeriodsForRange(startDate, months) {
   const periods = /* @__PURE__ */ new Map();
@@ -402,12 +412,12 @@ function generateShiftPeriodsForRange(startDate, months) {
   periods.set("fruehschicht", earlyShifts);
   return periods;
 }
-function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, months = 12, config2 = DEFAULT_SCHEDULER_CONFIG) {
+function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, months = 12, config2 = DEFAULT_SCHEDULER_CONFIG, departments) {
   const assignments = [];
   const violations = [];
   const startDate = new Date(startYear, startMonth2, 1);
   const periods = generateShiftPeriodsForRange(startDate, months);
-  const { shiftCounts, over55VerschiebenSlots, rules } = config2;
+  const { shiftCounts, rules } = config2;
   const typeOrder = {
     verschieben: 0,
     fruehschicht: 1,
@@ -435,12 +445,11 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
     noConsecutiveVerschieben: "Keine zwei Versetzt-Wochen hintereinander",
     noConsecutiveNacht: "Keine zwei Nachtschichten hintereinander",
     noConsecutiveFruehschicht: "Keine zwei Fr\xFChschichten hintereinander",
-    over55AndNoL2OnlyVerschieben: "\xDC55 / kein L2 nur versetzt",
+    respectEmployeeShiftTypes: "Erlaubte Schichttypen pro MA",
     noWeekendAroundVacation: "Kein WE um Urlaub",
     noFruehschichtAdjacentToVerschieben: "Keine Fr\xFChschicht angrenzend an Versetzt",
     respectAvoidancePreferences: "Vermeidungspr\xE4ferenzen",
-    departmentDiversity: "Abteilungsvielfalt",
-    reserveOver55SlotsForVerschieben: "\xDC55-Slot-Reservierung"
+    departmentDiversity: "Abteilungsvielfalt"
   };
   for (const period of allPeriods) {
     const { shiftType } = period;
@@ -451,10 +460,23 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
       period.startDate,
       period.endDate,
       assignments,
-      config2
+      config2,
+      departments
     );
     const useDiversity = rules.departmentDiversity;
-    const selected = shiftType === "verschieben" && rules.reserveOver55SlotsForVerschieben ? selectVerschiebenEmployees(available, requiredCount, over55VerschiebenSlots, useDiversity) : selectEmployeesWithDepartmentDiversity(available, requiredCount, useDiversity);
+    let selected;
+    if (shiftType === "verschieben" && config2.over55VerschiebenSlots > 0) {
+      const over55Available = available.filter((e) => e.isOver55);
+      const minOver55 = Math.min(config2.over55VerschiebenSlots, requiredCount);
+      const over55Selected = selectEmployeesWithDepartmentDiversity(over55Available, minOver55, useDiversity);
+      const remainingCount = requiredCount - over55Selected.length;
+      const selectedIds = new Set(over55Selected.map((e) => e.id));
+      const remainingPool = available.filter((e) => !selectedIds.has(e.id));
+      const restSelected = selectEmployeesWithDepartmentDiversity(remainingPool, remainingCount, useDiversity);
+      selected = [...over55Selected, ...restSelected];
+    } else {
+      selected = selectEmployeesWithDepartmentDiversity(available, requiredCount, useDiversity);
+    }
     if (selected.length >= requiredCount) {
       assignments.push({
         id: `${shiftType}-${period.startDate.toISOString()}`,
@@ -465,18 +487,6 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
         confirmed: true
       });
     } else {
-      const allCandidates = employees2.filter((emp) => {
-        const days = [];
-        for (let d = new Date(period.startDate); d <= period.endDate; d = addDays(d, 1)) days.push(new Date(d));
-        if (!days.every((day) => canWorkOnDate(emp, day, false))) return false;
-        const hasConflictingShift = assignments.some((a) => {
-          if (!a.employees.includes(emp.id)) return false;
-          const aS = new Date(a.startDate), aE = new Date(a.endDate);
-          return days.some((day) => day >= aS && day <= aE);
-        });
-        return !hasConflictingShift;
-      });
-      const shortage = requiredCount - selected.length;
       const blockedRules = [];
       const activatedRuleKeys = Object.keys(rules).filter((k) => rules[k]);
       for (const ruleKey of activatedRuleKeys) {
@@ -519,7 +529,10 @@ function cvFairness(counts) {
 }
 function computeFairnessScores(employees2, assignments) {
   const allIds = employees2.map((e) => e.id);
-  const nachtFruehIds = employees2.filter((e) => !e.isOver55 && e.hasL2).map((e) => e.id);
+  const nachtFruehIds = employees2.filter((e) => {
+    const allowed = e.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
+    return allowed.includes("nachtbereitschaft") || allowed.includes("fruehschicht");
+  }).map((e) => e.id);
   const countFor = (ids, type) => ids.map(
     (id) => assignments.filter((a) => a.employees.includes(id) && (type ? a.shiftType === type : true)).length
   );
@@ -583,12 +596,12 @@ function computeImpactFactors(employees2, config2, year2, startMonth2) {
       { fruehschicht: Math.min(20, config2.shiftCounts.fruehschicht + 1) },
       { fruehschicht: Math.max(1, config2.shiftCounts.fruehschicht - 1) }
     ),
-    over55Slots: (() => {
-      const nextP = Math.min(config2.shiftCounts.verschieben, config2.over55VerschiebenSlots + 1);
-      const nextM = Math.max(0, config2.over55VerschiebenSlots - 1);
+    over55VerschiebenSlots: (() => {
+      const cfgP = { ...config2, over55VerschiebenSlots: Math.min(config2.shiftCounts.verschieben, config2.over55VerschiebenSlots + 1) };
+      const cfgM = { ...config2, over55VerschiebenSlots: Math.max(0, config2.over55VerschiebenSlots - 1) };
       return {
-        plus: delta(baseline, run(employees2, { ...config2, over55VerschiebenSlots: nextP }, year2, startMonth2)),
-        minus: delta(baseline, run(employees2, { ...config2, over55VerschiebenSlots: nextM }, year2, startMonth2))
+        plus: delta(baseline, run(employees2, cfgP, year2, startMonth2)),
+        minus: delta(baseline, run(employees2, cfgM, year2, startMonth2))
       };
     })()
   };

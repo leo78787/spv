@@ -31,14 +31,19 @@ export interface FairnessScores {
 
 /**
  * Computes fairness scores from a set of assignments.
- * Uses the same eligibility rules as FairnessKPIs (isOver55 || !hasL2 → verschieben only).
+ * Uses allowedShiftTypes to determine eligibility per shift type.
  */
 export function computeFairnessScores(
   employees: Employee[],
   assignments: ShiftAssignment[]
 ): FairnessScores {
-  const allIds       = employees.map(e => e.id);
-  const nachtFruehIds = employees.filter(e => !e.isOver55 && e.hasL2).map(e => e.id);
+  const allIds = employees.map(e => e.id);
+  const nachtFruehIds = employees
+    .filter(e => {
+      const allowed = e.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+      return allowed.includes('nachtbereitschaft') || allowed.includes('fruehschicht');
+    })
+    .map(e => e.id);
 
   const countFor = (ids: string[], type: ShiftType | null) =>
     ids.map(id =>
@@ -89,7 +94,7 @@ export interface ImpactFactors {
     verschieben:       CountImpact;
     nachtbereitschaft: CountImpact;
     fruehschicht:      CountImpact;
-    over55Slots:       CountImpact;
+    over55VerschiebenSlots: CountImpact;
   };
 }
 
@@ -169,12 +174,12 @@ export function computeImpactFactors(
       { fruehschicht: Math.min(20, config.shiftCounts.fruehschicht + 1) },
       { fruehschicht: Math.max(1,  config.shiftCounts.fruehschicht - 1) }
     ),
-    over55Slots: (() => {
-      const nextP = Math.min(config.shiftCounts.verschieben, config.over55VerschiebenSlots + 1);
-      const nextM = Math.max(0, config.over55VerschiebenSlots - 1);
+    over55VerschiebenSlots: (() => {
+      const cfgP: SchedulerConfig = { ...config, over55VerschiebenSlots: Math.min(config.shiftCounts.verschieben, config.over55VerschiebenSlots + 1) };
+      const cfgM: SchedulerConfig = { ...config, over55VerschiebenSlots: Math.max(0, config.over55VerschiebenSlots - 1) };
       return {
-        plus:  delta(baseline, run(employees, { ...config, over55VerschiebenSlots: nextP }, year, startMonth)),
-        minus: delta(baseline, run(employees, { ...config, over55VerschiebenSlots: nextM }, year, startMonth)),
+        plus:  delta(baseline, run(employees, cfgP, year, startMonth)),
+        minus: delta(baseline, run(employees, cfgM, year, startMonth)),
       };
     })(),
   };

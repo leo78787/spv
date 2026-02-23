@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel, SchedulerConfig, SchedulerViolation } from './types';
+import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel, SchedulerConfig, SchedulerViolation, SwapSettings, DEFAULT_SWAP_SETTINGS, TabVisibility, DEFAULT_TAB_VISIBILITY } from './types';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Auth token helpers (stored in localStorage — only the token, not data)
@@ -58,6 +58,8 @@ const saveToServer = async (state: any) => {
         customHolidays: state.customHolidays,
         labels: state.labels,
         calendarLabels: state.calendarLabels,
+        swapSettings: state.swapSettings,
+        tabVisibility: state.tabVisibility,
       }, dateNoonReplacer),
     });
   } catch (err) {
@@ -107,6 +109,8 @@ export async function loadFromServer(): Promise<void> {
       customHolidays: revived.customHolidays ?? [],
       labels: revived.labels ?? [],
       calendarLabels: revived.calendarLabels ?? [],
+      swapSettings: revived.swapSettings ?? DEFAULT_SWAP_SETTINGS,
+      tabVisibility: revived.tabVisibility ?? DEFAULT_TAB_VISIBILITY,
     });
   } catch (err) {
     console.error('Error loading from server:', err);
@@ -121,6 +125,8 @@ interface AppState {
   customHolidays: Holiday[];
   labels: Label[];
   calendarLabels: CalendarLabel[];
+  swapSettings: SwapSettings;
+  tabVisibility: TabVisibility;
   
   // Employee actions
   addEmployee: (employee: Employee) => void;
@@ -146,6 +152,12 @@ interface AppState {
   addCalendarLabel: (calendarLabel: CalendarLabel) => void;
   deleteCalendarLabel: (id: string) => void;
 
+  // Swap settings
+  setSwapSettings: (settings: SwapSettings) => void;
+
+  // Tab visibility
+  setTabVisibility: (vis: TabVisibility) => void;
+
   // Shift plan actions
   setCurrentYear: (year: number) => void;
   createShiftPlan: (year: number, startMonth?: number, months?: number, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[], algorithm?: string) => void;
@@ -170,6 +182,8 @@ export const useStore = create<AppState>((set) => {
     customHolidays: [] as Holiday[],
     labels: [] as Label[],
     calendarLabels: [] as CalendarLabel[],
+    swapSettings: DEFAULT_SWAP_SETTINGS,
+    tabVisibility: DEFAULT_TAB_VISIBILITY,
     
     addEmployee: (employee: Employee) => set((state) => {
       const newState = {
@@ -235,6 +249,20 @@ export const useStore = create<AppState>((set) => {
 
     deleteCalendarLabel: (id: string) => set((state) => {
       const newState = { ...state, calendarLabels: state.calendarLabels.filter(cl => cl.id !== id) };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    // Swap settings
+    setSwapSettings: (settings: SwapSettings) => set((state) => {
+      const newState = { ...state, swapSettings: settings };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    // Tab visibility
+    setTabVisibility: (vis: TabVisibility) => set((state) => {
+      const newState = { ...state, tabVisibility: vis };
       saveToServer(newState);
       return newState;
     }),

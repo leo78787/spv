@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useStore, getAuthToken } from '../store';
 import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department } from '../types';
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Send, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Lock, Unlock, AlertTriangle } from 'lucide-react';
 import ViolationPipeline from './ViolationPipeline';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, isBlockedFromVerschiebenDueToAdjacentFruehschicht, isBlockedFromVerschiebenAfterNacht, isBlockedFromConsecutiveVerschieben, hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG, canWorkOnDate } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
@@ -71,6 +71,8 @@ export function CalendarView() {
   // Plan release state
   const [planReleased, setPlanReleased] = useState(false);
   const [releasing, setReleasing] = useState(false);
+  const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
+  const [releasePassword, setReleasePassword] = useState('');
 
   useEffect(() => {
     const token = getAuthToken();
@@ -92,6 +94,8 @@ export function CalendarView() {
       if (resp.ok) setPlanReleased(!planReleased);
     } catch {}
     setReleasing(false);
+    setReleaseConfirmOpen(false);
+    setReleasePassword('');
   };
   
   const handlePreviousMonth = () => {
@@ -300,15 +304,10 @@ export function CalendarView() {
         reasons.push('Keine zwei aufeinanderfolgenden Frühschichten');
       }
 
-      // Qualification
-      if (rules.over55AndNoL2OnlyVerschieben && shiftType !== 'verschieben' && (empObj.isOver55 || !empObj.hasL2)) {
-        if (empObj.isOver55 && !empObj.hasL2) {
-          reasons.push('Ü55 und kein L2 — nur verschobene Schichten erlaubt');
-        } else if (empObj.isOver55) {
-          reasons.push('Ü55 — nur verschobene Schichten erlaubt');
-        } else {
-          reasons.push('Keine L2 — nur verschobene Schichten erlaubt');
-        }
+      // Qualification — per-employee allowed shift types
+      if (rules.respectEmployeeShiftTypes && empObj.allowedShiftTypes
+          && !empObj.allowedShiftTypes.includes(shiftType as ShiftType)) {
+        reasons.push(`Schichttyp ${shiftType} nicht erlaubt für diesen MA`);
       }
 
       // Vacation boundary
@@ -662,7 +661,7 @@ export function CalendarView() {
               <Download size={14} /> Excel (.xlsx)
             </button>
             <button
-              onClick={togglePlanRelease}
+              onClick={() => setReleaseConfirmOpen(true)}
               disabled={releasing}
               className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${
                 planReleased
@@ -939,14 +938,18 @@ export function CalendarView() {
                         return (
                           <tr key={employee.id} className={rowClass}>
                             <td className="px-3 py-2 border-b border-gray-200 sticky left-0 z-10 bg-inherit">
-                              <div className="font-medium text-gray-800 text-sm">{employee.name}</div>
+                              <div className="font-medium text-gray-800 text-sm flex items-center gap-1.5">
+                                {employee.name}
+                                {employee.isOver55 && (
+                                  <span className="inline-block px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
+                                )}
+                              </div>
                               <div className="text-xs text-gray-600">{getDepartmentName(employee.department)}</div>
                               <div className="flex gap-1 mt-1">
-                                {employee.isOver55 && (
-                                  <span className="px-1 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>
-                                )}
-                                {employee.hasL2 && (
-                                  <span className="px-1 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>
+                                {(employee.allowedShiftTypes && employee.allowedShiftTypes.length < 3) && (
+                                  <span className="px-1 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">
+                                    Nur: {employee.allowedShiftTypes.map((t: ShiftType) => t === 'fruehschicht' ? 'Früh' : t === 'verschieben' ? 'Versch.' : 'Nacht').join(', ')}
+                                  </span>
                                 )}
                               </div>
                             </td>
@@ -1215,8 +1218,9 @@ export function CalendarView() {
                       || blockedVerschiebenAfterNacht || blockedConsecVerschieben
                       || blockedConsecNacht || blockedConsecFrueh;
 
-                    const blockedByQualification = rules.over55AndNoL2OnlyVerschieben
-                      && shiftType !== 'verschieben' && (emp.isOver55 || !emp.hasL2);
+                    const blockedByQualification = rules.respectEmployeeShiftTypes
+                      && emp.allowedShiftTypes
+                      && !emp.allowedShiftTypes.includes(shiftType as ShiftType);
 
                     const assignmentDaysList = eachDayOfInterval({ start: assignmentStart, end: new Date(editingShift.assignment.endDate) });
                     const blockedByVacationBoundary = !isOnVacation
@@ -1323,8 +1327,7 @@ export function CalendarView() {
                             <div className="font-medium text-gray-900">{emp.name}</div>
                             <div className="text-sm text-gray-600">{getDepartmentName(emp.department)}</div>
                             <div className="flex flex-wrap gap-1 mt-1">
-                              {emp.isOver55 && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Ü55</span>)}
-                              {emp.hasL2 && (<span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs">L2</span>)}
+                              {(emp.allowedShiftTypes && emp.allowedShiftTypes.length < 3) && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Nur: {emp.allowedShiftTypes.map((t: ShiftType) => t === 'fruehschicht' ? 'Früh' : t === 'verschieben' ? 'Versch.' : 'Nacht').join(', ')}</span>)}
                               {isOnVacation && (<span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded text-xs">Im Urlaub</span>)}
                               {blockedByVacationBoundary && !isOnVacation && (<span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs">Kein WE um Urlaub</span>)}
                               {blockedByAdjacency && adjacencyLabel && (<span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-xs">{adjacencyLabel}</span>)}
@@ -1457,6 +1460,56 @@ export function CalendarView() {
         />
         ) : null;
       })()}
+
+      {/* Release / Revoke confirmation modal */}
+      {releaseConfirmOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-3">
+              {planReleased ? 'Freigabe aufheben' : 'Plan freigeben'}
+            </h3>
+            <p className="text-gray-600 mb-4">
+              {planReleased
+                ? 'Möchten Sie wirklich die Freigabe des Schichtplans aufheben? Mitarbeitende können den Plan dann nicht mehr im Portal einsehen.'
+                : 'Möchten Sie den Schichtplan für die Mitarbeitenden freigeben? Der Plan wird im Mitarbeiter-Portal sichtbar.'}
+            </p>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort eingeben</label>
+              <input
+                type="password"
+                value={releasePassword}
+                onChange={e => setReleasePassword(e.target.value)}
+                placeholder="Passwort"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                onKeyDown={e => { if (e.key === 'Enter' && releasePassword === '2026') togglePlanRelease(); }}
+              />
+              {releasePassword.length > 0 && releasePassword !== '2026' && (
+                <p className="text-sm text-red-500 mt-1">Falsches Passwort</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setReleaseConfirmOpen(false); setReleasePassword(''); }}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={togglePlanRelease}
+                disabled={releasing || releasePassword !== '2026'}
+                className={`px-4 py-2 rounded-md text-white font-medium ${
+                  releasePassword !== '2026' ? 'bg-gray-400 cursor-not-allowed' :
+                  planReleased
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {releasing ? 'Wird verarbeitet…' : planReleased ? 'Freigabe aufheben' : 'Freigeben'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

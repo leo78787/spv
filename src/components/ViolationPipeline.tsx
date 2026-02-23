@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, X, ChevronLeft, ChevronRight, CheckCircle, Eye } from 'lucide-react';
 import { SchedulerViolation, Employee, ShiftType } from '../types';
 

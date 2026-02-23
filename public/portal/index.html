@@ -217,6 +217,7 @@
       <button class="tab active" data-tab="vacation" onclick="switchTab('vacation')">Urlaub</button>
       <button class="tab" data-tab="preferences" onclick="switchTab('preferences')">Präferenzen</button>
       <button class="tab" data-tab="schedule" onclick="switchTab('schedule')">Schichtplan</button>
+      <button class="tab hidden" id="swap-tab-btn" data-tab="swap" onclick="switchTab('swap')">Tauschen</button>
     </div>
 
     <!-- VACATION TAB -->
@@ -270,6 +271,28 @@
       </div>
     </div>
 
+    <!-- SWAP TAB -->
+    <div id="tab-swap" class="tab-content hidden">
+      <div class="card">
+        <h2>Schichten zum Tausch anbieten</h2>
+        <div id="swap-not-released" class="msg msg-info hidden">Der Schichtplan wurde noch nicht freigegeben.</div>
+        <div id="swap-not-enabled" class="msg msg-info hidden">Schichttausch ist nicht aktiviert.</div>
+        <p id="swap-info" class="hidden" style="font-size:13px;color:var(--gray-600);margin-bottom:12px;">Wählen Sie eine Schicht aus, die Sie zum Tausch anbieten möchten.</p>
+        <div id="swap-shift-list"></div>
+      </div>
+      <div class="card" id="swap-offers-card">
+        <h2>Meine Tauschangebote</h2>
+        <div id="my-swap-offers"></div>
+        <div id="swap-offers-empty" class="empty-state hidden">
+          <p>Noch keine Schichten zum Tausch angeboten.</p>
+        </div>
+      </div>
+      <div class="card hidden" id="swap-matches-card">
+        <h2>Matches</h2>
+        <div id="my-swap-matches"></div>
+      </div>
+    </div>
+
     <!-- Action buttons -->
     <div id="action-buttons" class="btn-row hidden">
       <button class="btn btn-outline" onclick="doSave('draft')">Zwischenspeichern</button>
@@ -303,6 +326,7 @@
 let token = localStorage.getItem('portal-token') || '';
 let employeeId = localStorage.getItem('portal-empId') || '';
 let data = null;
+let initialLoadDone = false;
 let vacationRanges = [];
 let preferences = [];
 let isLocked = false;
@@ -393,6 +417,15 @@ async function loadData() {
   renderSchedule();
   renderCalendar();
   updateLockState();
+
+  // Swap tab
+  if (data.swapSettings) swapSettings = data.swapSettings;
+  updateSwapTabVisibility();
+  if (swapSettings.enabled && data.planReleased) loadSwapData();
+
+  // Default to schedule tab when plan is released (only on initial load)
+  if (!initialLoadDone && data.planReleased) switchTab('schedule');
+  initialLoadDone = true;
 }
 
 function showView(id) {
@@ -657,6 +690,275 @@ function showToast(text, type) {
   t.style.background = type === 'error' ? '#dc2626' : type === 'success' ? '#059669' : '#4f46e5';
   t.style.color = 'white'; t.textContent = text; document.body.appendChild(t);
   setTimeout(() => t.remove(), 3500);
+}
+
+// ─── Swap ────────────────────────────────────────────────────────────
+let swapOffers = [];
+let swapMatches = [];
+let swapSettings = { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false };
+
+function updateSwapTabVisibility() {
+  const btn = document.getElementById('swap-tab-btn');
+  if (!btn) return;
+  const show = swapSettings.enabled && data && data.planReleased;
+  btn.classList.toggle('hidden', !show);
+  // If swap tab visible and we have data, also update info messages
+  if (show) {
+    document.getElementById('swap-not-released').classList.add('hidden');
+    document.getElementById('swap-not-enabled').classList.add('hidden');
+    document.getElementById('swap-info').classList.remove('hidden');
+  }
+}
+
+async function loadSwapData() {
+  if (!token || !swapSettings.enabled) return;
+  try {
+    const resp = await fetch('/api/portal/swap-offers', { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) return;
+    const d = await resp.json();
+    swapOffers = d.offers || [];
+    swapMatches = d.matches || [];
+    if (d.swapSettings) swapSettings = d.swapSettings;
+    renderSwapTab();
+  } catch {}
+}
+
+function renderSwapTab() {
+  renderSwapShiftList();
+  renderMySwapOffers();
+  renderSwapMatches();
+}
+
+function renderSwapShiftList() {
+  const c = document.getElementById('swap-shift-list');
+  if (!c || !data || !data.planReleased) { if (c) c.innerHTML = ''; return; }
+
+  const assignments = data.assignments || [];
+  if (assignments.length === 0) {
+    c.innerHTML = '<p style="color:var(--gray-400);font-size:13px;text-align:center;padding:16px;">Keine Schichten zugewiesen.</p>';
+    return;
+  }
+
+  // Sort by start date
+  const sorted = [...assignments].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+  const offeredIds = new Set(swapOffers.filter(o => o.status === 'open').map(o => o.assignmentId));
+
+  c.innerHTML = sorted.map(a => {
+    const tk = a.shiftType === 'verschieben' ? 'V' : a.shiftType === 'nachtbereitschaft' ? 'N' : 'F';
+    const isOffered = offeredIds.has(a.id);
+    const startStr = new Date(a.startDate).toLocaleDateString('de-DE');
+    const endStr = new Date(a.endDate).toLocaleDateString('de-DE');
+    // Only show future shifts
+    const isPast = new Date(a.endDate) < new Date();
+    if (isPast) return '';
+    return `<div class="shift-item type-${tk}" style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <span class="shift-type">${SHIFT_NAMES[a.shiftType] || a.shiftType}</span>
+        <span class="shift-dates">${startStr} — ${endStr}</span>
+      </div>
+      ${isOffered
+        ? '<span style="color:#059669;font-size:12px;font-weight:600;">✓ Angeboten</span>'
+        : `<button onclick="openSwapOfferForm('${a.id}')" style="padding:4px 12px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;">Tauschen</button>`
+      }
+    </div>`;
+  }).join('');
+}
+
+function openSwapOfferForm(assignmentId) {
+  const a = (data.assignments || []).find(x => x.id === assignmentId);
+  if (!a) return;
+  const allowed = data.employee?.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
+
+  // Build a modal form
+  let existingModal = document.getElementById('swap-offer-modal');
+  if (existingModal) existingModal.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'swap-offer-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px;';
+
+  const startStr = new Date(a.startDate).toLocaleDateString('de-DE');
+  const endStr = new Date(a.endDate).toLocaleDateString('de-DE');
+
+  modal.innerHTML = `
+    <div style="background:white;border-radius:16px;padding:24px;max-width:420px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+      <h3 style="margin:0 0 4px;">Schicht zum Tausch anbieten</h3>
+      <p style="font-size:13px;color:var(--gray-600);margin:0 0 16px;">
+        ${SHIFT_NAMES[a.shiftType]} — ${startStr} bis ${endStr}
+      </p>
+
+      <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;">Gewünschter Zeitraum (Gegenleistung)</label>
+      <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px;">In welchem Zeitraum würden Sie stattdessen arbeiten?</p>
+      <div id="swap-willing-ranges">
+        <div class="swap-range-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+          <input type="date" class="swap-range-start" style="flex:1;padding:6px 8px;border:1px solid var(--gray-200);border-radius:8px;font-size:13px;">
+          <span style="color:var(--gray-400);">→</span>
+          <input type="date" class="swap-range-end" style="flex:1;padding:6px 8px;border:1px solid var(--gray-200);border-radius:8px;font-size:13px;">
+        </div>
+      </div>
+      <button onclick="addSwapWillingRange()" style="font-size:12px;color:var(--primary);background:none;border:none;cursor:pointer;padding:0;margin-bottom:16px;">+ Weiteren Zeitraum hinzufügen</button>
+
+      <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;">Akzeptierte Schichttypen</label>
+      <p style="font-size:12px;color:var(--gray-500);margin:0 0 8px;">Welche Schichttypen würden Sie im Tausch übernehmen?</p>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:20px;">
+        ${(allowed || ['fruehschicht','verschieben','nachtbereitschaft']).includes('fruehschicht') ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;">
+          <input type="checkbox" class="swap-st-cb" value="fruehschicht" ${a.shiftType === 'fruehschicht' ? 'checked' : ''}> Frühschicht (WE)
+        </label>` : ''}
+        ${(allowed || ['fruehschicht','verschieben','nachtbereitschaft']).includes('verschieben') ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;">
+          <input type="checkbox" class="swap-st-cb" value="verschieben" ${a.shiftType === 'verschieben' ? 'checked' : ''}> Verschobene Schicht
+        </label>` : ''}
+        ${(allowed || ['fruehschicht','verschieben','nachtbereitschaft']).includes('nachtbereitschaft') ? `<label style="display:flex;align-items:center;gap:8px;font-size:13px;">
+          <input type="checkbox" class="swap-st-cb" value="nachtbereitschaft" ${a.shiftType === 'nachtbereitschaft' ? 'checked' : ''}> Nachtbereitschaft
+        </label>` : ''}
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button onclick="closeSwapOfferModal()" style="padding:8px 16px;font-size:13px;background:var(--gray-100);border:1px solid var(--gray-200);border-radius:8px;cursor:pointer;">Abbrechen</button>
+        <button onclick="submitSwapOffer('${a.id}')" style="padding:8px 16px;font-size:13px;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;">Anbieten</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeSwapOfferModal(); });
+}
+
+function addSwapWillingRange() {
+  const c = document.getElementById('swap-willing-ranges');
+  const row = document.createElement('div');
+  row.className = 'swap-range-row';
+  row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
+  row.innerHTML = `
+    <input type="date" class="swap-range-start" style="flex:1;padding:6px 8px;border:1px solid var(--gray-200);border-radius:8px;font-size:13px;">
+    <span style="color:var(--gray-400);">→</span>
+    <input type="date" class="swap-range-end" style="flex:1;padding:6px 8px;border:1px solid var(--gray-200);border-radius:8px;font-size:13px;">
+    <button onclick="this.parentElement.remove()" style="background:none;border:none;color:var(--gray-400);cursor:pointer;font-size:16px;">×</button>
+  `;
+  c.appendChild(row);
+}
+
+function closeSwapOfferModal() {
+  const m = document.getElementById('swap-offer-modal');
+  if (m) m.remove();
+}
+
+async function submitSwapOffer(assignmentId) {
+  // Collect willing ranges
+  const rows = document.querySelectorAll('#swap-willing-ranges .swap-range-row');
+  const willingRanges = [];
+  rows.forEach(row => {
+    const start = row.querySelector('.swap-range-start')?.value;
+    const end = row.querySelector('.swap-range-end')?.value;
+    if (start && end) willingRanges.push({ startDate: start + 'T12:00:00.000Z', endDate: end + 'T12:00:00.000Z' });
+  });
+
+  // Collect willing shift types
+  const willingShiftTypes = [];
+  document.querySelectorAll('.swap-st-cb:checked').forEach(cb => willingShiftTypes.push(cb.value));
+
+  if (willingShiftTypes.length === 0) {
+    showToast('Bitte wählen Sie mindestens einen Schichttyp.', 'error');
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/portal/swap-offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ assignmentId, willingRanges, willingShiftTypes }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { showToast(d.error || 'Fehler', 'error'); return; }
+    closeSwapOfferModal();
+    showToast('✓ Schicht zum Tausch angeboten!', 'success');
+    await loadSwapData();
+  } catch { showToast('Verbindungsfehler', 'error'); }
+}
+
+async function withdrawSwapOffer(offerId) {
+  try {
+    const resp = await fetch('/api/portal/swap-offer/withdraw', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ offerId }),
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showToast(d.error || 'Fehler', 'error'); return; }
+    showToast('✓ Angebot zurückgezogen', 'success');
+    await loadSwapData();
+  } catch { showToast('Verbindungsfehler', 'error'); }
+}
+
+function renderMySwapOffers() {
+  const c = document.getElementById('my-swap-offers');
+  const emptyEl = document.getElementById('swap-offers-empty');
+  if (!c) return;
+
+  const activeOffers = swapOffers.filter(o => o.status === 'open');
+  const pastOffers = swapOffers.filter(o => o.status !== 'open');
+
+  if (swapOffers.length === 0) {
+    c.innerHTML = '';
+    emptyEl.classList.remove('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+
+  let html = '';
+
+  if (activeOffers.length > 0) {
+    html += activeOffers.map(o => {
+      const startStr = new Date(o.startDate).toLocaleDateString('de-DE');
+      const endStr = new Date(o.endDate).toLocaleDateString('de-DE');
+      const willingStr = (o.willingShiftTypes || []).map(st => SHIFT_NAMES[st] || st).join(', ');
+      const rangesStr = (o.willingRanges || []).map(r => {
+        return new Date(r.startDate).toLocaleDateString('de-DE') + ' – ' + new Date(r.endDate).toLocaleDateString('de-DE');
+      }).join(', ');
+      return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:start;">
+          <div>
+            <div style="font-weight:600;font-size:13px;">${SHIFT_NAMES[o.shiftType] || o.shiftType}</div>
+            <div style="font-size:12px;color:var(--gray-500);">${startStr} — ${endStr}</div>
+            ${willingStr ? `<div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Akzeptiert: ${willingStr}</div>` : ''}
+            ${rangesStr ? `<div style="font-size:11px;color:var(--gray-500);">Zeitraum: ${rangesStr}</div>` : ''}
+          </div>
+          <button onclick="withdrawSwapOffer('${o.id}')" style="padding:4px 10px;font-size:11px;background:#fee2e2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;cursor:pointer;">Zurückziehen</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  if (pastOffers.length > 0) {
+    html += `<div style="margin-top:12px;font-size:12px;color:var(--gray-400);font-weight:600;">Vergangene Angebote</div>`;
+    html += pastOffers.map(o => {
+      const startStr = new Date(o.startDate).toLocaleDateString('de-DE');
+      const endStr = new Date(o.endDate).toLocaleDateString('de-DE');
+      const statusLabel = o.status === 'matched' ? '🎉 Gematcht' : o.status === 'withdrawn' ? 'Zurückgezogen' : o.status;
+      const statusColor = o.status === 'matched' ? '#059669' : '#9ca3af';
+      return `<div style="background:var(--gray-50);border:1px solid var(--gray-100);border-radius:10px;padding:10px;margin-top:6px;opacity:0.7;">
+        <div style="font-size:13px;">${SHIFT_NAMES[o.shiftType] || o.shiftType} — ${startStr} bis ${endStr}</div>
+        <div style="font-size:11px;color:${statusColor};font-weight:600;margin-top:2px;">${statusLabel}</div>
+      </div>`;
+    }).join('');
+  }
+
+  c.innerHTML = html;
+}
+
+function renderSwapMatches() {
+  const card = document.getElementById('swap-matches-card');
+  const c = document.getElementById('my-swap-matches');
+  if (!card || !c) return;
+
+  const relevantMatches = swapMatches.filter(m => m.status === 'approved');
+  if (relevantMatches.length === 0) { card.classList.add('hidden'); return; }
+
+  card.classList.remove('hidden');
+  c.innerHTML = relevantMatches.map(m => {
+    return `<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:12px;margin-bottom:8px;">
+      <div style="font-weight:600;font-size:13px;color:#059669;">✓ Tausch genehmigt</div>
+      <div style="font-size:12px;color:var(--gray-600);margin-top:4px;">Der Tausch wurde vom Administrator genehmigt und im Schichtplan aktualisiert.</div>
+    </div>`;
+  }).join('');
 }
 </script>
 </body>
