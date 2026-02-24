@@ -328,10 +328,51 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
     return count === 0 ? 0 : sum / count;
   }
 
+  // ── Per-pool per-type range helpers (prevent worsening) ──────────────
+  const SHIFT_TYPES: string[] = ['verschieben', 'nachtbereitschaft', 'fruehschicht'];
+  function sGroupKey(e: any): string {
+    const allowed = [...(e.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'])].sort().join(',');
+    return `${allowed}|${e.isOver55 ? '55+' : '<55'}`;
+  }
+  function sBuildPools(emps: any[]): { label: string; pool: any[] }[] {
+    const pMap = new Map<string, any[]>();
+    for (const emp of emps) {
+      const key = sGroupKey(emp);
+      if (!pMap.has(key)) pMap.set(key, []);
+      pMap.get(key)!.push(emp);
+    }
+    return Array.from(pMap.entries()).map(([k, p]) => ({ label: k, pool: p }));
+  }
+  function sPerTypeRanges(pool: any[], assigns: any[]): Record<string, number> {
+    const r: Record<string, number> = {};
+    for (const st of SHIFT_TYPES) {
+      if (pool.length === 0) { r[st] = 0; continue; }
+      const counts = pool.map((e: any) => assigns.filter((a: any) => a.shiftType === st && a.employees.includes(e.id)).length);
+      r[st] = Math.max(...counts) - Math.min(...counts);
+    }
+    return r;
+  }
+  function sWorsensRanges(pools: { label: string; pool: any[] }[], baseRanges: Map<string, Record<string, number>>, candidate: any[]): boolean {
+    for (const { label, pool } of pools) {
+      const baseR = baseRanges.get(label)!;
+      const newR = sPerTypeRanges(pool, candidate);
+      if (SHIFT_TYPES.some(t => newR[t] > baseR[t])) return true;
+    }
+    return false;
+  }
+
   // Baseline — use supplied baseline if available (from equality optimizer), otherwise generate fresh
   const baselineResult = suppliedBaseline && suppliedBaseline.length > 0
     ? { assignments: suppliedBaseline, violations: suppliedBaselineViolations || [] as any[] }
     : generateAutomaticShiftPlan(employees, year, startMonth, months, schedulerConfig, departments);
+
+  // Record baseline per-type ranges per pool (must never be worsened)
+  const sPools = sBuildPools(employees);
+  const sBaselineRangesPerPool = new Map<string, Record<string, number>>();
+  for (const { label, pool } of sPools) {
+    sBaselineRangesPerPool.set(label, sPerTypeRanges(pool, baselineResult.assignments));
+  }
+
   let bestAssignments = baselineResult.assignments;
   let bestViolations = baselineResult.violations;
   let bestScores = computeFairnessScores(employees, bestAssignments);
@@ -368,6 +409,10 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
 
         const shuffled = shuffle([...employees]);
         const { assignments: candidate, violations: candidateViolations } = generateAutomaticShiftPlan(shuffled, year, startMonth, months, schedulerConfig, departments);
+
+        // Skip candidate if it worsens per-pool per-type ranges
+        if (sWorsensRanges(sPools, sBaselineRangesPerPool, candidate)) continue;
+
         const candidateScores = computeFairnessScores(employees, candidate);
         const candidateComposite = compositeScore(candidateScores, targets);
         if (candidateComposite > bestComposite) {

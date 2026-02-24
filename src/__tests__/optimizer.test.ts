@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { runOptimiser } from '../utils/optimizer';
 import { computeFairnessScores } from '../utils/fairnessImpact';
-import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig, generateAutomaticShiftPlan } from '../utils/scheduler';
+import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig, generateAutomaticShiftPlan, runEqualityOptimiser, runTotalBalanceOptimiser } from '../utils/scheduler';
 import { Employee } from '../types';
 
 // ── shared employee pool ────────────────────────────────────────────────────
@@ -267,5 +267,169 @@ describe('Fairness Optimizer', () => {
 
     // The optimizer should achieve at least equal, and typically better scores
     expect(optComposite).toBeGreaterThanOrEqual(greedyComposite - 1); // allow tiny rounding difference
+  });
+});
+
+// ---------------------------------------------------------------------------
+// total-balance optimizer constraints
+// ---------------------------------------------------------------------------
+describe('Total balance optimizer', () => {
+  function groupKey(e: Employee): string {
+    const allowed = [...(e.allowedShiftTypes ?? ['fruehschicht','verschieben','nachtbereitschaft'])].sort().join(',');
+    return `${allowed}|${e.isOver55 ? '55+' : '<55'}`;
+  }
+
+  function perTypeRange(pool: Employee[], assigns: any[]): Record<string, number> {
+    const r: Record<string, number> = {};
+    const types: Array<'verschieben'|'nachtbereitschaft'|'fruehschicht'> = ['verschieben','nachtbereitschaft','fruehschicht'];
+    for (const st of types) {
+      if (pool.length === 0) { r[st] = 0; continue; }
+      const counts = pool.map(e => assigns.filter(a => a.shiftType === st && a.employees.includes(e.id)).length);
+      r[st] = Math.max(...counts) - Math.min(...counts);
+    }
+    return r;
+  }
+
+  function computePoolsRanges(employees: Employee[], assigns: any[]) {
+    const poolMap: Record<string, Employee[]> = {};
+    for (const e of employees) {
+      const key = groupKey(e);
+      poolMap[key] = poolMap[key] || [];
+      poolMap[key].push(e);
+    }
+    const out: Record<string, number> = {};
+    for (const key of Object.keys(poolMap)) {
+      const ranges = perTypeRange(poolMap[key], assigns);
+      for (const st of Object.keys(ranges)) {
+        out[`${key}:${st}`] = ranges[st as string];
+      }
+    }
+    return out;
+  }
+
+  it('does not worsen per-type ranges per employee pool', () => {
+    const emps = makeEmployees(20);
+    const baseline = generateAutomaticShiftPlan(emps, 2026, 0, 2, DEFAULT_SCHEDULER_CONFIG).assignments;
+    const baselineRanges = computePoolsRanges(emps, baseline);
+
+    // feed baseline through equality first to get a realistic starting point
+    const equalityResult = runEqualityOptimiser(emps, baseline, DEFAULT_SCHEDULER_CONFIG, 10);
+
+    const totalRes = runTotalBalanceOptimiser(emps, equalityResult.assignments, DEFAULT_SCHEDULER_CONFIG, 20);
+    const afterRanges = computePoolsRanges(emps, totalRes.assignments);
+
+    // every pool/type range must be <= baseline
+    for (const k of Object.keys(baselineRanges)) {
+      expect(afterRanges[k]).toBeLessThanOrEqual(baselineRanges[k]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fairness optimizer — range preservation
+// ---------------------------------------------------------------------------
+describe('Fairness Optimizer — range preservation', () => {
+  function groupKey(e: Employee): string {
+    const allowed = [...(e.allowedShiftTypes ?? ['fruehschicht','verschieben','nachtbereitschaft'])].sort().join(',');
+    return `${allowed}|${e.isOver55 ? '55+' : '<55'}`;
+  }
+
+  function perTypeRange(pool: Employee[], assigns: any[]): Record<string, number> {
+    const r: Record<string, number> = {};
+    const types: Array<'verschieben'|'nachtbereitschaft'|'fruehschicht'> = ['verschieben','nachtbereitschaft','fruehschicht'];
+    for (const st of types) {
+      if (pool.length === 0) { r[st] = 0; continue; }
+      const counts = pool.map(e => assigns.filter((a: any) => a.shiftType === st && a.employees.includes(e.id)).length);
+      r[st] = Math.max(...counts) - Math.min(...counts);
+    }
+    return r;
+  }
+
+  function computePoolsRanges(emps: Employee[], assigns: any[]) {
+    const poolMap: Record<string, Employee[]> = {};
+    for (const e of emps) {
+      const key = groupKey(e);
+      poolMap[key] = poolMap[key] || [];
+      poolMap[key].push(e);
+    }
+    const out: Record<string, number> = {};
+    for (const key of Object.keys(poolMap)) {
+      const ranges = perTypeRange(poolMap[key], assigns);
+      for (const st of Object.keys(ranges)) {
+        out[`${key}:${st}`] = ranges[st as string];
+      }
+    }
+    return out;
+  }
+
+  it('does not worsen per-type ranges per employee-type pool', () => {
+    const emps = makeEmployees(16);
+    // Generate a greedy baseline to establish starting ranges
+    const { assignments: baseline } = generateAutomaticShiftPlan(emps, 2026, 0, 2, DEFAULT_SCHEDULER_CONFIG);
+    const baselineRanges = computePoolsRanges(emps, baseline);
+
+    // Run the fairness optimizer
+    const result = runOptimiser(
+      emps,
+      2026,
+      0,
+      2,
+      DEFAULT_SCHEDULER_CONFIG,
+      { maxIterations: 100, targets: { overall: true, verschieben: true, nacht: true, frueh: true } }
+    );
+    const afterRanges = computePoolsRanges(emps, result.assignments);
+
+    // Every pool/type range must be <= baseline (i.e. not worsened)
+    for (const k of Object.keys(baselineRanges)) {
+      expect(afterRanges[k]).toBeLessThanOrEqual(baselineRanges[k]);
+    }
+  });
+
+  it('does not worsen ranges with mixed employee types (Ü55 + non-Ü55)', () => {
+    // Create employees with different allowed shift types and ages
+    const emps: Employee[] = [];
+    for (let i = 0; i < 6; i++) {
+      emps.push({
+        id: `u55-${i}`,
+        name: `Ü55 Employee ${i}`,
+        department: 'dept-A',
+        isOver55: true,
+        hasL2: false,
+        allowedShiftTypes: ['verschieben'],
+        vacationDays: [],
+        vacationRanges: [],
+        preferences: [],
+      });
+    }
+    for (let i = 0; i < 12; i++) {
+      emps.push({
+        id: `young-${i}`,
+        name: `Young Employee ${i}`,
+        department: i < 6 ? 'dept-A' : 'dept-B',
+        isOver55: false,
+        hasL2: true,
+        allowedShiftTypes: ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
+        vacationDays: [],
+        vacationRanges: [],
+        preferences: [],
+      });
+    }
+
+    const { assignments: baseline } = generateAutomaticShiftPlan(emps, 2026, 0, 2, DEFAULT_SCHEDULER_CONFIG);
+    const baselineRanges = computePoolsRanges(emps, baseline);
+
+    const result = runOptimiser(
+      emps,
+      2026,
+      0,
+      2,
+      DEFAULT_SCHEDULER_CONFIG,
+      { maxIterations: 50, targets: { overall: true, verschieben: true, nacht: true, frueh: true } }
+    );
+    const afterRanges = computePoolsRanges(emps, result.assignments);
+
+    for (const k of Object.keys(baselineRanges)) {
+      expect(afterRanges[k]).toBeLessThanOrEqual(baselineRanges[k]);
+    }
   });
 });

@@ -19,6 +19,7 @@
 import {
   Employee,
   ShiftAssignment,
+  ShiftType,
   SchedulerConfig,
   Department,
 } from '../types';
@@ -87,6 +88,51 @@ function compositeScore(scores: FairnessScores, targets: OptimiserTargets): numb
   return count === 0 ? 0 : sum / count;
 }
 
+// ── per-pool per-type range helpers ─────────────────────────────────────────
+
+const SHIFT_TYPES: ShiftType[] = ['verschieben', 'nachtbereitschaft', 'fruehschicht'];
+
+function groupKey(e: Employee): string {
+  const allowed = [...(e.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'])].sort().join(',');
+  return `${allowed}|${e.isOver55 ? '55+' : '<55'}`;
+}
+
+function buildPools(employees: Employee[]): { label: string; pool: Employee[] }[] {
+  const poolMap = new Map<string, Employee[]>();
+  for (const emp of employees) {
+    const key = groupKey(emp);
+    if (!poolMap.has(key)) poolMap.set(key, []);
+    poolMap.get(key)!.push(emp);
+  }
+  return Array.from(poolMap.entries()).map(([key, pool]) => ({ label: key, pool }));
+}
+
+function perTypeRanges(pool: Employee[], assignments: ShiftAssignment[]): Record<ShiftType, number> {
+  const r = {} as Record<ShiftType, number>;
+  for (const st of SHIFT_TYPES) {
+    if (pool.length === 0) { r[st] = 0; continue; }
+    const counts = pool.map(e =>
+      assignments.filter(a => a.shiftType === st && a.employees.includes(e.id)).length
+    );
+    r[st] = Math.max(...counts) - Math.min(...counts);
+  }
+  return r;
+}
+
+/** Returns true if any pool's per-type range in `candidate` is worse than in `baseline`. */
+function worsensRanges(
+  pools: { label: string; pool: Employee[] }[],
+  baselineRangesPerPool: Map<string, Record<ShiftType, number>>,
+  candidate: ShiftAssignment[],
+): boolean {
+  for (const { label, pool } of pools) {
+    const baseR = baselineRangesPerPool.get(label)!;
+    const newR = perTypeRanges(pool, candidate);
+    if (SHIFT_TYPES.some(t => newR[t] > baseR[t])) return true;
+  }
+  return false;
+}
+
 // ── main optimiser ──────────────────────────────────────────────────────────
 
 /**
@@ -113,10 +159,20 @@ export function runOptimiser(
 ): OptimiserResult {
   const { maxIterations, targets } = optimiserConfig;
 
+  // ── Build per-pool baseline ranges (must never be worsened) ───────────
+  const pools = buildPools(employees);
+  const baselineRangesPerPool = new Map<string, Record<ShiftType, number>>();
+
   // ── Step 1: baseline with original order ──────────────────────────────
   const { assignments: baseline } = generateAutomaticShiftPlan(
     employees, year, startMonth, months, schedulerConfig, departments
   );
+
+  // Record baseline per-type ranges per pool
+  for (const { label, pool } of pools) {
+    baselineRangesPerPool.set(label, perTypeRanges(pool, baseline));
+  }
+
   let bestAssignments = baseline;
   let bestScores = computeFairnessScores(employees, baseline);
   let bestComposite = compositeScore(bestScores, targets);
@@ -146,6 +202,9 @@ export function runOptimiser(
     const { assignments: candidate } = generateAutomaticShiftPlan(
       shuffled, year, startMonth, months, schedulerConfig, departments
     );
+
+    // Skip candidate if it worsens per-pool per-type ranges
+    if (worsensRanges(pools, baselineRangesPerPool, candidate)) continue;
 
     const candidateScores = computeFairnessScores(employees, candidate);
     const candidateComposite = compositeScore(candidateScores, targets);

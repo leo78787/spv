@@ -57,3 +57,4 @@ describe('helpers.processImportPreview', () => {
     expect(employeesToAdd).toHaveLength(3 - 1); // one row had an error
   });
 });
+

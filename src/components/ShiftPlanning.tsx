@@ -189,6 +189,7 @@ export function ShiftPlanning() {
 
   // Modal dialog states
   const [releaseWarningOpen, setReleaseWarningOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [deletePlanOpen, setDeletePlanOpen] = useState(false);
 
   // ── Equality optimizer state ───────────────────────────────────────────────
@@ -305,6 +306,23 @@ export function ShiftPlanning() {
     moduleCachedSchedulerConfig = schedulerConfig;
   }, [schedulerConfig]);
 
+  // Shared release-check helper: shows warning modal if plan is released, otherwise runs action immediately
+  const checkReleaseAndRun = async (action: () => void) => {
+    try {
+      const token = getAuthToken();
+      const relResp = await fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } });
+      if (relResp.ok) {
+        const { released } = await relResp.json();
+        if (released) {
+          setPendingAction(() => action);
+          setReleaseWarningOpen(true);
+          return;
+        }
+      }
+    } catch { /* ignore release-check errors */ }
+    action();
+  };
+
   const handleGenerateFullPlan = async () => {
     if (employees.length === 0) {
       setGenerationResult({
@@ -315,20 +333,7 @@ export function ShiftPlanning() {
       return;
     }
 
-    // Warn if plan is currently released
-    try {
-      const token = getAuthToken();
-      const relResp = await fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } });
-      if (relResp.ok) {
-        const { released } = await relResp.json();
-        if (released) {
-          setReleaseWarningOpen(true);
-          return;
-        }
-      }
-    } catch { /* ignore release-check errors */ }
-
-    doGenerate();
+    await checkReleaseAndRun(doGenerate);
   };
 
   const doGenerate = async () => {
@@ -419,21 +424,49 @@ export function ShiftPlanning() {
   };
 
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
-  const handleOptimise = useCallback(() => {
+  const doOptimise = useCallback(() => {
     if (employees.length === 0) return;
+    setReleaseWarningOpen(false);
+
+    // Revoke release if currently released
+    const token = getAuthToken();
+    fetch('/api/plan/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ released: false }),
+    }).catch(() => { /* ignore */ });
+
     // Use current plan assignments as baseline (from equality step)
     const baseline = shiftPlan?.assignments;
     const baseViolations = shiftPlan?.violations;
     startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline, baseViolations);
   }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments, shiftPlan?.violations]);
 
+  const handleOptimise = useCallback(async () => {
+    if (employees.length === 0) return;
+    await checkReleaseAndRun(doOptimise);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, doOptimise]);
+
   const handleCancelOptimiser = useCallback(() => {
     cancelOptimisation();
   }, []);
 
   // ── Equality optimizer handler ──────────────────────────────────────────
-  const handleEquality = useCallback(async () => {
+  const doEquality = useCallback(async () => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    setReleaseWarningOpen(false);
+
+    // Revoke release if currently released
+    try {
+      const rToken = getAuthToken();
+      await fetch('/api/plan/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
+        body: JSON.stringify({ released: false }),
+      });
+    } catch { /* ignore */ }
+
     setIsEqualizing(true);
     setEqualityResult(null);
     const token = getAuthToken();
@@ -493,9 +526,27 @@ export function ShiftPlanning() {
     }
   }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
 
-  // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
-  const handleTotalBalance = useCallback(async () => {
+  const handleEquality = useCallback(async () => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    await checkReleaseAndRun(doEquality);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, shiftPlan?.assignments, doEquality]);
+
+  // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
+  const doTotalBalance = useCallback(async () => {
+    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    setReleaseWarningOpen(false);
+
+    // Revoke release if currently released
+    try {
+      const rToken = getAuthToken();
+      await fetch('/api/plan/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
+        body: JSON.stringify({ released: false }),
+      });
+    } catch { /* ignore */ }
+
     setIsTotalBalancing(true);
     setTotalBalanceResult(null);
     const token = getAuthToken();
@@ -553,6 +604,12 @@ export function ShiftPlanning() {
       setIsTotalBalancing(false);
     }
   }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+
+  const handleTotalBalance = useCallback(async () => {
+    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    await checkReleaseAndRun(doTotalBalance);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, shiftPlan?.assignments, doTotalBalance]);
 
   const planStart = new Date(selectedYear, selectedMonth, 1);
   const planEnd = new Date(selectedYear, selectedMonth + (shiftPlan?.months ?? 12), 0); // last day of the n-month range
@@ -1297,20 +1354,23 @@ export function ShiftPlanning() {
             <h3 className="text-lg font-semibold text-gray-800">Plan ist freigegeben</h3>
           </div>
           <p className="text-gray-600 mb-6">
-            Der aktuelle Plan ist für die Mitarbeitenden freigegeben. Beim Neugenerieren wird die Freigabe automatisch aufgehoben. Möchten Sie fortfahren?
+            Der aktuelle Plan ist für die Mitarbeitenden freigegeben. Bei dieser Aktion wird die Freigabe automatisch aufgehoben. Möchten Sie fortfahren?
           </p>
           <div className="flex justify-end gap-3">
             <button
-              onClick={() => setReleaseWarningOpen(false)}
+              onClick={() => { setReleaseWarningOpen(false); setPendingAction(null); }}
               className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
             >
               Abbrechen
             </button>
             <button
-              onClick={doGenerate}
+              onClick={() => {
+                setReleaseWarningOpen(false);
+                if (pendingAction) { pendingAction(); setPendingAction(null); }
+              }}
               className="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 font-medium"
             >
-              Trotzdem generieren
+              Trotzdem fortfahren
             </button>
           </div>
         </div>
