@@ -198,12 +198,15 @@ export interface SwapSettings {
   onlyWithinDepartment: boolean;
   /** Only allow swaps of the same shift type */
   onlyWithinShiftType: boolean;
+  /** Allow ring swaps (A→B→C→A circular trades) */
+  allowRingSwap: boolean;
 }
 
 export const DEFAULT_SWAP_SETTINGS: SwapSettings = {
   enabled: false,
   onlyWithinDepartment: false,
   onlyWithinShiftType: false,
+  allowRingSwap: false,
 };
 
 // ── Swap requests & matches ─────────────────────────────────────────
@@ -230,6 +233,8 @@ export interface SwapMatch {
   id: string;
   offerA: string; // SwapOffer.id
   offerB: string; // SwapOffer.id
+  /** For ring swaps: ordered list of offer IDs forming the ring (A→B→C→...→A) */
+  ringOffers?: string[];
   /** Admin decision */
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;

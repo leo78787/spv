@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useStore, getAuthToken } from '../store';
 import { SwapOffer, SwapMatch, ShiftType } from '../types';
-import { ArrowLeftRight, Check, X, RefreshCw, Clock, AlertCircle, UserCheck, AlertTriangle, ChevronDown, ChevronUp, Undo2 } from 'lucide-react';
+import { ArrowLeftRight, Check, X, RefreshCw, Clock, AlertCircle, UserCheck, AlertTriangle, ChevronDown, ChevronUp, Undo2, RotateCw } from 'lucide-react';
 
 const SHIFT_NAMES: Record<ShiftType, string> = {
   fruehschicht: 'Frühschicht (WE)',
@@ -180,7 +180,8 @@ export function SwapManagement() {
           <p className="text-sm text-gray-500 mt-1">
             {swapSettings.onlyWithinDepartment && 'Nur innerhalb der Abteilung · '}
             {swapSettings.onlyWithinShiftType && 'Nur gleicher Schichttyp · '}
-            {!swapSettings.onlyWithinDepartment && !swapSettings.onlyWithinShiftType && 'Alle Tauschoptionen erlaubt · '}
+            {swapSettings.allowRingSwap && 'Ringtausch aktiv · '}
+            {!swapSettings.onlyWithinDepartment && !swapSettings.onlyWithinShiftType && !swapSettings.allowRingSwap && 'Alle Tauschoptionen erlaubt · '}
             {openOffers.length} offene Angebote · {pendingMatches.length} ausstehende Matches
           </p>
         </div>
@@ -231,6 +232,95 @@ export function SwapManagement() {
           )}
 
           {pendingMatches.map(match => {
+            const isRing = match.ringOffers && match.ringOffers.length >= 3;
+            const violations = matchViolations[match.id];
+            const isCheckingViolations = violationsLoading[match.id];
+
+            if (isRing) {
+              // ── Ring swap match ──
+              const ringOffers = match.ringOffers!.map(id => data.offers.find(o => o.id === id)).filter(Boolean) as SwapOffer[];
+              if (ringOffers.length < 3) return null;
+
+              return (
+                <div key={match.id} className="bg-white rounded-lg shadow-md p-5 border-l-4 border-purple-500">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <RotateCw size={20} className="text-purple-600" />
+                      <span className="font-semibold text-purple-600">Ringtausch ({ringOffers.length} Mitarbeiter)</span>
+                    </div>
+                    <span className="text-xs text-gray-400">{formatDate(match.createdAt)}</span>
+                  </div>
+
+                  {/* Ring visualization */}
+                  <div className="space-y-2 mb-4">
+                    {ringOffers.map((offer, idx) => {
+                      const emp = getEmployee(offer.employeeId);
+                      const dept = emp ? getDepartment(emp.department) : null;
+                      const nextOffer = ringOffers[(idx + 1) % ringOffers.length];
+                      const nextEmp = getEmployee(nextOffer.employeeId);
+                      return (
+                        <div key={offer.id} className="bg-gray-50 rounded-lg p-3 flex items-center gap-3">
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{emp?.name || 'Unbekannt'}</p>
+                            <p className="text-xs text-gray-500">{dept?.name || '—'}</p>
+                            <div className="mt-1 text-sm">
+                              <span className="font-medium text-red-600">Gibt ab: </span>
+                              <span>{SHIFT_NAMES[offer.shiftType as ShiftType] || offer.shiftType}</span>
+                              <span className="text-gray-400 ml-1 text-xs">({formatDate(offer.startDate)} – {formatDate(offer.endDate)})</span>
+                            </div>
+                          </div>
+                          <div className="text-purple-500 text-sm font-medium whitespace-nowrap">
+                            → {nextEmp?.name || '?'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Violations */}
+                  {isCheckingViolations && (
+                    <div className="mb-3 text-xs text-gray-400 flex items-center gap-1">
+                      <RefreshCw size={12} className="animate-spin" /> Prüfe Regelverstöße…
+                    </div>
+                  )}
+                  {violations && violations.length > 0 && (
+                    <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <div className="flex items-center gap-2 text-amber-700 font-medium text-sm mb-1">
+                        <AlertTriangle size={16} />
+                        Regelverstoß bei Genehmigung
+                      </div>
+                      <ul className="text-xs text-amber-600 space-y-0.5 ml-6 list-disc">
+                        {violations.map((v, i) => <li key={i}>{v}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {violations && violations.length === 0 && (
+                    <div className="mb-3 text-xs text-green-600 flex items-center gap-1">
+                      <Check size={12} /> Keine Regelverstöße
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2">
+                    <button
+                      disabled={actionLoading === match.id}
+                      onClick={() => handleResolve(match.id, 'reject')}
+                      className="flex items-center gap-1 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                      <X size={16} /> Ablehnen
+                    </button>
+                    <button
+                      disabled={actionLoading === match.id}
+                      onClick={() => handleResolve(match.id, 'approve')}
+                      className="flex items-center gap-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                    >
+                      <Check size={16} /> Bestätigen
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            // ── Direct swap match ──
             const offerA = data.offers.find(o => o.id === match.offerA);
             const offerB = data.offers.find(o => o.id === match.offerB);
             if (!offerA || !offerB) return null;
@@ -239,8 +329,6 @@ export function SwapManagement() {
             const empB = getEmployee(offerB.employeeId);
             const deptA = empA ? getDepartment(empA.department) : null;
             const deptB = empB ? getDepartment(empB.department) : null;
-            const violations = matchViolations[match.id];
-            const isCheckingViolations = violationsLoading[match.id];
 
             return (
               <div key={match.id} className="bg-white rounded-lg shadow-md p-5 border-l-4 border-primary-500">
@@ -323,6 +411,80 @@ export function SwapManagement() {
               <h3 className="text-sm font-semibold text-gray-500 mb-2 uppercase tracking-wider">Abgeschlossene Matches</h3>
               <div className="space-y-2">
                 {resolvedMatches.map(match => {
+                  const isRingMatch = match.ringOffers && match.ringOffers.length >= 3;
+
+                  if (isRingMatch) {
+                    const isExpanded = expandedCompleted.has(match.id);
+                    const ringOffers = match.ringOffers!.map(id => data.offers.find(o => o.id === id)).filter(Boolean) as SwapOffer[];
+                    const ringEmps = ringOffers.map(o => getEmployee(o.employeeId));
+                    const names = ringEmps.map(e => e?.name || '?').join(' → ');
+
+                    return (
+                      <div key={match.id} className={`bg-white rounded-lg border transition-all ${match.status === 'approved' ? 'border-green-200' : 'border-red-200'}`}>
+                        <button
+                          onClick={() => setExpandedCompleted(prev => {
+                            const next = new Set(prev);
+                            if (next.has(match.id)) next.delete(match.id); else next.add(match.id);
+                            return next;
+                          })}
+                          className="w-full p-3 flex items-center justify-between text-left hover:bg-gray-50 rounded-lg transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <RotateCw size={14} className="text-purple-500" />
+                            <span className="text-sm">{names}</span>
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded ${match.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {match.status === 'approved' ? 'Genehmigt' : 'Abgelehnt'}
+                            </span>
+                          </div>
+                          {isExpanded ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                        </button>
+                        {isExpanded && (
+                          <div className="px-3 pb-3 border-t border-gray-100 pt-3">
+                            <div className="space-y-2">
+                              {ringOffers.map((offer, idx) => {
+                                const emp = getEmployee(offer.employeeId);
+                                const dept = emp ? getDepartment(emp.department) : null;
+                                const nextEmp = getEmployee(ringOffers[(idx + 1) % ringOffers.length].employeeId);
+                                return (
+                                  <div key={offer.id} className="bg-gray-50 rounded-lg p-3 flex items-center gap-3">
+                                    <div className="flex-1">
+                                      <p className="font-medium text-gray-900 text-sm">{emp?.name || 'Unbekannt'}</p>
+                                      <p className="text-xs text-gray-500">{dept?.name || '—'}</p>
+                                      <div className="mt-1 text-xs text-gray-600">
+                                        <span className="font-medium">Schicht:</span> {SHIFT_NAMES[offer.shiftType as ShiftType] || offer.shiftType}
+                                        <span className="text-gray-400 ml-1">({formatDate(offer.startDate)} – {formatDate(offer.endDate)})</span>
+                                      </div>
+                                    </div>
+                                    <div className="text-purple-500 text-xs font-medium whitespace-nowrap">→ {nextEmp?.name || '?'}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {match.resolvedAt && (
+                              <p className="text-xs text-gray-400 mt-2">
+                                {match.status === 'approved' ? 'Genehmigt' : 'Abgelehnt'} am {formatDate(match.resolvedAt)}
+                              </p>
+                            )}
+                            <div className="flex justify-end mt-3">
+                              <button
+                                disabled={undoLoading}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUndoModal({ matchId: match.id, wasApproved: match.status === 'approved' });
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-amber-300 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+                              >
+                                <Undo2 size={14} />
+                                Rückgängig
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // Direct swap resolved match
                   const offerA = data.offers.find(o => o.id === match.offerA);
                   const offerB = data.offers.find(o => o.id === match.offerB);
                   const empA = offerA ? getEmployee(offerA.employeeId) : null;
@@ -510,7 +672,7 @@ export function SwapManagement() {
                   <ul className="text-xs text-red-600 mt-1 space-y-1 list-disc ml-4">
                     <li>Die Schichtzuweisungen werden im Plan zurückgesetzt</li>
                     <li>Falls der Plan bereits freigegeben ist, sehen die Mitarbeiter sofort den alten Zustand</li>
-                    <li>Beide Tauschangebote werden wieder als &quot;offen&quot; markiert</li>
+                    <li>Alle Tauschangebote werden wieder als &quot;offen&quot; markiert</li>
                   </ul>
                 </div>
               </>

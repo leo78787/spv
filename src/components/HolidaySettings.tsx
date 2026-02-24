@@ -215,6 +215,19 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                     <p className="text-xs text-gray-500">Schichten können nur gegen den gleichen Schichttyp getauscht werden.</p>
                   </div>
                 </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={swapSettings.allowRingSwap ?? false}
+                    onChange={e => setSwapSettings({ ...swapSettings, allowRingSwap: e.target.checked })}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Ringtausch erlauben</span>
+                    <p className="text-xs text-gray-500">Zusätzlich zu direkten Tauschen werden auch zirkuläre Tauschketten erkannt (A→B→C→A), bei denen mehrere Mitarbeiter ihre Schichten im Kreis tauschen.</p>
+                  </div>
+                </label>
               </div>
             )}
           </div>

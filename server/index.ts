@@ -28,7 +28,7 @@ import {
   changePassword,
   getAllCredentialInfo,
 } from './portalAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail } from './mailer.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail } from './mailer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
@@ -1010,6 +1010,20 @@ app.post('/api/portal/swap-offer/withdraw', portalAuthMiddleware, (req, res) => 
   if (offer.status !== 'open') { res.status(400).json({ error: 'Angebot ist nicht mehr aktiv.' }); return; }
 
   offer.status = 'withdrawn';
+
+  // Invalidate any pending matches that reference this withdrawn offer
+  const matches = state.swapMatches || [];
+  for (const m of matches) {
+    if (m.status !== 'pending') continue;
+    const refsOffer = m.offerA === offerId || m.offerB === offerId ||
+      (m.ringOffers && m.ringOffers.includes(offerId));
+    if (refsOffer) {
+      m.status = 'rejected';
+      m.resolvedAt = new Date().toISOString();
+    }
+  }
+  state.swapMatches = matches;
+
   state.swapOffers = offers;
   saveState(state);
   res.json({ success: true });
@@ -1041,32 +1055,8 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
     if (!match) { res.status(404).json({ error: 'Match nicht gefunden.' }); return; }
 
     const offers = state.swapOffers || [];
-    const offerA = offers.find((o: any) => o.id === match.offerA);
-    const offerB = offers.find((o: any) => o.id === match.offerB);
-    if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.', violations: [] }); return; }
-
     const plan = state.shiftPlan;
     if (!plan) { res.status(400).json({ error: 'Kein Schichtplan.', violations: [] }); return; }
-
-    const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
-    const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
-    if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.', violations: [] }); return; }
-
-    // Simulate the swap
-    const tempAssignments = (plan.assignments || []).map((a: any) => ({
-      ...a,
-      employees: [...(a.employees || [])],
-      startDate: new Date(a.startDate),
-      endDate: new Date(a.endDate),
-    }));
-    const tA = tempAssignments.find((a: any) => a.id === offerA.assignmentId);
-    const tB = tempAssignments.find((a: any) => a.id === offerB.assignmentId);
-    if (tA && tB) {
-      tA.employees = tA.employees.filter((id: string) => id !== offerA.employeeId);
-      tA.employees.push(offerB.employeeId);
-      tB.employees = tB.employees.filter((id: string) => id !== offerB.employeeId);
-      tB.employees.push(offerA.employeeId);
-    }
 
     const employees = state.employees || [];
     const config = plan.schedulerConfig || state.schedulerConfig;
@@ -1080,10 +1070,15 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
 
     const violationMessages: string[] = [];
 
-    // 1) Check if each swapped employee can actually work the new assignment
-    //    (respects ALL active rules: vacation, consecutive shifts, adjacency, etc.)
-    const empA = employees.find((e: any) => e.id === offerA.employeeId);
-    const empB = employees.find((e: any) => e.id === offerB.employeeId);
+    const isRing = match.ringOffers && match.ringOffers.length >= 3;
+
+    // Build simulated assignments
+    const tempAssignments = (plan.assignments || []).map((a: any) => ({
+      ...a,
+      employees: [...(a.employees || [])],
+      startDate: new Date(a.startDate),
+      endDate: new Date(a.endDate),
+    }));
     const assignmentsWithoutSwap = (plan.assignments || []).map((a: any) => ({
       ...a,
       employees: [...(a.employees || [])],
@@ -1091,43 +1086,103 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
       endDate: new Date(a.endDate),
     }));
 
-    // Check employee A taking B's shift
-    if (empA && assignmentB) {
-      const otherAssignments = assignmentsWithoutSwap
-        .filter((a: any) => a.id !== assignmentB.id)
-        .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerA.employeeId) }));
-      const canTake = getAvailableEmployeesSorted(
-        [empA], assignmentB.shiftType,
-        new Date(assignmentB.startDate), new Date(assignmentB.endDate),
-        otherAssignments, config, departments,
-      );
-      if (canTake.length === 0) {
-        const dt = new Date(assignmentB.startDate).toLocaleDateString('de-DE');
-        violationMessages.push(
-          `${empA.name} kann ${SHIFT_LABELS[assignmentB.shiftType] || assignmentB.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+    if (isRing) {
+      // ── Ring swap simulation ──
+      const ringOfferIds: string[] = match.ringOffers;
+      const ringOffers = ringOfferIds.map((id: string) => offers.find((o: any) => o.id === id));
+      if (ringOffers.some((o: any) => !o)) { res.status(400).json({ error: 'Angebote nicht gefunden.', violations: [] }); return; }
+
+      const n = ringOffers.length;
+      // Simulate ring swap on tempAssignments: assignment[i] gets emp[(i-1+n)%n]
+      for (let i = 0; i < n; i++) {
+        const t = tempAssignments.find((a: any) => a.id === ringOffers[i].assignmentId);
+        if (t) {
+          t.employees = t.employees.filter((id: string) => id !== ringOffers[i].employeeId);
+          t.employees.push(ringOffers[(i - 1 + n) % n].employeeId);
+        }
+      }
+
+      // Check each employee can take the new shift
+      for (let i = 0; i < n; i++) {
+        const emp = employees.find((e: any) => e.id === ringOffers[i].employeeId);
+        // Employee i takes the shift of employee (i-1+n)%n (previous in ring)
+        const targetOffer = ringOffers[(i - 1 + n) % n];
+        const targetAssignment = (plan.assignments || []).find((a: any) => a.id === targetOffer.assignmentId);
+        if (emp && targetAssignment) {
+          const otherAssignments = assignmentsWithoutSwap
+            .filter((a: any) => a.id !== targetAssignment.id)
+            .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== emp.id) }));
+          const canTake = getAvailableEmployeesSorted(
+            [emp], targetAssignment.shiftType,
+            new Date(targetAssignment.startDate), new Date(targetAssignment.endDate),
+            otherAssignments, config, departments,
+          );
+          if (canTake.length === 0) {
+            const dt = new Date(targetAssignment.startDate).toLocaleDateString('de-DE');
+            violationMessages.push(
+              `${emp.name} kann ${SHIFT_LABELS[targetAssignment.shiftType] || targetAssignment.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+            );
+          }
+        }
+      }
+    } else {
+      // ── Direct swap simulation ──
+      const offerA = offers.find((o: any) => o.id === match.offerA);
+      const offerB = offers.find((o: any) => o.id === match.offerB);
+      if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.', violations: [] }); return; }
+
+      const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+      const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+      if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.', violations: [] }); return; }
+
+      const tA = tempAssignments.find((a: any) => a.id === offerA.assignmentId);
+      const tB = tempAssignments.find((a: any) => a.id === offerB.assignmentId);
+      if (tA && tB) {
+        tA.employees = tA.employees.filter((id: string) => id !== offerA.employeeId);
+        tA.employees.push(offerB.employeeId);
+        tB.employees = tB.employees.filter((id: string) => id !== offerB.employeeId);
+        tB.employees.push(offerA.employeeId);
+      }
+
+      const empA = employees.find((e: any) => e.id === offerA.employeeId);
+      const empB = employees.find((e: any) => e.id === offerB.employeeId);
+
+      if (empA && assignmentB) {
+        const otherAssignments = assignmentsWithoutSwap
+          .filter((a: any) => a.id !== assignmentB.id)
+          .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerA.employeeId) }));
+        const canTake = getAvailableEmployeesSorted(
+          [empA], assignmentB.shiftType,
+          new Date(assignmentB.startDate), new Date(assignmentB.endDate),
+          otherAssignments, config, departments,
         );
+        if (canTake.length === 0) {
+          const dt = new Date(assignmentB.startDate).toLocaleDateString('de-DE');
+          violationMessages.push(
+            `${empA.name} kann ${SHIFT_LABELS[assignmentB.shiftType] || assignmentB.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+          );
+        }
+      }
+
+      if (empB && assignmentA) {
+        const otherAssignments = assignmentsWithoutSwap
+          .filter((a: any) => a.id !== assignmentA.id)
+          .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerB.employeeId) }));
+        const canTake = getAvailableEmployeesSorted(
+          [empB], assignmentA.shiftType,
+          new Date(assignmentA.startDate), new Date(assignmentA.endDate),
+          otherAssignments, config, departments,
+        );
+        if (canTake.length === 0) {
+          const dt = new Date(assignmentA.startDate).toLocaleDateString('de-DE');
+          violationMessages.push(
+            `${empB.name} kann ${SHIFT_LABELS[assignmentA.shiftType] || assignmentA.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+          );
+        }
       }
     }
 
-    // Check employee B taking A's shift
-    if (empB && assignmentA) {
-      const otherAssignments = assignmentsWithoutSwap
-        .filter((a: any) => a.id !== assignmentA.id)
-        .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== offerB.employeeId) }));
-      const canTake = getAvailableEmployeesSorted(
-        [empB], assignmentA.shiftType,
-        new Date(assignmentA.startDate), new Date(assignmentA.endDate),
-        otherAssignments, config, departments,
-      );
-      if (canTake.length === 0) {
-        const dt = new Date(assignmentA.startDate).toLocaleDateString('de-DE');
-        violationMessages.push(
-          `${empB.name} kann ${SHIFT_LABELS[assignmentA.shiftType] || assignmentA.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
-        );
-      }
-    }
-
-    // 2) Compare understaffing violations before vs after the swap
+    // Compare understaffing violations before vs after
     const beforeViolations = detectViolations(
       employees, assignmentsWithoutSwap, config,
       plan.year || new Date().getFullYear(),
@@ -1140,7 +1195,6 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
       plan.startMonth ?? 0,
       plan.months ?? 12,
     );
-    // Find NEW violations that didn't exist before
     const beforeIds = new Set(beforeViolations.map((v: any) => v.id));
     const newViolations = afterViolations.filter((v: any) => !beforeIds.has(v.id));
     for (const v of newViolations) {
@@ -1177,50 +1231,104 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
 
     // Approve: execute the swap
     const offers = state.swapOffers || [];
-    const offerA = offers.find((o: any) => o.id === match.offerA);
-    const offerB = offers.find((o: any) => o.id === match.offerB);
-    if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.' }); return; }
-
     const plan = state.shiftPlan;
     if (!plan) { res.status(400).json({ error: 'Kein Schichtplan.' }); return; }
 
-    const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
-    const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
-    if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.' }); return; }
+    const isRing = match.ringOffers && match.ringOffers.length >= 3;
 
-    // Execute swap: remove each employee from their original, add to the other
-    assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerA.employeeId);
-    assignmentA.employees.push(offerB.employeeId);
-    assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerB.employeeId);
-    assignmentB.employees.push(offerA.employeeId);
+    if (isRing) {
+      // ── Ring swap: each offer[i]'s employee leaves their assignment,
+      //    and the PREVIOUS person in the ring takes it (circular shift). ──
+      const ringOfferIds: string[] = match.ringOffers;
+      const ringOffers = ringOfferIds.map((id: string) => offers.find((o: any) => o.id === id));
+      if (ringOffers.some((o: any) => !o)) { res.status(400).json({ error: 'Angebote nicht gefunden.' }); return; }
 
-    // Mark offers as matched
-    offerA.status = 'matched';
-    offerB.status = 'matched';
-    match.status = 'approved';
-    match.resolvedAt = new Date().toISOString();
+      const ringAssignments = ringOffers.map((o: any) =>
+        (plan.assignments || []).find((a: any) => a.id === o.assignmentId)
+      );
+      if (ringAssignments.some((a: any) => !a)) { res.status(400).json({ error: 'Schichten nicht gefunden.' }); return; }
 
-    state.swapOffers = offers;
-    state.swapMatches = matches;
-    saveState(state);
+      // Execute ring: cycle [0→1→2→0] means emp[0] can take emp[1]'s shift, etc.
+      // So emp[i] goes to assignment[(i+1)%n], meaning assignment[i] gets emp[(i-1+n)%n]
+      const n = ringOffers.length;
+      for (let i = 0; i < n; i++) {
+        const assignment = ringAssignments[i];
+        const currentEmpId = ringOffers[i].employeeId;
+        const newEmpId = ringOffers[(i - 1 + n) % n].employeeId;
+        assignment.employees = assignment.employees.filter((id: string) => id !== currentEmpId);
+        assignment.employees.push(newEmpId);
+      }
 
-    // Send emails to both employees
-    const employees = state.employees || [];
-    const empA = employees.find((e: any) => e.id === offerA.employeeId);
-    const empB = employees.find((e: any) => e.id === offerB.employeeId);
+      // Mark all offers as matched
+      for (const o of ringOffers) o.status = 'matched';
+      match.status = 'approved';
+      match.resolvedAt = new Date().toISOString();
 
-    if (empA?.email) {
-      try {
-        await sendSwapMatchEmail(empA.email, empA.name, empB?.name || 'Kollege/in', offerA, offerB);
-      } catch (e) { console.error('[swap] mail to A failed:', e); }
+      state.swapOffers = offers;
+      state.swapMatches = matches;
+      saveState(state);
+
+      // Send emails to all ring participants
+      const employees = state.employees || [];
+      const allParticipantNames = ringOffers.map((o: any) => {
+        const e = employees.find((emp: any) => emp.id === o.employeeId);
+        return e?.name || 'Unbekannt';
+      });
+      for (let i = 0; i < n; i++) {
+        const emp = employees.find((e: any) => e.id === ringOffers[i].employeeId);
+        // Employee i gave away ringOffers[i] and received ringOffers[(i-1+n)%n]'s shift
+        const receivedOffer = ringOffers[(i - 1 + n) % n];
+        if (emp?.email) {
+          try {
+            await sendRingSwapMatchEmail(emp.email, emp.name, ringOffers[i], receivedOffer, allParticipantNames);
+          } catch (e) { console.error('[ring-swap] mail failed:', e); }
+        }
+      }
+
+      res.json({ success: true, match });
+    } else {
+      // ── Direct swap ──
+      const offerA = offers.find((o: any) => o.id === match.offerA);
+      const offerB = offers.find((o: any) => o.id === match.offerB);
+      if (!offerA || !offerB) { res.status(400).json({ error: 'Angebote nicht gefunden.' }); return; }
+
+      const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+      const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+      if (!assignmentA || !assignmentB) { res.status(400).json({ error: 'Schichten nicht gefunden.' }); return; }
+
+      // Execute swap: remove each employee from their original, add to the other
+      assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerA.employeeId);
+      assignmentA.employees.push(offerB.employeeId);
+      assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerB.employeeId);
+      assignmentB.employees.push(offerA.employeeId);
+
+      offerA.status = 'matched';
+      offerB.status = 'matched';
+      match.status = 'approved';
+      match.resolvedAt = new Date().toISOString();
+
+      state.swapOffers = offers;
+      state.swapMatches = matches;
+      saveState(state);
+
+      // Send emails to both employees
+      const employees = state.employees || [];
+      const empA = employees.find((e: any) => e.id === offerA.employeeId);
+      const empB = employees.find((e: any) => e.id === offerB.employeeId);
+
+      if (empA?.email) {
+        try {
+          await sendSwapMatchEmail(empA.email, empA.name, empB?.name || 'Kollege/in', offerA, offerB);
+        } catch (e) { console.error('[swap] mail to A failed:', e); }
+      }
+      if (empB?.email) {
+        try {
+          await sendSwapMatchEmail(empB.email, empB.name, empA?.name || 'Kollege/in', offerB, offerA);
+        } catch (e) { console.error('[swap] mail to B failed:', e); }
+      }
+
+      res.json({ success: true, match });
     }
-    if (empB?.email) {
-      try {
-        await sendSwapMatchEmail(empB.email, empB.name, empA?.name || 'Kollege/in', offerB, offerA);
-      } catch (e) { console.error('[swap] mail to B failed:', e); }
-    }
-
-    res.json({ success: true, match });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1237,32 +1345,72 @@ app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
     if (match.status === 'pending') { res.status(400).json({ error: 'Match ist noch ausstehend.' }); return; }
 
     const offers = state.swapOffers || [];
-    const offerA = offers.find((o: any) => o.id === match.offerA);
-    const offerB = offers.find((o: any) => o.id === match.offerB);
+    const isRing = match.ringOffers && match.ringOffers.length >= 3;
 
-    // If the match was approved, reverse the assignment swap
-    if (match.status === 'approved' && offerA && offerB) {
+    if (match.status === 'approved') {
       const plan = state.shiftPlan;
-      if (plan) {
-        const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
-        const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
-        if (assignmentA && assignmentB) {
-          // Reverse: remove B from A's assignment, add A back; remove A from B's, add B back
-          assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerB.employeeId);
-          if (!assignmentA.employees.includes(offerA.employeeId)) assignmentA.employees.push(offerA.employeeId);
-          assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerA.employeeId);
-          if (!assignmentB.employees.includes(offerB.employeeId)) assignmentB.employees.push(offerB.employeeId);
+
+      if (isRing && plan) {
+        // Reverse ring swap
+        const ringOfferIds: string[] = match.ringOffers;
+        const ringOffers = ringOfferIds.map((id: string) => offers.find((o: any) => o.id === id));
+        const ringAssignments = ringOffers.map((o: any) =>
+          o ? (plan.assignments || []).find((a: any) => a.id === o.assignmentId) : null
+        );
+
+        const n = ringOffers.length;
+        for (let i = 0; i < n; i++) {
+          if (!ringOffers[i] || !ringAssignments[i]) continue;
+          const assignment = ringAssignments[i];
+          const originalEmpId = ringOffers[i].employeeId;
+          const swappedInEmpId = ringOffers[(i - 1 + n) % n].employeeId;
+          // Remove the person who was swapped in, restore original
+          assignment.employees = assignment.employees.filter((id: string) => id !== swappedInEmpId);
+          if (!assignment.employees.includes(originalEmpId)) assignment.employees.push(originalEmpId);
         }
+
+        // Only reset offers that are still 'matched' back to 'open'
+        for (const o of ringOffers) { if (o && o.status === 'matched') o.status = 'open'; }
+      } else {
+        // Reverse direct swap
+        const offerA = offers.find((o: any) => o.id === match.offerA);
+        const offerB = offers.find((o: any) => o.id === match.offerB);
+
+        if (offerA && offerB && plan) {
+          const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+          const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+          if (assignmentA && assignmentB) {
+            assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerB.employeeId);
+            if (!assignmentA.employees.includes(offerA.employeeId)) assignmentA.employees.push(offerA.employeeId);
+            assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerA.employeeId);
+            if (!assignmentB.employees.includes(offerB.employeeId)) assignmentB.employees.push(offerB.employeeId);
+          }
+        }
+
+        if (offerA && offerA.status === 'matched') offerA.status = 'open';
+        if (offerB && offerB.status === 'matched') offerB.status = 'open';
       }
     }
+    // For rejected matches: don't touch offer status at all
 
-    // Reset offers to 'open'
-    if (offerA) offerA.status = 'open';
-    if (offerB) offerB.status = 'open';
+    // Check if all referenced offers are still open — if not, remove the match entirely
+    const allOfferIds = isRing
+      ? (match.ringOffers as string[])
+      : [match.offerA, match.offerB];
+    const allOpen = allOfferIds.every((id: string) => {
+      const o = offers.find((x: any) => x.id === id);
+      return o && o.status === 'open';
+    });
 
-    // Reset match to 'pending'
-    match.status = 'pending';
-    delete match.resolvedAt;
+    if (allOpen) {
+      // All offers still active → set match back to pending
+      match.status = 'pending';
+      delete match.resolvedAt;
+    } else {
+      // At least one offer was withdrawn → remove the match
+      const idx = matches.indexOf(match);
+      if (idx !== -1) matches.splice(idx, 1);
+    }
 
     state.swapOffers = offers;
     state.swapMatches = matches;
@@ -1277,11 +1425,28 @@ app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
 function findAndCreateMatches(state: any) {
   const offers: any[] = state.swapOffers || [];
   const matches: any[] = state.swapMatches || [];
-  const swapSettings = state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false };
+  const swapSettings = state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false, allowRingSwap: false };
   const employees = state.employees || [];
+
+  // ── 0) Cleanup: invalidate pending matches that reference non-open offers ──
+  for (const m of matches) {
+    if (m.status !== 'pending') continue;
+    const offerIds = (m.ringOffers && m.ringOffers.length > 0)
+      ? m.ringOffers
+      : [m.offerA, m.offerB];
+    const hasInvalid = offerIds.some((id: string) => {
+      const o = offers.find((x: any) => x.id === id);
+      return !o || o.status !== 'open';
+    });
+    if (hasInvalid) {
+      m.status = 'rejected';
+      m.resolvedAt = new Date().toISOString();
+    }
+  }
 
   const openOffers = offers.filter((o: any) => o.status === 'open');
 
+  // ── 1) Direct (pairwise) matches ─────────────────────────────────────
   for (let i = 0; i < openOffers.length; i++) {
     for (let j = i + 1; j < openOffers.length; j++) {
       const a = openOffers[i];
@@ -1292,7 +1457,8 @@ function findAndCreateMatches(state: any) {
 
       // Check if already matched
       const alreadyMatched = matches.some((m: any) =>
-        (m.offerA === a.id && m.offerB === b.id) || (m.offerA === b.id && m.offerB === a.id)
+        m.status === 'pending' &&
+        ((m.offerA === a.id && m.offerB === b.id) || (m.offerA === b.id && m.offerB === a.id))
       );
       if (alreadyMatched) continue;
 
@@ -1328,8 +1494,130 @@ function findAndCreateMatches(state: any) {
     }
   }
 
+  // ── 2) Ring swap matches (cycles of length 3+) ───────────────────────
+  if (swapSettings.allowRingSwap && openOffers.length >= 3) {
+    findRingMatches(openOffers, matches, swapSettings, employees);
+  }
+
   state.swapMatches = matches;
   saveState(state);
+}
+
+/**
+ * Find ring swaps: cycles A→B→C→…→A where each participant gives their
+ * shift to the next person in the ring, and the last gives theirs to the first.
+ *
+ * Built as a directed graph where edge (offer_i → offer_j) means:
+ *  - offer_i is willing to take offer_j's shift (type + time range match)
+ *  - department constraints are satisfied
+ *
+ * Then we look for simple cycles of length 3..MAX_RING.
+ */
+function findRingMatches(
+  openOffers: any[],
+  matches: any[],
+  swapSettings: any,
+  employees: any[],
+) {
+  const MAX_RING = 5; // limit cycle length for performance
+
+  // Build adjacency list: canTake[i] = indices j where offer[i] is willing to take offer[j]'s shift
+  const n = openOffers.length;
+  const canTake: number[][] = Array.from({ length: n }, () => []);
+
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      if (openOffers[i].employeeId === openOffers[j].employeeId) continue;
+
+      // Department constraint
+      if (swapSettings.onlyWithinDepartment) {
+        const empI = employees.find((e: any) => e.id === openOffers[i].employeeId);
+        const empJ = employees.find((e: any) => e.id === openOffers[j].employeeId);
+        if (empI?.department !== empJ?.department) continue;
+      }
+
+      // offer[i] is willing to accept offer[j]'s shift
+      if (checkWillingMatch(openOffers[i], openOffers[j], swapSettings)) {
+        canTake[i].push(j);
+      }
+    }
+  }
+
+  // DFS cycle detection: find all simple cycles of length 3..MAX_RING
+  // Use a set of canonical keys to avoid duplicate cycles
+  const foundCycleKeys = new Set<string>();
+
+  // Only count offers in pending/approved matches as "already matched"
+  const alreadyInMatch = new Set<string>();
+  for (const m of matches) {
+    if (m.status !== 'pending' && m.status !== 'approved') continue;
+    if (m.ringOffers && m.ringOffers.length > 0) {
+      for (const oid of m.ringOffers) alreadyInMatch.add(oid);
+    } else {
+      alreadyInMatch.add(m.offerA);
+      alreadyInMatch.add(m.offerB);
+    }
+  }
+
+  const newRingMatches: any[] = [];
+
+  for (let startIdx = 0; startIdx < n; startIdx++) {
+    // DFS from startIdx looking for cycles back to startIdx
+    const path: number[] = [startIdx];
+    const visited = new Set<number>([startIdx]);
+
+    function dfs(current: number) {
+      if (path.length > MAX_RING) return;
+
+      for (const next of canTake[current]) {
+        if (next === startIdx && path.length >= 3) {
+          // Found a cycle! path = [startIdx, ..., current] → startIdx
+          // Canonical key: rotate so smallest index is first, then join
+          const cycle = [...path];
+          const minIdx = cycle.indexOf(Math.min(...cycle));
+          const rotated = [...cycle.slice(minIdx), ...cycle.slice(0, minIdx)];
+          const key = rotated.join('-');
+
+          if (foundCycleKeys.has(key)) continue;
+          foundCycleKeys.add(key);
+
+          // Check that none of the offers in this ring are already matched
+          const ringOfferIds = cycle.map(idx => openOffers[idx].id);
+          if (ringOfferIds.some(id => alreadyInMatch.has(id))) continue;
+
+          // All employees in the ring must be distinct
+          const empIds = cycle.map(idx => openOffers[idx].employeeId);
+          if (new Set(empIds).size !== empIds.length) continue;
+
+          // Create the ring match
+          newRingMatches.push({
+            id: `ring-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            offerA: ringOfferIds[0],
+            offerB: ringOfferIds[1],
+            ringOffers: ringOfferIds,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+          });
+
+          // Mark these offers as used so they don't appear in other rings
+          for (const id of ringOfferIds) alreadyInMatch.add(id);
+          return; // one ring per start is enough
+        }
+
+        if (visited.has(next)) continue;
+        visited.add(next);
+        path.push(next);
+        dfs(next);
+        path.pop();
+        visited.delete(next);
+      }
+    }
+
+    dfs(startIdx);
+  }
+
+  for (const rm of newRingMatches) matches.push(rm);
 }
 
 /** Check if offer A is willing to take offer B's shift */

@@ -117,6 +117,73 @@ export async function sendPlanNotificationEmail(
 }
 
 /**
+ * Send a ring swap match notification email.
+ * Shows: old shift, new shift, and all participants in the ring.
+ */
+export async function sendRingSwapMatchEmail(
+  to: string,
+  employeeName: string,
+  myOffer: any,
+  newOffer: any,
+  allParticipants: string[],
+): Promise<void> {
+  const portalUrl = `${APP_BASE_URL}/portal`;
+  const SHIFT_NAMES: Record<string, string> = {
+    fruehschicht: 'Frühschicht (WE)',
+    verschieben: 'Verschobene Schicht',
+    nachtbereitschaft: 'Nachtbereitschaft',
+  };
+  const formatDate = (d: string) => {
+    const date = new Date(d);
+    return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  const myShift = `${SHIFT_NAMES[myOffer.shiftType] || myOffer.shiftType} (${formatDate(myOffer.startDate)} – ${formatDate(myOffer.endDate)})`;
+  const newShift = `${SHIFT_NAMES[newOffer.shiftType] || newOffer.shiftType} (${formatDate(newOffer.startDate)} – ${formatDate(newOffer.endDate)})`;
+  const participantList = allParticipants.join(', ');
+
+  const participantRows = allParticipants.map(name =>
+    `<span style="display: inline-block; background: #ede9fe; color: #6d28d9; padding: 4px 10px; border-radius: 12px; font-size: 13px; margin: 2px 4px;">${name}</span>`
+  ).join(' → ');
+
+  await sendMail({
+    to,
+    subject: 'Schichtplan Manager – Ringtausch genehmigt! 🔄',
+    text: `Hallo ${employeeName},\n\nIhr Ringtausch wurde genehmigt!\n\nIhre alte Schicht: ${myShift}\nIhre neue Schicht: ${newShift}\nTeilnehmer: ${participantList}\n\nDie Änderungen wurden automatisch in Ihrem Schichtplan übernommen.\n\nSie können Ihren aktualisierten Schichtplan unter ${portalUrl} einsehen.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: linear-gradient(135deg, #7c3aed, #a855f7); color: white; padding: 24px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h1 style="margin: 0; font-size: 28px;">Ringtausch genehmigt! 🔄</h1>
+          <p style="margin: 8px 0 0; opacity: 0.9;">Schichtplan Manager</p>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+          <p>Hallo <strong>${employeeName}</strong>,</p>
+          <p>Ihr Ringtausch wurde vom Administrator genehmigt!</p>
+          <div style="margin: 16px 0; padding: 16px; background: #f9fafb; border-radius: 8px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px; font-weight: bold; color: #dc2626; width: 120px;">Alte Schicht:</td>
+                <td style="padding: 8px;">${myShift}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px; font-weight: bold; color: #059669;">Neue Schicht:</td>
+                <td style="padding: 8px;">${newShift}</td>
+              </tr>
+            </table>
+          </div>
+          <div style="margin: 16px 0; padding: 12px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px;">
+            <p style="margin: 0 0 8px; font-weight: bold; color: #6d28d9; font-size: 14px;">Tauschring:</p>
+            <div>${participantRows}</div>
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">Die Änderungen wurden automatisch in Ihrem Schichtplan übernommen.</p>
+          <a href="${portalUrl}" style="display: inline-block; margin-top: 16px; background: #7c3aed; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Schichtplan ansehen</a>
+        </div>
+      </div>
+    `,
+  });
+}
+
+/**
  * Send a swap match notification email ("It's a Match!").
  */
 export async function sendSwapMatchEmail(
