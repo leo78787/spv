@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useStore, getAuthToken } from '../store';
 import { SwapOffer, SwapMatch, ShiftType } from '../types';
-import { ArrowLeftRight, Check, X, RefreshCw, Clock, AlertCircle, UserCheck, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeftRight, Check, X, RefreshCw, Clock, AlertCircle, UserCheck, AlertTriangle, ChevronDown, ChevronUp, Undo2 } from 'lucide-react';
 
 const SHIFT_NAMES: Record<ShiftType, string> = {
   fruehschicht: 'Frühschicht (WE)',
@@ -33,6 +33,9 @@ export function SwapManagement() {
   const [confirmModal, setConfirmModal] = useState<{ matchId: string; violations: string[] } | null>(null);
   // Expanded completed matches
   const [expandedCompleted, setExpandedCompleted] = useState<Set<string>>(new Set());
+  // Undo confirmation modal
+  const [undoModal, setUndoModal] = useState<{ matchId: string; wasApproved: boolean } | null>(null);
+  const [undoLoading, setUndoLoading] = useState(false);
 
   const fetchSwaps = useCallback(async () => {
     try {
@@ -136,6 +139,26 @@ export function SwapManagement() {
     }
   };
 
+  const handleUndo = async (matchId: string) => {
+    setUndoModal(null);
+    setUndoLoading(true);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch('/api/swaps/undo', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId }),
+      });
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({}));
+        alert(d.error || 'Fehler beim Rückgängig machen');
+      }
+      fetchSwaps();
+    } finally {
+      setUndoLoading(false);
+    }
+  };
+
   const getEmployee = (id: string) => employees.find(e => e.id === id);
   const getDepartment = (deptId: string) => departments.find(d => d.id === deptId);
 
@@ -150,10 +173,10 @@ export function SwapManagement() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">Schichttausch</h2>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Schichttausch</h2>
           <p className="text-sm text-gray-500 mt-1">
             {swapSettings.onlyWithinDepartment && 'Nur innerhalb der Abteilung · '}
             {swapSettings.onlyWithinShiftType && 'Nur gleicher Schichttyp · '}
@@ -355,6 +378,19 @@ export function SwapManagement() {
                               {match.status === 'approved' ? 'Genehmigt' : 'Abgelehnt'} am {formatDate(match.resolvedAt)}
                             </p>
                           )}
+                          <div className="flex justify-end mt-3">
+                            <button
+                              disabled={undoLoading}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUndoModal({ matchId: match.id, wasApproved: match.status === 'approved' });
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-amber-300 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+                            >
+                              <Undo2 size={14} />
+                              Rückgängig
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -450,6 +486,51 @@ export function SwapManagement() {
                 className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
               >
                 Trotzdem genehmigen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Undo confirmation modal */}
+      {undoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-2 text-amber-600 mb-3">
+              <AlertTriangle size={24} />
+              <h3 className="font-bold text-lg">Match rückgängig machen?</h3>
+            </div>
+            {undoModal.wasApproved ? (
+              <>
+                <p className="text-sm text-gray-700 mb-3">
+                  Dieser Tausch wurde bereits <strong>genehmigt und ausgeführt</strong>. Die Schichtzuweisungen im Plan werden zurückgetauscht.
+                </p>
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                  <p className="text-sm text-red-700 font-medium">⚠ Achtung:</p>
+                  <ul className="text-xs text-red-600 mt-1 space-y-1 list-disc ml-4">
+                    <li>Die Schichtzuweisungen werden im Plan zurückgesetzt</li>
+                    <li>Falls der Plan bereits freigegeben ist, sehen die Mitarbeiter sofort den alten Zustand</li>
+                    <li>Beide Tauschangebote werden wieder als &quot;offen&quot; markiert</li>
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-gray-700 mb-4">
+                Die Ablehnung wird zurückgenommen und der Match wird wieder als &quot;ausstehend&quot; angezeigt.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setUndoModal(null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={() => handleUndo(undoModal.matchId)}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+              >
+                Rückgängig machen
               </button>
             </div>
           </div>

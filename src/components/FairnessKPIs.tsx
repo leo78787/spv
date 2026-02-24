@@ -152,9 +152,9 @@ export function FairnessKPIs() {
   }
   
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-800 mb-2">Fairness KPIs</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-2">Fairness KPIs</h2>
         <p className="text-gray-600">Echtzeit-Analyse der Schichtverteilung für {shiftPlan?.startMonth !== undefined && shiftPlan?.months ? (
           `${new Date(shiftPlan.year, shiftPlan.startMonth!).toLocaleString('de-DE', { month: 'long' })} ${shiftPlan.year} — ${new Date(shiftPlan.year, (shiftPlan.startMonth! + shiftPlan.months!) - 1).toLocaleString('de-DE', { month: 'long' })} ${new Date(shiftPlan.year, shiftPlan.startMonth!).getFullYear() + Math.floor((shiftPlan.startMonth! + shiftPlan.months! - 1) / 12)}`
         ) : (
@@ -163,7 +163,7 @@ export function FairnessKPIs() {
       </div>
       
       {/* Filter */}
-      <div className="mb-6 flex items-center gap-4">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
         <label className="text-sm font-medium text-gray-700">Schichttyp:</label>
         <select
           value={selectedShiftType}
@@ -317,7 +317,7 @@ export function FairnessKPIs() {
       
       {/* Visual Distribution Chart */}
       {fairnessMetrics && sortedStats.length > 0 && (
-        <div className="mt-6 bg-white rounded-lg shadow-md p-6">
+        <div className="mt-6 bg-white rounded-lg shadow-md p-3 sm:p-6">
           <h3 className="font-semibold text-lg mb-4">Visuelle Verteilung</h3>
           <div className="space-y-3">
             {sortedStats.map(stat => {

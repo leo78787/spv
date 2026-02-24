@@ -95,66 +95,63 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
       <header className="bg-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary-600 p-2 rounded-lg">
-                <Calendar className="text-white" size={28} />
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="bg-primary-600 p-1.5 sm:p-2 rounded-lg">
+                <Calendar className="text-white" size={22} />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Schichtplan Manager</h1>
-                <p className="text-sm text-gray-600">Der Schichtplanplaner</p>
+                <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Schichtplan Manager</h1>
+                <p className="text-xs sm:text-sm text-gray-600 hidden sm:block">Der Schichtplanplaner</p>
               </div>
+            </div>
+            <div className="flex items-center gap-1 sm:gap-2">
+              <SettingsButton />
+              <button
+                onClick={() => {
+                  clearAuthToken();
+                  setAuthenticated(false);
+                  setStateLoaded(false);
+                }}
+                title="Abmelden"
+                className="px-2 sm:px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600 flex items-center gap-1 sm:gap-2"
+              >
+                <LogOut size={14} />
+                <span className="hidden sm:inline text-sm">Abmelden</span>
+              </button>
             </div>
           </div>
         </div>
         
         {/* Navigation Tabs */}
         <nav className="border-t border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between w-full">
-              <div className="flex space-x-1">
-                {tabs.map(tab => {
-                  const Icon = tab.icon;
-                  const isActive = activeTab === tab.id;
-                  
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => handleSetTab(tab.id)}
-                      className={`
-                        flex items-center gap-2 px-6 py-4 font-medium transition-colors relative
-                        ${isActive 
-                          ? 'text-primary-600 bg-primary-50' 
-                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                        }
-                      `}
-                    >
-                      <Icon size={20} />
-                      {tab.label}
-                      {isActive && (
-                        <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary-600"></div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="pr-2 flex items-center gap-2">
-                <SettingsButton />
-                <button
-                  onClick={() => {
-                    clearAuthToken();
-                    setAuthenticated(false);
-                    setStateLoaded(false);
-                  }}
-                  title="Abmelden"
-                  className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600 flex items-center gap-2"
-                >
-                  <LogOut size={14} />
-                  Abmelden
-                </button>
-              </div>
+          <div className="max-w-7xl mx-auto px-0 sm:px-6 lg:px-8">
+            <div className="flex overflow-x-auto scrollbar-hide">
+              {tabs.map(tab => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => handleSetTab(tab.id)}
+                    className={`
+                      flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-3 sm:py-4 text-xs sm:text-sm font-medium transition-colors relative whitespace-nowrap flex-shrink-0
+                      ${isActive 
+                        ? 'text-primary-600 bg-primary-50' 
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }
+                    `}
+                  >
+                    <Icon size={18} />
+                    <span className="hidden xs:inline">{tab.label}</span>
+                    {isActive && (
+                      <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary-600"></div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </nav>

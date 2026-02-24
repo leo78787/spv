@@ -673,18 +673,18 @@ export function ShiftPlanning() {
 
   return (
     <>
-    <div className="space-y-6 p-6">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div className="flex items-center justify-between">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Automatische Schichtplanung</h2>
-            <p className="text-gray-600">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 sm:mb-2">Automatische Schichtplanung</h2>
+            <p className="text-sm sm:text-base text-gray-600">
               Generieren Sie den kompletten Schichtplan für das Jahr mit einem Klick
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Calendar className="h-12 w-12 text-primary-600" />
+            <Calendar className="h-10 w-10 sm:h-12 sm:w-12 text-primary-600 hidden sm:block" />
             <div>
               <button onClick={() => planFileRef.current?.click()} className="text-sm px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2">
                 <Download size={14} /> Plan importieren (.json)
@@ -699,7 +699,7 @@ export function ShiftPlanning() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <button
           onClick={() => setShowConfig(v => !v)}
-          className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+          className="w-full flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 text-left hover:bg-gray-50 transition-colors"
         >
           <div className="flex items-center gap-2">
             <Settings className="h-5 w-5 text-gray-600" />
@@ -709,7 +709,7 @@ export function ShiftPlanning() {
         </button>
 
         {showConfig && (
-          <div className="px-6 pb-6 border-t border-gray-100 space-y-6">
+          <div className="px-4 sm:px-6 pb-6 border-t border-gray-100 space-y-6">
 
             {/* Shift Counts */}
             <div>
@@ -842,7 +842,7 @@ export function ShiftPlanning() {
       {/* ═══════════════════════════════════════════════════════════════════
            4-Step Pipeline: Grundplan → Gleichheit → Gesamt-Balance → Fairness
            ═══════════════════════════════════════════════════════════════════ */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
         <div className="space-y-4">
           {/* Year / month selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
@@ -1138,7 +1138,7 @@ export function ShiftPlanning() {
       </div>
       {/* Generation Result */}
       {generationResult && (
-        <div className={`rounded-lg p-6 ${
+        <div className={`rounded-lg p-4 sm:p-6 ${
           generationResult.success 
             ? 'bg-green-50 border border-green-200' 
             : 'bg-red-50 border border-red-200'
@@ -1172,8 +1172,8 @@ export function ShiftPlanning() {
 
       {/* Current Plan Overview */}
       {currentYearAssignments.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
             <Users className="h-5 w-5" />
             Aktueller Schichtplan für {getMonthName(selectedMonth)} {selectedYear} — {getMonthName(planEnd.getMonth())} {planEnd.getFullYear()}
           </h3>

@@ -50,6 +50,15 @@ body {
   background: #555;
 }
 
+/* Hide scrollbar for horizontal tab nav */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* Transitions */
 button {
   transition: all 0.2s ease-in-out;

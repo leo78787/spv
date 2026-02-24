@@ -1181,6 +1181,53 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
   }
 });
 
+/** Admin: undo a resolved swap match */
+app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
+  try {
+    const { matchId } = req.body;
+    const state = loadState();
+    const matches = state.swapMatches || [];
+    const match = matches.find((m: any) => m.id === matchId);
+    if (!match) { res.status(404).json({ error: 'Match nicht gefunden.' }); return; }
+    if (match.status === 'pending') { res.status(400).json({ error: 'Match ist noch ausstehend.' }); return; }
+
+    const offers = state.swapOffers || [];
+    const offerA = offers.find((o: any) => o.id === match.offerA);
+    const offerB = offers.find((o: any) => o.id === match.offerB);
+
+    // If the match was approved, reverse the assignment swap
+    if (match.status === 'approved' && offerA && offerB) {
+      const plan = state.shiftPlan;
+      if (plan) {
+        const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+        const assignmentB = (plan.assignments || []).find((a: any) => a.id === offerB.assignmentId);
+        if (assignmentA && assignmentB) {
+          // Reverse: remove B from A's assignment, add A back; remove A from B's, add B back
+          assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerB.employeeId);
+          if (!assignmentA.employees.includes(offerA.employeeId)) assignmentA.employees.push(offerA.employeeId);
+          assignmentB.employees = assignmentB.employees.filter((id: string) => id !== offerA.employeeId);
+          if (!assignmentB.employees.includes(offerB.employeeId)) assignmentB.employees.push(offerB.employeeId);
+        }
+      }
+    }
+
+    // Reset offers to 'open'
+    if (offerA) offerA.status = 'open';
+    if (offerB) offerB.status = 'open';
+
+    // Reset match to 'pending'
+    match.status = 'pending';
+    delete match.resolvedAt;
+
+    state.swapOffers = offers;
+    state.swapMatches = matches;
+    saveState(state);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 /** Match-finding logic: check if two open offers are compatible */
 function findAndCreateMatches(state: any) {
   const offers: any[] = state.swapOffers || [];

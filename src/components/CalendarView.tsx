@@ -623,18 +623,18 @@ export function CalendarView() {
   }
   
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       <div className="mb-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-bold text-gray-800">Schichtplan Kalender</h2>
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:justify-between sm:items-center">
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Schichtplan Kalender</h2>
+          <div className="flex items-center gap-2 sm:gap-4">
             <button
               onClick={handlePreviousMonth}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <ChevronLeft size={24} />
             </button>
-            <h3 className="text-xl font-semibold min-w-[200px] text-center">
+            <h3 className="text-base sm:text-xl font-semibold min-w-[140px] sm:min-w-[200px] text-center">
               {getMonthName(currentMonth)} {currentYear}
             </h3>
             <button
@@ -645,7 +645,7 @@ export function CalendarView() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => downloadPlanJSON()}
               className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
@@ -717,7 +717,7 @@ export function CalendarView() {
         </div>
         
         {/* Legend */}
-        <div className="flex gap-4 text-sm mb-4">
+        <div className="flex flex-wrap gap-3 sm:gap-4 text-sm mb-4">
           <div className="flex items-center gap-2">
             <div className={`w-6 h-6 ${getShiftColor('fruehschicht')} rounded flex items-center justify-center font-semibold`}>
               F

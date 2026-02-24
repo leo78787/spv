@@ -59,9 +59,9 @@ export function DepartmentManagement() {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Abteilungsverwaltung</h2>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Abteilungsverwaltung</h2>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
           className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
