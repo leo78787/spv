@@ -27,6 +27,7 @@ import {
   validatePortalToken,
   changePassword,
   getAllCredentialInfo,
+  clearAllCredentials,
 } from './portalAuth.js';
 import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail } from './mailer.js';
 
@@ -637,6 +638,12 @@ app.get('/api/portal/credentials', authMiddleware, (_req, res) => {
   res.json(getAllCredentialInfo());
 });
 
+/** Admin endpoint: wipe ALL portal credentials and sessions (used on full app reset) */
+app.post('/api/portal/reset', authMiddleware, (_req, res) => {
+  clearAllCredentials();
+  res.json({ success: true });
+});
+
 /** Admin endpoint: invite employee (create/reset credentials + send email) */
 app.post('/api/portal/invite', authMiddleware, async (req, res) => {
   try {
@@ -886,10 +893,6 @@ app.post('/api/plan/release', authMiddleware, async (req, res) => {
           }
         }
       }
-    } else {
-      // When un-releasing, automatically lock employee changes
-      state.employeesLocked = true;
-      saveState(state);
     }
 
     res.json({ success: true, planReleased: state.planReleased });

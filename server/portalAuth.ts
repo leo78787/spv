@@ -183,6 +183,11 @@ export function changePassword(employeeId: string, newPassword: string): boolean
   return true;
 }
 
+/** Wipe all credentials and sessions (used on full app reset). */
+export function clearAllCredentials(): void {
+  save({ credentials: {}, sessions: {} });
+}
+
 /** Check whether an employee has portal credentials. */
 export function hasCredentials(employeeId: string): boolean {
   const data = load();

@@ -350,11 +350,7 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                 // Reset to pristine state
                 const pristine = {
                   employees: [],
-                  departments: [
-                    { id: 'dept-1', name: 'Abteilung A' },
-                    { id: 'dept-2', name: 'Abteilung B' },
-                    { id: 'dept-3', name: 'Abteilung C' },
-                  ],
+                  departments: [],
                   currentYear: new Date().getFullYear(),
                   shiftPlan: null,
                   customHolidays: [],
@@ -371,6 +367,11 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify(pristine),
+                    });
+                    // Also wipe all portal credentials
+                    await fetch('/api/portal/reset', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                     });
                   } catch {}
                 }
