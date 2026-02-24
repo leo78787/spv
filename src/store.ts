@@ -152,6 +152,9 @@ interface AppState {
   addCalendarLabel: (calendarLabel: CalendarLabel) => void;
   deleteCalendarLabel: (id: string) => void;
 
+  // Batch import
+  batchImport: (newDepartments: Department[], newEmployees: Employee[]) => void;
+
   // Swap settings
   setSwapSettings: (settings: SwapSettings) => void;
 
@@ -291,6 +294,16 @@ export const useStore = create<AppState>((set) => {
       const newState = {
         ...state,
         departments: [...state.departments, department]
+      };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    batchImport: (newDepartments: Department[], newEmployees: Employee[]) => set((state) => {
+      const newState = {
+        ...state,
+        departments: [...state.departments, ...newDepartments],
+        employees: [...state.employees, ...newEmployees],
       };
       saveToServer(newState);
       return newState;

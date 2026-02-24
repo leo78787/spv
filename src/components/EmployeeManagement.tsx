@@ -7,7 +7,7 @@ import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMo
 import * as XLSX from 'xlsx-js-style';
 
 export function EmployeeManagement() {
-  const { employees, departments, customHolidays, addEmployee, updateEmployee, deleteEmployee, addDepartment } = useStore();
+  const { employees, departments, customHolidays, addEmployee, updateEmployee, deleteEmployee, batchImport } = useStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
@@ -305,15 +305,17 @@ export function EmployeeManagement() {
 
     const { departmentsToCreate, employeesToAdd } = processImportPreview(importPreview, employees, departments);
 
-    // create missing departments first and keep a local map so we can assign imported employees to them immediately
+    // Build new departments
+    const newDepts: { id: string; name: string }[] = [];
     const createdDeptMap: Record<string, { id: string; name: string }> = {};
     departmentsToCreate.forEach(name => {
       const newDept = { id: `dept-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name };
-      addDepartment(newDept);
+      newDepts.push(newDept);
       createdDeptMap[name.toLowerCase().trim()] = newDept;
     });
 
-    // add employees (resolve department id by name)
+    // Build new employees list (resolve department id by name)
+    const newEmps: Employee[] = [];
     employeesToAdd.forEach(emp => {
       const lookup = (n: string | undefined) => n ? n.toLowerCase().trim() : '';
       const wanted = lookup(emp.departmentName);
@@ -335,8 +337,11 @@ export function EmployeeManagement() {
         vacationRanges: emp.vacationRanges,
         preferences: []
       };
-      addEmployee(newEmp);
+      newEmps.push(newEmp);
     });
+
+    // Single atomic batch update → one saveToServer call
+    batchImport(newDepts, newEmps);
 
     const added = employeesToAdd.length;
     const failed = (importPreview as any[]).filter(r => r.errors.length > 0).length;

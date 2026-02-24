@@ -126,8 +126,8 @@ app.put('/api/state', authMiddleware, (req, res) => {
     ...req.body,
     employeesLocked: hasShiftPlan ? (existing.employeesLocked ?? false) : false,
     planReleased: hasShiftPlan ? (existing.planReleased ?? false) : false,
-    swapOffers: existing.swapOffers ?? [],
-    swapMatches: existing.swapMatches ?? [],
+    swapOffers: hasShiftPlan ? (existing.swapOffers ?? []) : [],
+    swapMatches: hasShiftPlan ? (existing.swapMatches ?? []) : [],
   };
   saveState(merged);
   res.json({ success: true });
@@ -640,10 +640,15 @@ app.get('/api/portal/credentials', authMiddleware, (_req, res) => {
 /** Admin endpoint: invite employee (create/reset credentials + send email) */
 app.post('/api/portal/invite', authMiddleware, async (req, res) => {
   try {
-    const { employeeId } = req.body;
+    const { employeeId, email: providedEmail } = req.body;
     const state = loadState();
     const emp = (state.employees || []).find((e: any) => e.id === employeeId);
     if (!emp) { res.status(404).json({ error: 'Mitarbeiter nicht gefunden' }); return; }
+    // If an email was provided in the request, save it to the employee first
+    if (providedEmail && typeof providedEmail === 'string' && providedEmail.trim()) {
+      emp.email = providedEmail.trim();
+      saveState(state);
+    }
     if (!emp.email) { res.status(400).json({ error: 'Keine E-Mail-Adresse hinterlegt' }); return; }
 
     const { username, oneTimePassword } = createOrResetCredentials(employeeId, emp.name);
