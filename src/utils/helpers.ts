@@ -66,6 +66,18 @@ export function processImportPreview(parsedRows: Array<any>, existingEmployees: 
   const existingNames = new Set(existingEmployees.map(e => e.name.toLowerCase().trim()));
   const existingDeptNames = new Set(existingDepartments.map(d => d.name.toLowerCase().trim()));
 
+  // Build a set of "name|deptName" combos for precise duplicate detection
+  const deptById: Record<string, string> = {};
+  for (const d of existingDepartments as any[]) {
+    if (d.id && d.name) deptById[d.id] = d.name.toLowerCase().trim();
+  }
+  const existingCombos = new Set<string>();
+  for (const e of existingEmployees as any[]) {
+    const eName = (e.name || '').toLowerCase().trim();
+    const eDeptName = deptById[e.department] || '';
+    if (eName && eDeptName) existingCombos.add(`${eName}|${eDeptName}`);
+  }
+
   const nameCountsInFile: Record<string, number> = {};
   parsedRows.forEach(r => {
     const n = (r.name || '').toLowerCase().trim();
@@ -93,9 +105,11 @@ export function processImportPreview(parsedRows: Array<any>, existingEmployees: 
     if (r.errors && r.errors.length > 0) return; // skip invalid rows
     const deptName = (r.departmentName || '').trim();
 
-    // if the exact employee (same name and existing department) already exists, skip importing that row
+    // if the exact employee (same name AND same department) already exists, skip importing that row
     const nameLower = (r.name || '').toLowerCase().trim();
-    if (existingNames.has(nameLower) && existingDeptNames.has(deptName.toLowerCase())) return;
+    const deptLower = deptName.toLowerCase().trim();
+    const comboKey = `${nameLower}|${deptLower}`;
+    if (existingCombos.has(comboKey)) return;
 
     if (!existingDeptNames.has(deptName.toLowerCase())) departmentsToCreate.add(deptName);
 

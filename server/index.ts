@@ -120,10 +120,12 @@ app.get('/api/state', authMiddleware, (_req, res) => {
 app.put('/api/state', authMiddleware, (req, res) => {
   // Preserve server-managed flags that the admin frontend doesn't send
   const existing = loadState();
+  // If the new state has no shift plan, clear plan-related flags
+  const hasShiftPlan = !!(req.body.shiftPlan && req.body.shiftPlan.assignments && req.body.shiftPlan.assignments.length > 0);
   const merged = {
     ...req.body,
-    employeesLocked: existing.employeesLocked ?? false,
-    planReleased: existing.planReleased ?? false,
+    employeesLocked: hasShiftPlan ? (existing.employeesLocked ?? false) : false,
+    planReleased: hasShiftPlan ? (existing.planReleased ?? false) : false,
     swapOffers: existing.swapOffers ?? [],
     swapMatches: existing.swapMatches ?? [],
   };

@@ -125,7 +125,7 @@ export function EmployeeManagement() {
   };
 
   const handleInvite = async (empId: string) => {
-    // Save email first if it hasn't been persisted yet
+    // Update the employee email in the store
     if (formData.email) {
       updateEmployee(empId, { email: formData.email });
     }
@@ -135,7 +135,7 @@ export function EmployeeManagement() {
       const resp = await fetch('/api/portal/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ employeeId: empId }),
+        body: JSON.stringify({ employeeId: empId, email: formData.email }),
       });
       const data = await resp.json();
       if (resp.ok) {

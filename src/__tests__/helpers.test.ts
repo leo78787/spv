@@ -40,8 +40,8 @@ describe('helpers.parseBoolean', () => {
 
 describe('helpers.processImportPreview', () => {
   it('detects departments to create and appends suffix for duplicate names', () => {
-    const existingEmployees = [{ name: 'Max Mustermann' }];
-    const existingDepartments = [{ name: 'Abteilung A' }];
+    const existingEmployees = [{ name: 'Max Mustermann', department: 'dept1' }];
+    const existingDepartments = [{ id: 'dept1', name: 'Abteilung A' }];
 
     const rows = [
       { name: 'Max Mustermann', departmentName: 'Abteilung A', isOver55: false, hasL2: true, vacationRanges: [], errors: [] },
