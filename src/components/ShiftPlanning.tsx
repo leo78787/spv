@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale } from 'lucide-react';
 import { useStore } from '../store';
-import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig, generateAutomaticShiftPlan, runEqualityOptimiser, runTotalBalanceOptimiser } from '../utils/scheduler';
+import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
-import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores, computeImpactFactors } from '../utils/fairnessImpact';
+import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
+import { workerGenerate, workerEquality, workerTotalBalance, workerComputeImpact } from '../workers/workerApi';
 import {
   getOptimiserState,
   subscribeOptimiser,
@@ -33,23 +34,21 @@ function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: a
   const id = ++moduleFairnessRequestId;
   const capturedId = id;
 
-  setTimeout(() => {
-    try {
-      const result = computeImpactFactors(
-        payload.employees,
-        payload.schedulerConfig,
-        payload.year,
-        payload.startMonth,
-      );
-      if (capturedId !== moduleFairnessRequestId) return; // stale
-      moduleCachedImpactFactors = result;
-      moduleCachedImpactSnapshot = snapshot;
-      for (const l of moduleFairnessListeners) l({ id, result, snapshot });
-    } catch (err) {
-      if (capturedId !== moduleFairnessRequestId) return;
-      for (const l of moduleFairnessListeners) l({ id, error: String(err), snapshot });
-    }
-  }, 0);
+  workerComputeImpact(
+    payload.employees,
+    payload.schedulerConfig,
+    payload.year,
+    payload.startMonth,
+    snapshot,
+  ).then(({ result }) => {
+    if (capturedId !== moduleFairnessRequestId) return; // stale
+    moduleCachedImpactFactors = result;
+    moduleCachedImpactSnapshot = snapshot;
+    for (const l of moduleFairnessListeners) l({ id, result, snapshot });
+  }).catch(err => {
+    if (capturedId !== moduleFairnessRequestId) return;
+    for (const l of moduleFairnessListeners) l({ id, error: String(err), snapshot });
+  });
 
   return id;
 }
@@ -303,46 +302,44 @@ export function ShiftPlanning() {
     doGenerate();
   };
 
-  const doGenerate = () => {
+  const doGenerate = async () => {
     setIsGenerating(true);
     setGenerationResult(null);
 
-    setTimeout(() => {
-      try {
-        const data = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12, schedulerConfig);
+    try {
+      const data = await workerGenerate(employees, selectedYear, selectedMonth, 12, schedulerConfig);
 
-        const completePlan = {
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
-          schedulerConfig,
-          violations: data.violations,
-          assignments: data.assignments,
-          algorithm: 'automatisch generiert',
-        };
-        setShiftPlan(completePlan as any);
+      const completePlan = {
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations: data.violations,
+        assignments: data.assignments,
+        algorithm: 'automatisch generiert',
+      };
+      setShiftPlan(completePlan as any);
 
-        if (data.violations.length > 0) {
-          setShowPipeline(true);
-        }
-
-        const end = new Date(selectedYear, selectedMonth + 12, 0);
-
-        setGenerationResult({
-          success: true,
-          message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
-          assignmentCount: data.assignments.length,
-        });
-      } catch (error) {
-        setGenerationResult({
-          success: false,
-          message: 'Fehler beim Generieren des Schichtplans.',
-          assignmentCount: 0,
-        });
-      } finally {
-        setIsGenerating(false);
+      if (data.violations.length > 0) {
+        setShowPipeline(true);
       }
-    }, 0);
+
+      const end = new Date(selectedYear, selectedMonth + 12, 0);
+
+      setGenerationResult({
+        success: true,
+        message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
+        assignmentCount: data.assignments.length,
+      });
+    } catch (error) {
+      setGenerationResult({
+        success: false,
+        message: 'Fehler beim Generieren des Schichtplans.',
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
@@ -365,40 +362,38 @@ export function ShiftPlanning() {
   }, []);
 
   // ── Equality optimizer handler ──────────────────────────────────────────
-  const doEquality = useCallback(() => {
+  const doEquality = useCallback(async () => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
 
     setIsEqualizing(true);
     setEqualityResult(null);
 
-    setTimeout(() => {
-      try {
-        const data = runEqualityOptimiser(employees, shiftPlan.assignments, schedulerConfig, 500);
-        setShiftPlan({
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
-          schedulerConfig,
-          violations: shiftPlan.violations ?? [],
-          assignments: data.assignments,
-          algorithm: 'gleichheits-optimiert',
-        } as any);
-        setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
-        setGenerationResult({
-          success: true,
-          message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-          assignmentCount: data.assignments.length,
-        });
-      } catch (err) {
-        setGenerationResult({
-          success: false,
-          message: `Gleichheitsoptimierung fehlgeschlagen: ${err}`,
-          assignmentCount: 0,
-        });
-      } finally {
-        setIsEqualizing(false);
-      }
-    }, 0);
+    try {
+      const data = await workerEquality(employees, shiftPlan.assignments, schedulerConfig, 500);
+      setShiftPlan({
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations: shiftPlan.violations ?? [],
+        assignments: data.assignments,
+        algorithm: 'gleichheits-optimiert',
+      } as any);
+      setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
+      setGenerationResult({
+        success: true,
+        message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+        assignmentCount: data.assignments.length,
+      });
+    } catch (err) {
+      setGenerationResult({
+        success: false,
+        message: `Gleichheitsoptimierung fehlgeschlagen: ${err}`,
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsEqualizing(false);
+    }
   }, [employees, schedulerConfig, shiftPlan?.assignments, shiftPlan?.violations, selectedYear, selectedMonth, setShiftPlan]);
 
   const handleEquality = useCallback(() => {
@@ -407,40 +402,38 @@ export function ShiftPlanning() {
   }, [employees, shiftPlan?.assignments, doEquality]);
 
   // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
-  const doTotalBalance = useCallback(() => {
+  const doTotalBalance = useCallback(async () => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
 
     setIsTotalBalancing(true);
     setTotalBalanceResult(null);
 
-    setTimeout(() => {
-      try {
-        const data = runTotalBalanceOptimiser(employees, shiftPlan.assignments, schedulerConfig, 500);
-        setShiftPlan({
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
-          schedulerConfig,
-          violations: shiftPlan.violations ?? [],
-          assignments: data.assignments,
-          algorithm: 'gesamt-balanciert',
-        } as any);
-        setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
-        setGenerationResult({
-          success: true,
-          message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-          assignmentCount: data.assignments.length,
-        });
-      } catch (err) {
-        setGenerationResult({
-          success: false,
-          message: `Gesamt-Balancierung fehlgeschlagen: ${err}`,
-          assignmentCount: 0,
-        });
-      } finally {
-        setIsTotalBalancing(false);
-      }
-    }, 0);
+    try {
+      const data = await workerTotalBalance(employees, shiftPlan.assignments, schedulerConfig, 500);
+      setShiftPlan({
+        year: selectedYear,
+        startMonth: selectedMonth,
+        months: 12,
+        schedulerConfig,
+        violations: shiftPlan.violations ?? [],
+        assignments: data.assignments,
+        algorithm: 'gesamt-balanciert',
+      } as any);
+      setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
+      setGenerationResult({
+        success: true,
+        message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+        assignmentCount: data.assignments.length,
+      });
+    } catch (err) {
+      setGenerationResult({
+        success: false,
+        message: `Gesamt-Balancierung fehlgeschlagen: ${err}`,
+        assignmentCount: 0,
+      });
+    } finally {
+      setIsTotalBalancing(false);
+    }
   }, [employees, schedulerConfig, shiftPlan?.assignments, shiftPlan?.violations, selectedYear, selectedMonth, setShiftPlan]);
 
   const handleTotalBalance = useCallback(() => {
