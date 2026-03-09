@@ -628,7 +628,9 @@ export function CalendarView() {
               className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
               title="Schichtplan (.xlsx) herunterladen"
             >
-              <Download size={14} /> Excel (.xlsx)\n            </button>\n\n            {/* Violation pipeline badge — only violations within the planned period */}
+              <Download size={14} /> Excel (.xlsx)
+            </button>
+            {/* Violation pipeline badge — only violations within the planned period */}
             {(() => {
               const planYear = shiftPlan?.year ?? new Date().getFullYear();
               const planStartMonth = shiftPlan?.startMonth ?? 0;

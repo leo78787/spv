@@ -359,7 +359,8 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                   swapSettings: DEFAULT_SWAP_SETTINGS,
                   tabVisibility: DEFAULT_TAB_VISIBILITY,
                 };
-                // Update local store
+                // Clear localStorage first, then update store
+                localStorage.removeItem('spm-local-state');
                 useStore.setState(pristine as any);
                 setResetting(false);
                 onClose();
