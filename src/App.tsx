@@ -5,24 +5,13 @@ import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
 import { ViewTab } from './types';
-import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut } from 'lucide-react';
+import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings } from 'lucide-react';
 import { HolidaySettings } from './components/HolidaySettings';
-import { Login } from './components/Login';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('employees');
   const [showHolidaySettings, setShowHolidaySettings] = useState(false);
 
-  // simple client-side auth (persisted in localStorage)
-  const [authenticated, setAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('spm-authenticated') === 'true';
-    } catch (err) {
-      return false;
-    }
-  });
-
-  
   const tabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
     { id: 'departments' as ViewTab, label: 'Abteilungen', icon: Building2 },
@@ -37,11 +26,6 @@ function App() {
     </button>
   );
   
-  // if not authenticated show login screen only
-  if (!authenticated) {
-    return <Login onSuccess={() => setAuthenticated(true)} />;
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
@@ -93,17 +77,6 @@ function App() {
 
               <div className="pr-2 flex items-center gap-2">
                 <SettingsButton />
-                <button
-                  onClick={() => {
-                    localStorage.removeItem('spm-authenticated');
-                    setAuthenticated(false);
-                  }}
-                  title="Abmelden"
-                  className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600 flex items-center gap-2"
-                >
-                  <LogOut size={14} />
-                  Abmelden
-                </button>
               </div>
             </div>
           </div>

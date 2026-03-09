@@ -15,6 +15,7 @@ import type { OptimiserTargets, OptimiserProgress, OptimiserResult } from '../ut
 import type { Employee } from '../types';
 import type { SchedulerConfig } from '../utils/scheduler';
 import { useStore } from '../store';
+import InlineOptimiserWorker from '../workers/optimiserWorker.ts?worker&inline';
 
 // ── Public state shape ──────────────────────────────────────────────────────
 
@@ -112,10 +113,7 @@ export function calibrate(
   // Abort any previous calibration
   if (calibrationWorker) { calibrationWorker.terminate(); calibrationWorker = null; }
 
-  calibrationWorker = new Worker(
-    new URL('../workers/optimiserWorker.ts', import.meta.url),
-    { type: 'module' },
-  );
+  calibrationWorker = new InlineOptimiserWorker();
 
   calibrationWorker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
     const msg = e.data;
@@ -178,10 +176,7 @@ export function startOptimisation(
 
   applyContext = { year, startMonth, schedulerConfig };
 
-  worker = new Worker(
-    new URL('../workers/optimiserWorker.ts', import.meta.url),
-    { type: 'module' },
-  );
+  worker = new InlineOptimiserWorker();
 
   worker.onmessage = (e: MessageEvent<OptimiserWorkerResponse>) => {
     const msg = e.data;

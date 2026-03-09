@@ -1,21 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { viteSingleFile } from 'vite-plugin-singlefile'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), viteSingleFile()],
   server: {
     port: 3000
+  },
+  worker: {
+    format: 'es',
+    plugins: () => [viteSingleFile()],
   },
   build: {
     outDir: 'dist',
     sourcemap: false,
     minify: 'terser',
+    assetsInlineLimit: 100000000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          utils: ['date-fns']
-        }
+        inlineDynamicImports: true,
       }
     }
   }

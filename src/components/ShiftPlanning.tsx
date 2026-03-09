@@ -6,7 +6,7 @@ import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
 import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
-import type { WorkerResponse } from '../workers/fairnessWorker';
+import InlineFairnessWorker from '../workers/fairnessWorker.ts?worker&inline';
 import {
   getOptimiserState,
   subscribeOptimiser,
@@ -34,7 +34,7 @@ const moduleListeners = new Set<(msg: { id: number; result?: ImpactFactors; erro
 
 function ensureModuleWorker() {
   if (moduleWorker) return moduleWorker;
-  moduleWorker = new Worker(new URL('../workers/fairnessWorker.ts', import.meta.url), { type: 'module' });
+  moduleWorker = new InlineFairnessWorker();
   moduleWorker.onmessage = (e: MessageEvent<{ id: number; result?: ImpactFactors; error?: string }>) => {
     const { id, result, error } = e.data;
     const snapshot = moduleWorkerPendingSnapshots[id];
