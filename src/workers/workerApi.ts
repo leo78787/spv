@@ -1,8 +1,11 @@
 /**
- * Worker API bridge — main-thread interface to the compute Web Worker.
+ * Worker API bridge — main-thread interface to compute Web Workers.
  *
- * All heavy computation (plan generation, optimisation, fairness impact)
- * runs in a Web Worker so the UI stays responsive.
+ * Uses TWO worker instances:
+ *  - Primary worker: plan generation, equality, total-balance, calibration,
+ *    optimisation (high priority — always responsive).
+ *  - Impact worker: fairness impact factor computation (low priority,
+ *    background — never blocks plan generation).
  *
  * Uses Vite's `?worker&inline` import which embeds the worker code as a
  * base64 blob — compatible with vite-plugin-singlefile (no external files).
@@ -16,15 +19,25 @@ import type { ImpactFactors } from '../utils/fairnessImpact';
 import type { Employee, ShiftAssignment, Department, SchedulerViolation } from '../types';
 import type { OptimiserTargets, OptimiserProgress, OptimiserResult } from '../utils/optimizer';
 
-// ── Singleton worker instance ───────────────────────────────────────────────
+// ── Two worker instances ────────────────────────────────────────────────────
 
-let worker: Worker | null = null;
+let primaryWorker: Worker | null = null;
+let impactWorker: Worker | null = null;
 
-function getWorker(): Worker {
-  if (!worker) {
-    worker = new ComputeWorker();
+function getPrimaryWorker(): Worker {
+  if (!primaryWorker) {
+    primaryWorker = new ComputeWorker();
+    installHandler(primaryWorker);
   }
-  return worker!;
+  return primaryWorker!;
+}
+
+function getImpactWorker(): Worker {
+  if (!impactWorker) {
+    impactWorker = new ComputeWorker();
+    installHandler(impactWorker);
+  }
+  return impactWorker!;
 }
 
 // ── Request ID counter ──────────────────────────────────────────────────────
@@ -52,14 +65,9 @@ let onOptimiseDone: OptimiseDoneCallback | null = null;
 let onOptimiseCancelled: OptimiseCancelledCallback | null = null;
 let onOptimiseError: OptimiseErrorCallback | null = null;
 
-// ── Worker message handler ──────────────────────────────────────────────────
+// ── Shared message handler (installed on both workers) ──────────────────────
 
-function ensureMessageHandler() {
-  const w = getWorker();
-  // Only set once
-  if ((w as any).__bridgeHandlerSet) return;
-  (w as any).__bridgeHandlerSet = true;
-
+function installHandler(w: Worker) {
   w.onmessage = (e: MessageEvent) => {
     const msg = e.data;
 
@@ -72,18 +80,14 @@ function ensureMessageHandler() {
         const p = pending.get(msg.id);
         if (!p) return;
         pending.delete(msg.id);
-        if (msg.error) {
-          p.reject(new Error(msg.error));
-        } else {
-          p.resolve(msg);
-        }
+        if (msg.error) p.reject(new Error(msg.error));
+        else p.resolve(msg);
         break;
       }
 
-      case 'optimiseProgress': {
+      case 'optimiseProgress':
         onOptimiseProgress?.(msg.progress, msg.msPerIteration);
         break;
-      }
 
       case 'optimiseDone': {
         const p = pending.get(msg.id);
@@ -112,15 +116,14 @@ function ensureMessageHandler() {
   };
 }
 
-// ── Helper to post & await a response ────────────────────────────────────────
+// ── Helper to post & await a response on a specific worker ───────────────────
 
-function postAndAwait<T>(message: any): Promise<T> {
-  ensureMessageHandler();
+function postAndAwait<T>(w: Worker, message: any): Promise<T> {
   const id = ++nextId;
   message.id = id;
   return new Promise<T>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    getWorker().postMessage(message);
+    w.postMessage(message);
   });
 }
 
@@ -128,7 +131,7 @@ function postAndAwait<T>(message: any): Promise<T> {
 // Public API
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Generate a shift plan in the worker. */
+/** Generate a shift plan (primary worker). */
 export async function workerGenerate(
   employees: Employee[],
   year: number,
@@ -137,39 +140,39 @@ export async function workerGenerate(
   config: SchedulerConfig,
   departments?: Department[],
 ): Promise<{ assignments: ShiftAssignment[]; violations: SchedulerViolation[] }> {
-  const resp = await postAndAwait<any>({
+  const resp = await postAndAwait<any>(getPrimaryWorker(), {
     type: 'generate', employees, year, startMonth, months, config, departments,
   });
   return resp.result;
 }
 
-/** Run equality optimiser in the worker. */
+/** Run equality optimiser (primary worker). */
 export async function workerEquality(
   employees: Employee[],
   assignments: ShiftAssignment[],
   config: SchedulerConfig,
   maxIter: number,
 ): Promise<{ assignments: ShiftAssignment[]; improvements: number; iterations: number; ranges: Record<string, number> }> {
-  const resp = await postAndAwait<any>({
+  const resp = await postAndAwait<any>(getPrimaryWorker(), {
     type: 'equality', employees, assignments, config, maxIter,
   });
   return resp.result;
 }
 
-/** Run total-balance optimiser in the worker. */
+/** Run total-balance optimiser (primary worker). */
 export async function workerTotalBalance(
   employees: Employee[],
   assignments: ShiftAssignment[],
   config: SchedulerConfig,
   maxIter: number,
 ): Promise<{ assignments: ShiftAssignment[]; improvements: number; iterations: number; ranges: Record<string, number>; totalRange: Record<string, number> }> {
-  const resp = await postAndAwait<any>({
+  const resp = await postAndAwait<any>(getPrimaryWorker(), {
     type: 'totalBalance', employees, assignments, config, maxIter,
   });
   return resp.result;
 }
 
-/** Compute fairness impact factors in the worker. */
+/** Compute fairness impact factors (impact worker — separate thread). */
 export async function workerComputeImpact(
   employees: Employee[],
   config: SchedulerConfig,
@@ -177,13 +180,13 @@ export async function workerComputeImpact(
   startMonth: number,
   snapshot: string,
 ): Promise<{ result: ImpactFactors; snapshot: string }> {
-  const resp = await postAndAwait<any>({
+  const resp = await postAndAwait<any>(getImpactWorker(), {
     type: 'computeImpact', employees, config, year, startMonth, snapshot,
   });
   return { result: resp.result, snapshot: resp.snapshot };
 }
 
-/** Run calibration (3 iterations) in the worker. */
+/** Run calibration (primary worker). */
 export async function workerCalibrate(
   employees: Employee[],
   config: SchedulerConfig,
@@ -191,7 +194,7 @@ export async function workerCalibrate(
   startMonth: number,
   departments?: Department[],
 ): Promise<number> {
-  const resp = await postAndAwait<any>({
+  const resp = await postAndAwait<any>(getPrimaryWorker(), {
     type: 'calibrate', employees, config, year, startMonth, departments,
   });
   return resp.msPerIteration;
@@ -219,7 +222,7 @@ export function workerOptimise(
   baselineViolations?: SchedulerViolation[],
   departments?: Department[],
 ): Promise<OptimiserResult | null> {
-  ensureMessageHandler();
+  const w = getPrimaryWorker();
 
   // Set callbacks
   onOptimiseProgress = callbacks.onProgress ?? null;
@@ -230,7 +233,7 @@ export function workerOptimise(
   const id = ++nextId;
   return new Promise<OptimiserResult | null>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    getWorker().postMessage({
+    w.postMessage({
       type: 'optimise', id,
       employees, config, year, startMonth,
       maxIterations, targets,
@@ -240,7 +243,7 @@ export function workerOptimise(
   });
 }
 
-/** Cancel a running optimisation. */
+/** Cancel a running optimisation (primary worker). */
 export function workerCancelOptimise() {
-  getWorker().postMessage({ type: 'cancelOptimise' });
+  getPrimaryWorker().postMessage({ type: 'cancelOptimise' });
 }

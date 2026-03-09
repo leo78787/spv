@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale } from 'lucide-react';
 import { useStore } from '../store';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
@@ -26,13 +26,19 @@ let moduleCachedImpactFactors: ImpactFactors | null = null;
 // can restore the in-progress settings and continue computing when remounted.
 let moduleCachedSchedulerConfig: SchedulerConfig | null = null;
 
+// Module-level tracking for fairness computation (persists across mounts)
+let moduleLastRequestedSnapshot: string | null = null;
+let moduleIsComputing = false;
+
 // Module-level fairness computation (client-side)
 let moduleFairnessRequestId = 0;
-const moduleFairnessListeners = new Set<(msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => void>();
+const moduleFairnessListeners = new Set<(msg: { result?: ImpactFactors; error?: string }) => void>();
 
-function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string): number {
-  const id = ++moduleFairnessRequestId;
-  const capturedId = id;
+function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string): void {
+  moduleFairnessRequestId++;
+  const capturedId = moduleFairnessRequestId;
+  moduleLastRequestedSnapshot = snapshot;
+  moduleIsComputing = true;
 
   workerComputeImpact(
     payload.employees,
@@ -44,13 +50,13 @@ function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: a
     if (capturedId !== moduleFairnessRequestId) return; // stale
     moduleCachedImpactFactors = result;
     moduleCachedImpactSnapshot = snapshot;
-    for (const l of moduleFairnessListeners) l({ id, result, snapshot });
+    moduleIsComputing = false;
+    for (const l of moduleFairnessListeners) l({ result });
   }).catch(err => {
     if (capturedId !== moduleFairnessRequestId) return;
-    for (const l of moduleFairnessListeners) l({ id, error: String(err), snapshot });
+    moduleIsComputing = false;
+    for (const l of moduleFairnessListeners) l({ error: String(err) });
   });
-
-  return id;
 }
 
 const fmt = (v: number) => (v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
@@ -191,32 +197,19 @@ export function ShiftPlanning() {
   } | null>(null);
 
   // ── Impact factor state ───────────────────────────────────────────────────
-  const [impactFactors, setImpactFactors] = useState<ImpactFactors | null>(null);
-  const [isComputingImpact, setIsComputingImpact] = useState(false);
-
-  // Monotonically-increasing request counter; stale responses are ignored
-  const pendingIdRef = useRef<number>(0);
-  // Snapshot of last-computed inputs — used to avoid redundant recomputation
-  const lastSnapshotRef = useRef<string | null>(null);
-  // Which snapshot the currently-displayed `impactFactors` corresponds to
-  const computedSnapshotRef = useRef<string | null>(null);
+  const [impactFactors, setImpactFactors] = useState<ImpactFactors | null>(() => moduleCachedImpactFactors);
+  const [isComputingImpact, setIsComputingImpact] = useState(() => moduleIsComputing);
 
   // Subscribe to module-level fairness computation notifications.
   useEffect(() => {
-    const handler = (msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => {
-      const { id, result, error, snapshot } = msg;
-      // Component only cares about the latest request it issued
-      if (id !== pendingIdRef.current) return;
-      if (error) {
-        console.error('[fairness server]', error);
+    const handler = (msg: { result?: ImpactFactors; error?: string }) => {
+      if (msg.error) {
+        console.error('[fairness]', msg.error);
         setIsComputingImpact(false);
         return;
       }
-      if (result) {
-        setImpactFactors(result);
-        computedSnapshotRef.current = snapshot ?? lastSnapshotRef.current ?? null;
-        moduleCachedImpactFactors = result;
-        moduleCachedImpactSnapshot = snapshot ?? lastSnapshotRef.current ?? moduleCachedImpactSnapshot;
+      if (msg.result) {
+        setImpactFactors(msg.result);
       }
       setIsComputingImpact(false);
     };
@@ -224,17 +217,13 @@ export function ShiftPlanning() {
     return () => void moduleFairnessListeners.delete(handler);
   }, []);
 
-  // Trigger a new background computation whenever relevant inputs change
-  // (cache the last computed inputs — opening/closing the panel does NOT force
-  // a recompute unless the inputs actually changed)
+  // Trigger a new background computation whenever relevant inputs change.
+  // Uses module-level tracking so in-flight computations are not re-triggered
+  // when the component unmounts/remounts (tab switch).
   useEffect(() => {
-    // If panel closed: keep cached preview as-is
-    if (!showConfig) return;
-
     // No employees → nothing to compute
     if (employees.length === 0) {
-      lastSnapshotRef.current = null;
-      computedSnapshotRef.current = null;
+      moduleLastRequestedSnapshot = null;
       moduleCachedImpactSnapshot = null;
       moduleCachedImpactFactors = null;
       setImpactFactors(null);
@@ -248,34 +237,29 @@ export function ShiftPlanning() {
       .sort((a, b) => a.id.localeCompare(b.id));
     const snapshot = JSON.stringify({ employees: empSummary, schedulerConfig, selectedYear, selectedMonth });
 
-    // If a module-level cache exists for this exact snapshot, reuse it and
-    // avoid any recomputation (this preserves the preview across unmounts)
-    if (moduleCachedImpactSnapshot === snapshot && moduleCachedImpactFactors) {
-      setImpactFactors(moduleCachedImpactFactors);
-      computedSnapshotRef.current = snapshot;
-      setIsComputingImpact(false);
+    // If this snapshot was already requested...
+    if (moduleLastRequestedSnapshot === snapshot) {
+      // ...and we have cached results, use them
+      if (moduleCachedImpactSnapshot === snapshot && moduleCachedImpactFactors) {
+        setImpactFactors(moduleCachedImpactFactors);
+        setIsComputingImpact(false);
+      } else {
+        // ...still computing — sync the loading state
+        setIsComputingImpact(moduleIsComputing);
+      }
       return;
     }
 
-    // If nothing changed since the last computation within this mounted
-    // component and we already have results for that same snapshot, skip
-    // recompute as well.
-    if (lastSnapshotRef.current === snapshot && computedSnapshotRef.current === snapshot && impactFactors) {
-      return;
-    }
-
-    // Debounce then post to the server — keep current preview visible while
-    // the new computation runs.
+    // New snapshot — debounce then trigger computation.
+    // Keep current preview visible while the new computation runs.
     const timer = setTimeout(() => {
-      const id = postModuleFairnessRequest({ employees, schedulerConfig, year: selectedYear, startMonth: selectedMonth }, snapshot);
-      pendingIdRef.current = id;
-      lastSnapshotRef.current = snapshot; // mark which inputs we're computing for
+      postModuleFairnessRequest({ employees, schedulerConfig, year: selectedYear, startMonth: selectedMonth }, snapshot);
       setIsComputingImpact(true);
     }, 200);
 
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showConfig, employees, schedulerConfig, selectedYear, selectedMonth, impactFactors]);
+  }, [employees, schedulerConfig, selectedYear, selectedMonth]);
 
   // Helpers for updating config
   const setShiftCount = (type: keyof SchedulerConfig['shiftCounts'], val: number) =>
