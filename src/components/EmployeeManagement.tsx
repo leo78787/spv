@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { useStore, getAuthToken } from '../store';
+import React, { useState } from 'react';
+import { useStore } from '../store';
 import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
 import { generateId, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
-import { UserPlus, Trash2, Edit2, Save, X, Mail, Send, RefreshCw, CheckCircle, AlertCircle, Lock, Unlock } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Save, X } from 'lucide-react';
 import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isSameDay } from 'date-fns';
 import * as XLSX from 'xlsx-js-style';
 
@@ -27,62 +27,10 @@ export function EmployeeManagement() {
     preferences: []
   });
 
-  // Portal credentials info
-  const [credentialInfo, setCredentialInfo] = useState<Record<string, { username: string; mustChangePassword: boolean }>>({});
-  const [invitingId, setInvitingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [employeesLocked, setEmployeesLocked] = useState(false);
-  const [lockLoading, setLockLoading] = useState(false);
-  const [planReleased, setPlanReleased] = useState(false);
-
   // Delete confirmation modal state
   const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
   const [deleteNameInput, setDeleteNameInput] = useState('');
 
-  const showToast = (type: 'success' | 'error', text: string) => {
-    setToast({ type, text });
-    setTimeout(() => setToast(null), 4000);
-  };
-
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) return;
-    fetch('/api/portal/credentials', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(setCredentialInfo)
-      .catch(() => {});
-  }, [employees]);
-
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) return;
-    fetch('/api/employees/lock', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => setEmployeesLocked(!!d.employeesLocked))
-      .catch(() => {});
-    fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => setPlanReleased(!!d.released))
-      .catch(() => {});
-  }, [employees]);
-
-  const toggleLock = async () => {
-    setLockLoading(true);
-    try {
-      const token = getAuthToken();
-      const resp = await fetch('/api/employees/lock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ locked: !employeesLocked }),
-      });
-      if (resp.ok) {
-        setEmployeesLocked(!employeesLocked);
-        showToast('success', !employeesLocked ? 'Mitarbeiteränderungen gesperrt' : 'Mitarbeiteränderungen freigegeben');
-      }
-    } catch { showToast('error', 'Fehler beim Sperren'); }
-    setLockLoading(false);
-  };
-  
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -124,56 +72,6 @@ export function EmployeeManagement() {
     setEditingId(null);
   };
 
-  const handleInvite = async (empId: string) => {
-    // Update the employee email in the store
-    if (formData.email) {
-      updateEmployee(empId, { email: formData.email });
-    }
-    setInvitingId(empId);
-    try {
-      const token = getAuthToken();
-      const resp = await fetch('/api/portal/invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ employeeId: empId, email: formData.email }),
-      });
-      const data = await resp.json();
-      if (resp.ok) {
-        showToast('success', `Einladung gesendet – Benutzername: ${data.username}`);
-        fetch('/api/portal/credentials', { headers: { Authorization: `Bearer ${token}` } })
-          .then(r => r.json()).then(setCredentialInfo).catch(() => {});
-      } else {
-        showToast('error', data.error || 'Fehler beim Senden der Einladung');
-      }
-    } catch (err) {
-      showToast('error', 'Fehler: ' + err);
-    } finally {
-      setInvitingId(null);
-    }
-  };
-
-  const handleResend = async (empId: string) => {
-    setInvitingId(empId);
-    try {
-      const token = getAuthToken();
-      const resp = await fetch('/api/portal/resend', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ employeeId: empId }),
-      });
-      const data = await resp.json();
-      if (resp.ok) {
-        showToast('success', `Neue Zugangsdaten gesendet – Benutzername: ${data.username}`);
-      } else {
-        showToast('error', data.error || 'Fehler beim Senden');
-      }
-    } catch (err) {
-      showToast('error', 'Fehler: ' + err);
-    } finally {
-      setInvitingId(null);
-    }
-  };
-  
   const handleEdit = (employee: Employee) => {
     setFormData(employee);
     setEditingId(employee.id);
@@ -184,29 +82,6 @@ export function EmployeeManagement() {
     });
   };
 
-  const handleResetStatus = async (empId: string) => {
-    try {
-      const token = getAuthToken();
-      const resp = await fetch('/api/portal/reset-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ employeeId: empId }),
-      });
-      if (resp.ok) {
-        updateEmployee(empId, { portalStatus: 'draft' });
-        setFormData(prev => ({ ...prev, portalStatus: 'draft' }));
-        showToast('success', 'Status zurückgesetzt auf Entwurf');
-      } else {
-        const d = await resp.json().catch(() => ({}));
-        showToast('error', d.error || 'Fehler beim Zurücksetzen');
-      }
-    } catch {
-      showToast('error', 'Fehler beim Zurücksetzen');
-    }
-  };
-  
-
-  
   const addPreference = () => {
     const newPref: ShiftPreference = {
       shiftType: 'fruehschicht',
@@ -567,22 +442,6 @@ export function EmployeeManagement() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={toggleLock}
-            disabled={lockLoading || (employeesLocked && planReleased)}
-            title={employeesLocked && planReleased ? 'Entsperren nicht möglich — Plan ist freigegeben' : undefined}
-            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
-              employeesLocked
-                ? planReleased
-                  ? 'bg-red-400 text-white cursor-not-allowed opacity-60'
-                  : 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
-          >
-            {employeesLocked ? <Lock size={18} /> : <Unlock size={18} />}
-            <span className="hidden sm:inline">{employeesLocked ? 'Änderungen gesperrt' : 'Änderungen sperren'}</span>
-            <span className="sm:hidden">{employeesLocked ? 'Gesperrt' : 'Sperren'}</span>
-          </button>
           <button
             onClick={() => {
               if (showAddForm) {
@@ -961,71 +820,6 @@ export function EmployeeManagement() {
             </div>
           )}
 
-          {/* Portal-Zugang section – only when editing an existing employee who has an email */}
-          {editingId && formData.email && (
-            <div className="mb-6 border border-indigo-200 rounded-lg overflow-hidden">
-              <div className="bg-indigo-50 px-4 py-3 flex items-center gap-2 border-b border-indigo-200">
-                <Mail size={16} className="text-indigo-600" />
-                <h4 className="font-semibold text-indigo-900 text-sm">Portal-Zugang</h4>
-              </div>
-              <div className="p-4 space-y-3">
-                {credentialInfo[editingId] ? (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1">
-                        <div className="text-xs text-gray-500 mb-1">Benutzername</div>
-                        <div className="font-mono text-sm bg-gray-50 px-3 py-2 rounded border border-gray-200">{credentialInfo[editingId].username}</div>
-                      </div>
-                      <div className="flex-shrink-0">
-                        <div className="text-xs text-gray-500 mb-1">Status</div>
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium ${
-                          credentialInfo[editingId].mustChangePassword
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-green-100 text-green-800'
-                        }`}>
-                          {credentialInfo[editingId].mustChangePassword ? 'Passwort nicht gesetzt' : 'Aktiv'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-4">
-                      <button
-                        type="button"
-                        onClick={() => handleResend(editingId)}
-                        disabled={invitingId === editingId}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                      >
-                        <RefreshCw size={14} className={invitingId === editingId ? 'animate-spin' : ''} />
-                        {invitingId === editingId ? 'Wird gesendet…' : 'Neue Zugangsdaten senden'}
-                      </button>
-                      {formData.portalStatus === 'submitted' && (
-                        <button
-                          type="button"
-                          onClick={() => handleResetStatus(editingId)}
-                          className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-amber-400 text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors ml-8"
-                        >
-                          Zurück in Entwurf
-                        </button>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm text-gray-600">Dieser Mitarbeiter hat noch keinen Portal-Zugang. Senden Sie eine Einladung per E-Mail.</p>
-                    <button
-                      type="button"
-                      onClick={() => handleInvite(editingId)}
-                      disabled={invitingId === editingId}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-sm"
-                    >
-                      <Send size={14} className={invitingId === editingId ? 'animate-pulse' : ''} />
-                      {invitingId === editingId ? 'Wird gesendet…' : 'Einladung per E-Mail senden'}
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
           <div className="flex gap-3">
             <button
               type="submit"
@@ -1045,17 +839,6 @@ export function EmployeeManagement() {
         </form>
       )}
 
-      {/* Toast notification */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-all ${
-          toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
-        }`}>
-          {toast.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-          {toast.text}
-          <button onClick={() => setToast(null)} className="ml-2 hover:opacity-80"><X size={16} /></button>
-        </div>
-      )}
-      
       {/* Employee List */}
 
       <div className="mb-4 flex items-center justify-between gap-4">
@@ -1110,15 +893,6 @@ export function EmployeeManagement() {
                     <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs">
                       Nur: {employee.allowedShiftTypes.map(t => SHIFT_LABELS[t]).join(', ')}
                     </span>
-                  )}
-                  {employee.portalStatus === 'invited' && (
-                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-xs">Eingeladen</span>
-                  )}
-                  {employee.portalStatus === 'draft' && (
-                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-md text-xs">Entwurf</span>
-                  )}
-                  {employee.portalStatus === 'submitted' && (
-                    <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md text-xs">Eingereicht</span>
                   )}
                 </div>
 

@@ -4,8 +4,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "tsx server/index.ts",
-    "dev:full": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
@@ -13,11 +11,8 @@
     "test:watch": "vitest --watch"
   },
   "dependencies": {
-    "cors": "^2.8.6",
     "date-fns": "^3.0.0",
-    "express": "^5.2.1",
     "lucide-react": "^0.316.0",
-    "nodemailer": "^8.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "xlsx-js-style": "^1.2.0",
@@ -26,10 +21,6 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.0.2",
     "@testing-library/react": "^14.0.0",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/jest": "^29.5.3",
-    "@types/nodemailer": "^7.0.10",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
@@ -44,6 +35,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
+    "vite-plugin-singlefile": "^2.3.0",
     "vitest": "^1.3.2"
   }
 }

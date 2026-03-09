@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useStore, getAuthToken } from '../store';
+import { useStore } from '../store';
 import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department } from '../types';
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, AlertTriangle } from 'lucide-react';
 import ViolationPipeline from './ViolationPipeline';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, isBlockedFromVerschiebenDueToAdjacentFruehschicht, isBlockedFromVerschiebenAfterNacht, isBlockedFromConsecutiveVerschieben, hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG, canWorkOnDate } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
@@ -67,36 +67,6 @@ export function CalendarView() {
     employeeName: string;
     date: Date;
   } | null>(null);
-
-  // Plan release state
-  const [planReleased, setPlanReleased] = useState(false);
-  const [releasing, setReleasing] = useState(false);
-  const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
-  const [releasePassword, setReleasePassword] = useState('');
-
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) return;
-    fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(d => setPlanReleased(!!d.released)).catch(() => {});
-  }, []);
-
-  const togglePlanRelease = async () => {
-    const token = getAuthToken();
-    if (!token) return;
-    setReleasing(true);
-    try {
-      const resp = await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ released: !planReleased }),
-      });
-      if (resp.ok) setPlanReleased(!planReleased);
-    } catch {}
-    setReleasing(false);
-    setReleaseConfirmOpen(false);
-    setReleasePassword('');
-  };
   
   const handlePreviousMonth = () => {
     setCurrentMonth(prev => {
@@ -658,22 +628,7 @@ export function CalendarView() {
               className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
               title="Schichtplan (.xlsx) herunterladen"
             >
-              <Download size={14} /> Excel (.xlsx)
-            </button>
-            <button
-              onClick={() => setReleaseConfirmOpen(true)}
-              disabled={releasing}
-              className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${
-                planReleased
-                  ? 'bg-green-100 text-green-700 border border-green-300 hover:bg-green-200'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
-              }`}
-              title={planReleased ? 'Freigabe aufheben' : 'Plan an Mitarbeitende freigeben'}
-            >
-              {planReleased ? <><Unlock size={14} /> Freigabe aufheben</> : <><Lock size={14} /> Freigeben</>}
-            </button>
-
-            {/* Violation pipeline badge — only violations within the planned period */}
+              <Download size={14} /> Excel (.xlsx)\n            </button>\n\n            {/* Violation pipeline badge — only violations within the planned period */}
             {(() => {
               const planYear = shiftPlan?.year ?? new Date().getFullYear();
               const planStartMonth = shiftPlan?.startMonth ?? 0;
@@ -1460,56 +1415,6 @@ export function CalendarView() {
         />
         ) : null;
       })()}
-
-      {/* Release / Revoke confirmation modal */}
-      {releaseConfirmOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-3">
-              {planReleased ? 'Freigabe aufheben' : 'Plan freigeben'}
-            </h3>
-            <p className="text-gray-600 mb-4">
-              {planReleased
-                ? 'Möchten Sie wirklich die Freigabe des Schichtplans aufheben? Mitarbeitende können den Plan dann nicht mehr im Portal einsehen.'
-                : 'Möchten Sie den Schichtplan für die Mitarbeitenden freigeben? Der Plan wird im Mitarbeiter-Portal sichtbar.'}
-            </p>
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort eingeben</label>
-              <input
-                type="password"
-                value={releasePassword}
-                onChange={e => setReleasePassword(e.target.value)}
-                placeholder="Passwort"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                onKeyDown={e => { if (e.key === 'Enter' && releasePassword === '2026') togglePlanRelease(); }}
-              />
-              {releasePassword.length > 0 && releasePassword !== '2026' && (
-                <p className="text-sm text-red-500 mt-1">Falsches Passwort</p>
-              )}
-            </div>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => { setReleaseConfirmOpen(false); setReleasePassword(''); }}
-                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-              >
-                Abbrechen
-              </button>
-              <button
-                onClick={togglePlanRelease}
-                disabled={releasing || releasePassword !== '2026'}
-                className={`px-4 py-2 rounded-md text-white font-medium ${
-                  releasePassword !== '2026' ? 'bg-gray-400 cursor-not-allowed' :
-                  planReleased
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-indigo-600 hover:bg-indigo-700'
-                }`}
-              >
-                {releasing ? 'Wird verarbeitet…' : planReleased ? 'Freigabe aufheben' : 'Freigeben'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

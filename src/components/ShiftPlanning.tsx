@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale } from 'lucide-react';
-import { useStore, getAuthToken } from '../store';
-import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
+import { useStore } from '../store';
+import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig, generateAutomaticShiftPlan, runEqualityOptimiser, runTotalBalanceOptimiser } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
-import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
+import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores, computeImpactFactors } from '../utils/fairnessImpact';
 import {
   getOptimiserState,
   subscribeOptimiser,
@@ -25,45 +25,31 @@ let moduleCachedImpactFactors: ImpactFactors | null = null;
 // can restore the in-progress settings and continue computing when remounted.
 let moduleCachedSchedulerConfig: SchedulerConfig | null = null;
 
-// Module-level fairness computation via server API
-let moduleFairnessAbort: AbortController | null = null;
+// Module-level fairness computation (client-side)
 let moduleFairnessRequestId = 0;
 const moduleFairnessListeners = new Set<(msg: { id: number; result?: ImpactFactors; error?: string; snapshot?: string }) => void>();
 
 function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: any; year: number; startMonth: number }, snapshot: string): number {
   const id = ++moduleFairnessRequestId;
-  const token = getAuthToken();
+  const capturedId = id;
 
-  // Cancel any previous in-flight request
-  if (moduleFairnessAbort) moduleFairnessAbort.abort();
-  moduleFairnessAbort = new AbortController();
-
-  fetch('/api/fairness', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      employees: payload.employees,
-      config: payload.schedulerConfig,
-      year: payload.year,
-      startMonth: payload.startMonth,
-    }),
-    signal: moduleFairnessAbort.signal,
-  })
-    .then(async (resp) => {
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const result = await resp.json();
-      // Update module cache
+  setTimeout(() => {
+    try {
+      const result = computeImpactFactors(
+        payload.employees,
+        payload.schedulerConfig,
+        payload.year,
+        payload.startMonth,
+      );
+      if (capturedId !== moduleFairnessRequestId) return; // stale
       moduleCachedImpactFactors = result;
       moduleCachedImpactSnapshot = snapshot;
       for (const l of moduleFairnessListeners) l({ id, result, snapshot });
-    })
-    .catch((err) => {
-      if (err.name === 'AbortError') return;
+    } catch (err) {
+      if (capturedId !== moduleFairnessRequestId) return;
       for (const l of moduleFairnessListeners) l({ id, error: String(err), snapshot });
-    });
+    }
+  }, 0);
 
   return id;
 }
@@ -188,8 +174,6 @@ export function ShiftPlanning() {
   } | null>(null);
 
   // Modal dialog states
-  const [releaseWarningOpen, setReleaseWarningOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [deletePlanOpen, setDeletePlanOpen] = useState(false);
 
   // ── Equality optimizer state ───────────────────────────────────────────────
@@ -306,24 +290,7 @@ export function ShiftPlanning() {
     moduleCachedSchedulerConfig = schedulerConfig;
   }, [schedulerConfig]);
 
-  // Shared release-check helper: shows warning modal if plan is released, otherwise runs action immediately
-  const checkReleaseAndRun = async (action: () => void) => {
-    try {
-      const token = getAuthToken();
-      const relResp = await fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } });
-      if (relResp.ok) {
-        const { released } = await relResp.json();
-        if (released) {
-          setPendingAction(() => action);
-          setReleaseWarningOpen(true);
-          return;
-        }
-      }
-    } catch { /* ignore release-check errors */ }
-    action();
-  };
-
-  const handleGenerateFullPlan = async () => {
+  const handleGenerateFullPlan = () => {
     if (employees.length === 0) {
       setGenerationResult({
         success: false,
@@ -333,108 +300,54 @@ export function ShiftPlanning() {
       return;
     }
 
-    await checkReleaseAndRun(doGenerate);
+    doGenerate();
   };
 
-  const doGenerate = async () => {
-    setReleaseWarningOpen(false);
-
-    // Revoke release if currently released
-    try {
-      const token = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
-
+  const doGenerate = () => {
     setIsGenerating(true);
     setGenerationResult(null);
 
-    // Call server-side generation endpoint
-    const token = getAuthToken();
-    try {
-      const resp = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          employees,
+    setTimeout(() => {
+      try {
+        const data = generateAutomaticShiftPlan(employees, selectedYear, selectedMonth, 12, schedulerConfig);
+
+        const completePlan = {
           year: selectedYear,
           startMonth: selectedMonth,
           months: 12,
           schedulerConfig,
-        }),
-      });
+          violations: data.violations,
+          assignments: data.assignments,
+          algorithm: 'automatisch generiert',
+        };
+        setShiftPlan(completePlan as any);
 
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (data.violations.length > 0) {
+          setShowPipeline(true);
+        }
 
-      const data = await resp.json();
+        const end = new Date(selectedYear, selectedMonth + 12, 0);
 
-      // Revive dates from JSON
-      const assignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      const violations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-
-      // Store the complete plan at once (avoids race condition with concurrent saveToServer calls)
-      const completePlan = {
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations,
-        assignments,
-        algorithm: 'automatisch generiert',
-      };
-      setShiftPlan(completePlan as any);
-      // Clear calendar labels for the new plan
-      // (createShiftPlan used to do this, but we bypass it now)
-
-      // Open the pipeline automatically if there are unresolvable violations
-      if (violations.length > 0) {
-        setShowPipeline(true);
+        setGenerationResult({
+          success: true,
+          message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
+          assignmentCount: data.assignments.length,
+        });
+      } catch (error) {
+        setGenerationResult({
+          success: false,
+          message: 'Fehler beim Generieren des Schichtplans.',
+          assignmentCount: 0,
+        });
+      } finally {
+        setIsGenerating(false);
       }
-
-      const end = new Date(selectedYear, selectedMonth + 12, 0);
-
-      setGenerationResult({
-        success: true,
-        message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
-        assignmentCount: assignments.length,
-      });
-    } catch (error) {
-      setGenerationResult({
-        success: false,
-        message: 'Fehler beim Generieren des Schichtplans.',
-        assignmentCount: 0,
-      });
-    } finally {
-      setIsGenerating(false);
-    }
+    }, 0);
   };
 
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
   const doOptimise = useCallback(() => {
     if (employees.length === 0) return;
-    setReleaseWarningOpen(false);
-
-    // Revoke release if currently released
-    const token = getAuthToken();
-    fetch('/api/plan/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ released: false }),
-    }).catch(() => { /* ignore */ });
 
     // Use current plan assignments as baseline (from equality step)
     const baseline = shiftPlan?.assignments;
@@ -442,10 +355,9 @@ export function ShiftPlanning() {
     startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline, baseViolations);
   }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments, shiftPlan?.violations]);
 
-  const handleOptimise = useCallback(async () => {
+  const handleOptimise = useCallback(() => {
     if (employees.length === 0) return;
-    await checkReleaseAndRun(doOptimise);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    doOptimise();
   }, [employees, doOptimise]);
 
   const handleCancelOptimiser = useCallback(() => {
@@ -453,162 +365,87 @@ export function ShiftPlanning() {
   }, []);
 
   // ── Equality optimizer handler ──────────────────────────────────────────
-  const doEquality = useCallback(async () => {
+  const doEquality = useCallback(() => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
-    setReleaseWarningOpen(false);
-
-    // Revoke release if currently released
-    try {
-      const rToken = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
 
     setIsEqualizing(true);
     setEqualityResult(null);
-    const token = getAuthToken();
-    try {
-      const resp = await fetch('/api/optimize-equality', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          employees,
-          schedulerConfig,
-          baselineAssignments: shiftPlan.assignments,
-          maxIterations: 500,
+
+    setTimeout(() => {
+      try {
+        const data = runEqualityOptimiser(employees, shiftPlan.assignments, schedulerConfig, 500);
+        setShiftPlan({
           year: selectedYear,
           startMonth: selectedMonth,
           months: 12,
-        }),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const revivedAssignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      // Revive violation dates from JSON
-      const revivedViolations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-      setShiftPlan({
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations: revivedViolations,
-        assignments: revivedAssignments,
-        algorithm: 'gleichheits-optimiert',
-      } as any);
-      setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
-      setGenerationResult({
-        success: true,
-        message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-        assignmentCount: revivedAssignments.length,
-      });
-    } catch (err) {
-      setGenerationResult({
-        success: false,
-        message: `Gleichheitsoptimierung fehlgeschlagen: ${err}`,
-        assignmentCount: 0,
-      });
-    } finally {
-      setIsEqualizing(false);
-    }
-  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+          schedulerConfig,
+          violations: shiftPlan.violations ?? [],
+          assignments: data.assignments,
+          algorithm: 'gleichheits-optimiert',
+        } as any);
+        setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
+        setGenerationResult({
+          success: true,
+          message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+          assignmentCount: data.assignments.length,
+        });
+      } catch (err) {
+        setGenerationResult({
+          success: false,
+          message: `Gleichheitsoptimierung fehlgeschlagen: ${err}`,
+          assignmentCount: 0,
+        });
+      } finally {
+        setIsEqualizing(false);
+      }
+    }, 0);
+  }, [employees, schedulerConfig, shiftPlan?.assignments, shiftPlan?.violations, selectedYear, selectedMonth, setShiftPlan]);
 
-  const handleEquality = useCallback(async () => {
+  const handleEquality = useCallback(() => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
-    await checkReleaseAndRun(doEquality);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    doEquality();
   }, [employees, shiftPlan?.assignments, doEquality]);
 
   // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
-  const doTotalBalance = useCallback(async () => {
+  const doTotalBalance = useCallback(() => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
-    setReleaseWarningOpen(false);
-
-    // Revoke release if currently released
-    try {
-      const rToken = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
 
     setIsTotalBalancing(true);
     setTotalBalanceResult(null);
-    const token = getAuthToken();
-    try {
-      const resp = await fetch('/api/optimize-total-balance', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          employees,
-          schedulerConfig,
-          baselineAssignments: shiftPlan.assignments,
-          maxIterations: 500,
+
+    setTimeout(() => {
+      try {
+        const data = runTotalBalanceOptimiser(employees, shiftPlan.assignments, schedulerConfig, 500);
+        setShiftPlan({
           year: selectedYear,
           startMonth: selectedMonth,
           months: 12,
-        }),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const revivedAssignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      const revivedViolations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-      setShiftPlan({
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations: revivedViolations,
-        assignments: revivedAssignments,
-        algorithm: 'gesamt-balanciert',
-      } as any);
-      setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
-      setGenerationResult({
-        success: true,
-        message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-        assignmentCount: revivedAssignments.length,
-      });
-    } catch (err) {
-      setGenerationResult({
-        success: false,
-        message: `Gesamt-Balancierung fehlgeschlagen: ${err}`,
-        assignmentCount: 0,
-      });
-    } finally {
-      setIsTotalBalancing(false);
-    }
-  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+          schedulerConfig,
+          violations: shiftPlan.violations ?? [],
+          assignments: data.assignments,
+          algorithm: 'gesamt-balanciert',
+        } as any);
+        setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
+        setGenerationResult({
+          success: true,
+          message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
+          assignmentCount: data.assignments.length,
+        });
+      } catch (err) {
+        setGenerationResult({
+          success: false,
+          message: `Gesamt-Balancierung fehlgeschlagen: ${err}`,
+          assignmentCount: 0,
+        });
+      } finally {
+        setIsTotalBalancing(false);
+      }
+    }, 0);
+  }, [employees, schedulerConfig, shiftPlan?.assignments, shiftPlan?.violations, selectedYear, selectedMonth, setShiftPlan]);
 
-  const handleTotalBalance = useCallback(async () => {
+  const handleTotalBalance = useCallback(() => {
     if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
-    await checkReleaseAndRun(doTotalBalance);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    doTotalBalance();
   }, [employees, shiftPlan?.assignments, doTotalBalance]);
 
   const planStart = new Date(selectedYear, selectedMonth, 1);
@@ -1343,38 +1180,6 @@ export function ShiftPlanning() {
         onAcknowledge={(id) => acknowledgeViolation(id)}
         onClose={() => setShowPipeline(false)}
       />
-    )}
-
-    {/* Release warning modal (shown when generating while plan is released) */}
-    {releaseWarningOpen && (
-      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
-            <h3 className="text-lg font-semibold text-gray-800">Plan ist freigegeben</h3>
-          </div>
-          <p className="text-gray-600 mb-6">
-            Der aktuelle Plan ist für die Mitarbeitenden freigegeben. Bei dieser Aktion wird die Freigabe automatisch aufgehoben. Möchten Sie fortfahren?
-          </p>
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={() => { setReleaseWarningOpen(false); setPendingAction(null); }}
-              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-            >
-              Abbrechen
-            </button>
-            <button
-              onClick={() => {
-                setReleaseWarningOpen(false);
-                if (pendingAction) { pendingAction(); setPendingAction(null); }
-              }}
-              className="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 font-medium"
-            >
-              Trotzdem fortfahren
-            </button>
-          </div>
-        </div>
-      </div>
     )}
 
     {/* Delete plan confirmation modal */}

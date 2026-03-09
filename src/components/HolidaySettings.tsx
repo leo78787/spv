@@ -359,22 +359,6 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                   swapSettings: DEFAULT_SWAP_SETTINGS,
                   tabVisibility: DEFAULT_TAB_VISIBILITY,
                 };
-                // Save to server first
-                const token = localStorage.getItem('spm-auth-token');
-                if (token) {
-                  try {
-                    await fetch('/api/state', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                      body: JSON.stringify(pristine),
-                    });
-                    // Also wipe all portal credentials
-                    await fetch('/api/portal/reset', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                    });
-                  } catch {}
-                }
                 // Update local store
                 useStore.setState(pristine as any);
                 setResetting(false);
