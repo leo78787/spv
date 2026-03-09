@@ -87,12 +87,6 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
             Feiertage
           </button>
           <button
-            onClick={() => setSettingsTab('swap')}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${settingsTab === 'swap' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            Tauschen
-          </button>
-          <button
             onClick={() => setSettingsTab('tabs')}
             className={`px-4 py-2 text-sm font-medium transition-colors ${settingsTab === 'tabs' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500 hover:text-gray-700'}`}
           >
@@ -275,7 +269,6 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                 { id: 'planning' as ViewTab, label: 'Planung' },
                 { id: 'calendar' as ViewTab, label: 'Kalender' },
                 { id: 'kpis' as ViewTab, label: 'Fairness KPIs' },
-                { id: 'swaps' as ViewTab, label: 'Tauschen' },
               ]).map(tab => (
                 <label key={tab.id} className="flex items-center gap-3 cursor-pointer">
                   <input

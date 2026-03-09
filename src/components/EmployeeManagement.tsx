@@ -252,7 +252,14 @@ export function EmployeeManagement() {
       const dow = dt.getDay();
       if (dow === 0 || dow === 6) return; // skip weekends
       if (holidaySet.has(iso)) return; // skip holidays
-      total += 1;
+      // 24.12 and 31.12 count as half days
+      const month = dt.getMonth();
+      const day = dt.getDate();
+      if (month === 11 && (day === 24 || day === 31)) {
+        total += 0.5;
+      } else {
+        total += 1;
+      }
     });
 
     // ranges
@@ -264,7 +271,14 @@ export function EmployeeManagement() {
         const dow = d.getDay();
         if (dow === 0 || dow === 6) continue;
         if (holidaySet.has(iso)) continue;
-        total += 1;
+        // 24.12 and 31.12 count as half days
+        const month = d.getMonth(); // 0-based: 11 = December
+        const day = d.getDate();
+        if (month === 11 && (day === 24 || day === 31)) {
+          total += 0.5;
+        } else {
+          total += 1;
+        }
       }
     });
 

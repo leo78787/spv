@@ -273,15 +273,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                 />
               </div>
 
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={formData.visibleToEmployee}
-                  onChange={(e) => setFormData({ ...formData, visibleToEmployee: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Für Mitarbeitende sichtbar</span>
-              </label>
+
 
               {/* Preview */}
               <div className="p-4 bg-gray-50 rounded-lg">
