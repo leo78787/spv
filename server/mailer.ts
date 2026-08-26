@@ -1,35 +1,36 @@
 /**
  * SMTP mailer for Schichtplan Manager.
  *
- * Uses Strato SMTP to send emails from mail@stullecrew.de.
- * Configuration is read from environment variables or fallback defaults.
+ * Sends mail via the local Postfix relay (DKIM-signed by OpenDKIM), the same
+ * pattern used by the other apps on this host. No SMTP auth is required for
+ * the local relay. All values are configured via environment variables set
+ * in the systemd unit — there are no credential fallbacks in source.
  *
- * Required env vars (or set in .env):
- *   SMTP_HOST     — default: smtp.strato.de
- *   SMTP_PORT     — default: 465
- *   SMTP_USER     — default: mail@stullecrew.de
- *   SMTP_PASS     — MUST be set (Strato mailbox password)
- *   SMTP_FROM     — default: Schichtplan Manager <mail@stullecrew.de>
- *   APP_BASE_URL  — default: https://spm.stullecrew.de
+ * Env vars (set via systemd Environment=):
+ *   SMTP_HOST     — default: 127.0.0.1
+ *   SMTP_PORT     — default: 25
+ *   SMTP_USER     — default: (empty, no auth against local relay)
+ *   SMTP_PASS     — default: (empty, no auth against local relay)
+ *   SMTP_FROM     — default: Schichtplan Manager <noreply@schichtapp.de>
+ *   APP_BASE_URL  — default: https://schichtapp.de
  */
 
 import nodemailer from 'nodemailer';
 
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.strato.de';
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '465', 10);
-const SMTP_USER = process.env.SMTP_USER || 'mail@stullecrew.de';
-const SMTP_PASS = process.env.SMTP_PASS || 'Silberhammer108.';
-const SMTP_FROM = process.env.SMTP_FROM || 'Schichtplan Manager <mail@stullecrew.de>';
-export const APP_BASE_URL = process.env.APP_BASE_URL || 'https://spm.stullecrew.de';
+const SMTP_HOST = process.env.SMTP_HOST || '127.0.0.1';
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '25', 10);
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || 'Schichtplan Manager <noreply@schichtapp.de>';
+export const APP_BASE_URL = process.env.APP_BASE_URL || 'https://schichtapp.de';
 
 const transporter = nodemailer.createTransport({
   host: SMTP_HOST,
   port: SMTP_PORT,
   secure: SMTP_PORT === 465, // true for 465 (SSL), false for 587 (STARTTLS)
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASS,
-  },
+  // The local Postfix relay does not require/offer auth; only send
+  // credentials if a user was explicitly configured (e.g. external SMTP).
+  auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
 });
 
 export interface MailOptions {
@@ -40,11 +41,6 @@ export interface MailOptions {
 }
 
 export async function sendMail(opts: MailOptions): Promise<void> {
-  if (!SMTP_PASS) {
-    console.warn('[mailer] SMTP_PASS not set — email NOT sent to', opts.to);
-    console.log('[mailer] Would have sent:', opts.subject);
-    return;
-  }
   await transporter.sendMail({
     from: SMTP_FROM,
     to: opts.to,
