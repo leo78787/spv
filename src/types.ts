@@ -84,7 +84,26 @@ export interface Employee {
   preferences: ShiftPreference[];
   /** Employee portal status: 'none' | 'invited' | 'draft' | 'submitted' */
   portalStatus?: 'none' | 'invited' | 'draft' | 'submitted';
+  /** Employee-controlled email notification preferences (portal settings) */
+  notificationPreferences?: NotificationPreferences;
 }
+
+// ── Employee portal notification preferences ────────────────────────
+
+export interface NotificationPreferences {
+  /** Notify by email when the admin releases a new shift plan */
+  planRelease: boolean;
+  /** Notify by email when an already-released plan changes (shifts/labels visible to this employee) */
+  scheduleChanges: boolean;
+  /** Notify by email when a shift swap/takeover match is approved */
+  swapMatches: boolean;
+}
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  planRelease: true,
+  scheduleChanges: true,
+  swapMatches: true,
+};
 
 export interface Holiday {
   id: string;

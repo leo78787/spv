@@ -52,8 +52,8 @@
     .header { background: var(--gray-50); color: var(--gray-900); height: 64px; position: fixed; top: 0; left: 0; width: 100%; z-index: 30; border-bottom: 1px solid var(--gray-200); }
     .header-inner { max-width: 640px; height: 100%; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; }
     .header h1 { font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.2px; color: var(--primary); flex: 1; text-align: center; }
-    .header .logout { background: none; border: none; color: var(--primary); width: 40px; height: 40px; border-radius: var(--radius-full); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; flex-shrink: 0; }
-    .header .logout:hover { background: var(--gray-100); }
+    .header .header-icon-btn { background: none; border: none; color: var(--primary); width: 40px; height: 40px; border-radius: var(--radius-full); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; flex-shrink: 0; }
+    .header .header-icon-btn:hover { background: var(--gray-100); }
     .header-spacer { width: 40px; flex-shrink: 0; }
     #password-view, #portal-view { padding-top: 84px; }
 
@@ -199,6 +199,23 @@
     .modal-box h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
     .modal-box p { font-size: 14px; color: var(--gray-600); margin-bottom: 16px; }
 
+    /* Settings modal: notification preferences */
+    .settings-email-box { margin-bottom: 16px; padding: 12px; background: var(--gray-50); border-radius: var(--radius); border: 1px solid var(--gray-200); }
+    .settings-email-box .label { font-size: 11px; color: var(--gray-500); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 2px; }
+    .settings-email-box .value { font-size: 14px; font-weight: 600; color: var(--gray-800); word-break: break-all; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--gray-100); }
+    .settings-row:first-of-type { border-top: none; }
+    .settings-row .settings-row-title { font-size: 14px; font-weight: 600; color: var(--gray-800); }
+    .settings-row .settings-row-desc { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+
+    .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-switch .toggle-slider { position: absolute; inset: 0; background: var(--gray-300); border-radius: var(--radius-full); transition: background 0.15s; cursor: pointer; }
+    .toggle-switch .toggle-slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: transform 0.15s; box-shadow: var(--shadow-sm); }
+    .toggle-switch input:checked + .toggle-slider { background: var(--primary); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+    .toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
+
     /* Toast */
     .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: var(--radius); font-size: 14px; font-weight: 500; z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideUp 0.3s; max-width: 90%; text-align: center; }
     @keyframes slideUp { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
@@ -299,9 +316,11 @@
   <div id="portal-view" class="hidden">
     <div class="header">
       <div class="header-inner">
-        <div class="header-spacer"></div>
+        <button class="header-icon-btn" onclick="openSettingsModal()" title="Einstellungen" aria-label="Einstellungen">
+          <span class="material-symbols-outlined">settings</span>
+        </button>
         <h1>Schichtplan Manager</h1>
-        <button class="logout" onclick="doLogout()" title="Abmelden" aria-label="Abmelden">
+        <button class="header-icon-btn" onclick="doLogout()" title="Abmelden" aria-label="Abmelden">
           <span class="material-symbols-outlined">logout</span>
         </button>
       </div>
@@ -481,6 +500,54 @@
       <div class="btn-row">
         <button class="btn btn-outline" onclick="hideConfirm()">Abbrechen</button>
         <button class="btn btn-success" onclick="hideConfirm();doSave('submit')">Ja, einreichen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal: notification preferences -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;">Benachrichtigungen</h3>
+        <button onclick="closeSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--gray-400);display:flex;padding:4px;" aria-label="Schließen">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="settings-email-box">
+        <div class="label">Ihre E-Mail-Adresse</div>
+        <div class="value" id="settings-email">—</div>
+      </div>
+      <div id="settings-rows">
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-title">Schichtplan-Freigabe</div>
+            <div class="settings-row-desc">E-Mail, sobald ein neuer Schichtplan freigegeben wird.</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="notif-planRelease" onchange="updateNotificationPref('planRelease', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-title">Änderungen im Schichtplan</div>
+            <div class="settings-row-desc">E-Mail bei Änderungen an Ihren Schichten oder für Sie sichtbaren Terminen.</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="notif-scheduleChanges" onchange="updateNotificationPref('scheduleChanges', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-title">Tausch- &amp; Übernahme-Matches</div>
+            <div class="settings-row-desc">E-Mail, sobald ein Tausch oder eine Übernahme genehmigt wurde.</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="notif-swapMatches" onchange="updateNotificationPref('swapMatches', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
       </div>
     </div>
   </div>
@@ -719,6 +786,40 @@ function doLogout() {
   stopPolling(); showView('login-view');
 }
 
+// ─── Settings (notification preferences) ────────────────────────────
+let notificationPrefs = { planRelease: true, scheduleChanges: true, swapMatches: true };
+
+function openSettingsModal() {
+  document.getElementById('settings-email').textContent = data?.employee?.email || 'Keine E-Mail hinterlegt';
+  document.getElementById('notif-planRelease').checked = !!notificationPrefs.planRelease;
+  document.getElementById('notif-scheduleChanges').checked = !!notificationPrefs.scheduleChanges;
+  document.getElementById('notif-swapMatches').checked = !!notificationPrefs.swapMatches;
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function closeSettingsModal() {
+  document.getElementById('settings-modal').classList.add('hidden');
+}
+
+async function updateNotificationPref(key, value) {
+  const previous = notificationPrefs[key];
+  notificationPrefs = { ...notificationPrefs, [key]: value };
+  try {
+    const resp = await fetch('/api/portal/notification-preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(notificationPrefs),
+    });
+    if (!resp.ok) throw new Error('failed');
+    showToast('✓ Gespeichert', 'success');
+  } catch {
+    notificationPrefs = { ...notificationPrefs, [key]: previous };
+    const el = document.getElementById(`notif-${key}`);
+    if (el) el.checked = previous;
+    showToast('Fehler beim Speichern', 'error');
+  }
+}
+
 // ─── Data ────────────────────────────────────────────────────────────
 async function loadData() {
   const resp = await fetch('/api/portal/my-data', { headers: { Authorization: `Bearer ${token}` } });
@@ -735,6 +836,8 @@ async function loadData() {
 
   portalStatus = data.employee.portalStatus || 'none';
   isLocked = !!data.planReleased || !!data.employeesLocked || portalStatus === 'submitted';
+
+  notificationPrefs = data.notificationPreferences || { planRelease: true, scheduleChanges: true, swapMatches: true };
 
   document.getElementById('portal-welcome').textContent = `Hallo, ${data.employee.name}`;
   showView('portal-view');

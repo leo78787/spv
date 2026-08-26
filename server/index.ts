@@ -131,6 +131,18 @@ app.put('/api/state', authMiddleware, (req, res) => {
     swapMatches: hasShiftPlan ? (existing.swapMatches ?? []) : [],
   };
   saveState(merged);
+
+  // If the plan is already released, detect per-employee schedule changes
+  // (shift assignments or visible calendar labels) and debounce a notification.
+  if (hasShiftPlan && existing.planReleased) {
+    const employees: any[] = merged.employees || existing.employees || [];
+    for (const emp of employees) {
+      const before = getEmployeeScheduleSignature(emp.id, existing.shiftPlan, existing.labels, existing.calendarLabels);
+      const after = getEmployeeScheduleSignature(emp.id, merged.shiftPlan, merged.labels, merged.calendarLabels);
+      if (before !== after) scheduleChangeNotification(emp.id);
+    }
+  }
+
   res.json({ success: true });
 });
 
@@ -155,6 +167,79 @@ function reviveDates(obj: any): any {
     return result;
   }
   return obj;
+}
+
+/** Default email notification preferences for employees that never set their own. */
+const DEFAULT_NOTIFICATION_PREFERENCES = {
+  planRelease: true,
+  scheduleChanges: true,
+  swapMatches: true,
+};
+
+/** Read an employee's notification preferences, falling back to defaults for missing fields. */
+function getNotificationPreferences(emp: any): { planRelease: boolean; scheduleChanges: boolean; swapMatches: boolean } {
+  return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(emp?.notificationPreferences || {}) };
+}
+
+/** Whether an employee has activated their portal account (logged in at least once). */
+function hasActivatedPortal(employeeId: string, credInfo: Record<string, { mustChangePassword: boolean }>): boolean {
+  const cred = credInfo[employeeId];
+  return !!cred && !cred.mustChangePassword;
+}
+
+// ── Post-release schedule-change notifications ───────────────────────
+//
+// The admin frontend auto-saves the full state on nearly every edit, so we
+// can't email employees on every single PUT (that would spam them while the
+// admin is mid-edit). Instead, whenever an already-released employee's
+// visible schedule (their shift assignments or the calendar labels visible
+// to them) changes, we (re)start a short per-employee debounce timer. Only
+// once no further change happens for that employee within the debounce
+// window do we actually send a single "your schedule was updated" email.
+
+const SCHEDULE_CHANGE_DEBOUNCE_MS = 20_000;
+const scheduleChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Build a comparable signature of everything a given employee can see in the plan. */
+function getEmployeeScheduleSignature(employeeId: string, plan: any, labels: any[], calendarLabels: any[]): string {
+  const assignments = (plan?.assignments || [])
+    .filter((a: any) => (a.employees || []).includes(employeeId))
+    .map((a: any) => `${a.id}:${a.shiftType}:${a.startDate}:${a.endDate}`)
+    .sort();
+  const visibleLabelIds = new Set((labels || []).filter((l: any) => l.visibleToEmployee !== false).map((l: any) => l.id));
+  const empLabels = (calendarLabels || [])
+    .filter((cl: any) => cl.employeeId === employeeId && visibleLabelIds.has(cl.labelId))
+    .map((cl: any) => `${cl.date}:${cl.labelId}`)
+    .sort();
+  return JSON.stringify({ assignments, empLabels });
+}
+
+/** (Re)start the debounce timer for an employee whose visible schedule just changed. */
+function scheduleChangeNotification(employeeId: string): void {
+  const existingTimer = scheduleChangeTimers.get(employeeId);
+  if (existingTimer) clearTimeout(existingTimer);
+
+  const timer = setTimeout(async () => {
+    scheduleChangeTimers.delete(employeeId);
+    try {
+      const state = loadState();
+      const emp = (state.employees || []).find((e: any) => e.id === employeeId);
+      if (!emp?.email) return;
+      if (!state.planReleased) return; // plan was un-released in the meantime
+      const credInfo = getAllCredentialInfo();
+      if (!hasActivatedPortal(employeeId, credInfo)) return;
+      if (!getNotificationPreferences(emp).scheduleChanges) return;
+      await sendPlanNotificationEmail(
+        emp.email,
+        emp.name,
+        'Ihr Schichtplan wurde aktualisiert. Bitte prüfen Sie Ihre Schichten und Termine im Portal.'
+      );
+    } catch (err) {
+      console.error('[schedule-change-notify] failed:', err);
+    }
+  }, SCHEDULE_CHANGE_DEBOUNCE_MS);
+
+  scheduleChangeTimers.set(employeeId, timer);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -757,6 +842,7 @@ app.get('/api/portal/my-data', portalAuthMiddleware, (req, res) => {
     employee: {
       id: emp.id,
       name: emp.name,
+      email: emp.email || '',
       department: dept?.name || '',
       isOver55: emp.isOver55,
       hasL2: emp.hasL2,
@@ -777,6 +863,7 @@ app.get('/api/portal/my-data', portalAuthMiddleware, (req, res) => {
     customHolidays: state.customHolidays || [],
     swapSettings: state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false },
     departmentId: emp.department || null,
+    notificationPreferences: getNotificationPreferences(emp),
   });
 });
 
@@ -826,6 +913,24 @@ app.post('/api/portal/reset-status', authMiddleware, (req, res) => {
   emp.portalStatus = 'draft';
   saveState(state);
   res.json({ success: true, portalStatus: 'draft' });
+});
+
+/** Portal: get/update the employee's own email notification preferences (always editable, independent of plan lock) */
+app.put('/api/portal/notification-preferences', portalAuthMiddleware, (req, res) => {
+  const employeeId = (req as any).employeeId;
+  const state = loadState();
+  const emp = (state.employees || []).find((e: any) => e.id === employeeId);
+  if (!emp) { res.status(404).json({ error: 'Mitarbeiter nicht gefunden' }); return; }
+
+  const current = getNotificationPreferences(emp);
+  const { planRelease, scheduleChanges, swapMatches } = req.body ?? {};
+  emp.notificationPreferences = {
+    planRelease: typeof planRelease === 'boolean' ? planRelease : current.planRelease,
+    scheduleChanges: typeof scheduleChanges === 'boolean' ? scheduleChanges : current.scheduleChanges,
+    swapMatches: typeof swapMatches === 'boolean' ? swapMatches : current.swapMatches,
+  };
+  saveState(state);
+  res.json({ success: true, notificationPreferences: emp.notificationPreferences });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -880,8 +985,9 @@ app.post('/api/plan/release', authMiddleware, async (req, res) => {
       for (const emp of employees) {
         if (emp.email) {
           // Only notify employees who have logged in at least once (mustChangePassword === false)
-          const cred = credInfo[emp.id];
-          if (!cred || cred.mustChangePassword) continue;
+          if (!hasActivatedPortal(emp.id, credInfo)) continue;
+          // Respect the employee's own notification preference
+          if (!getNotificationPreferences(emp).planRelease) continue;
           try {
             await sendPlanNotificationEmail(
               emp.email,
@@ -1447,7 +1553,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
         const emp = employees.find((e: any) => e.id === ringOffers[i].employeeId);
         // Employee i gave away ringOffers[i] and received ringOffers[(i-1+n)%n]'s shift
         const receivedOffer = ringOffers[(i - 1 + n) % n];
-        if (emp?.email) {
+        if (emp?.email && getNotificationPreferences(emp).swapMatches) {
           try {
             await sendRingSwapMatchEmail(emp.email, emp.name, ringOffers[i], receivedOffer, allParticipantNames);
           } catch (e) { console.error('[ring-swap] mail failed:', e); }
@@ -1487,12 +1593,12 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
       const giver = employees.find((e: any) => e.id === offerA.employeeId);
       const taker = employees.find((e: any) => e.id === match.takeoverEmployeeId);
 
-      if (giver?.email) {
+      if (giver?.email && getNotificationPreferences(giver).swapMatches) {
         try {
           await sendTakeoverMatchEmail(giver.email, giver.name, taker?.name || 'Kollege/in', offerA, 'giver');
         } catch (e) { console.error('[takeover] mail to giver failed:', e); }
       }
-      if (taker?.email) {
+      if (taker?.email && getNotificationPreferences(taker).swapMatches) {
         try {
           await sendTakeoverMatchEmail(taker.email, taker.name, giver?.name || 'Kollege/in', offerA, 'taker');
         } catch (e) { console.error('[takeover] mail to taker failed:', e); }
@@ -1529,12 +1635,12 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
       const empA = employees.find((e: any) => e.id === offerA.employeeId);
       const empB = employees.find((e: any) => e.id === offerB.employeeId);
 
-      if (empA?.email) {
+      if (empA?.email && getNotificationPreferences(empA).swapMatches) {
         try {
           await sendSwapMatchEmail(empA.email, empA.name, empB?.name || 'Kollege/in', offerA, offerB);
         } catch (e) { console.error('[swap] mail to A failed:', e); }
       }
-      if (empB?.email) {
+      if (empB?.email && getNotificationPreferences(empB).swapMatches) {
         try {
           await sendSwapMatchEmail(empB.email, empB.name, empA?.name || 'Kollege/in', offerB, offerA);
         } catch (e) { console.error('[swap] mail to B failed:', e); }
