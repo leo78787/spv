@@ -4,57 +4,82 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Schichtplan – Mitarbeiter-Portal</title>
+  <!-- Material Symbols -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-weight: normal; font-style: normal; font-size: 24px; line-height: 1;
+      letter-spacing: normal; text-transform: none; display: inline-block;
+      white-space: nowrap; word-wrap: normal; direction: ltr;
+      -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+      vertical-align: middle;
+    }
     :root {
-      --primary: #4f46e5; --primary-hover: #4338ca; --primary-light: #eef2ff;
+      --font-headline: 'Hanken Grotesk', sans-serif;
+      --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      /* Material-3-inspired palette */
+      /* Exact Material-3 token set from design spec */
+      --primary: #0037b0; --primary-container: #1d4ed8; --on-primary-container: #cad3ff;
+      --primary-light: #dce1ff; --primary-hover: #1d4ed8;
+      --secondary-container: #d0e1fb; --on-secondary-container: #54647a;
       --success: #059669; --success-light: #d1fae5;
       --warning: #d97706; --warning-light: #fef3c7;
-      --danger: #dc2626; --danger-light: #fee2e2;
-      --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
-      --gray-300: #d1d5db; --gray-400: #9ca3af; --gray-500: #6b7280;
-      --gray-600: #4b5563; --gray-700: #374151; --gray-800: #1f2937;
-      --gray-900: #111827;
-      --radius: 8px; --radius-lg: 12px;
+      --danger: #ba1a1a; --danger-light: #ffdad6; --on-danger-light: #93000a;
+      --gray-50: #f0f3ff; --gray-100: #e7eeff; --gray-200: #d8e3fb;
+      --gray-300: #c4c5d7; --gray-400: #747686; --gray-500: #5c5e6e;
+      --gray-600: #434655; --gray-700: #323747; --gray-800: #202939;
+      --gray-900: #111c2d;
+      /* borderRadius scale: DEFAULT 2px, lg 4px, xl 8px, full 12px */
+      --radius-sm: 2px; --radius: 4px; --radius-lg: 8px; --radius-full: 12px;
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-      --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
-      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+      --shadow: 0 1px 3px rgba(0,0,0,0.1);
+      --shadow-md: 0 1px 3px rgba(0,0,0,0.1);
     }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--gray-100); color: var(--gray-800); line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
+    body { font-family: var(--font-body); background: var(--gray-50); color: var(--gray-800); line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
     .container { max-width: 640px; margin: 0 auto; padding: 16px; flex: 1; width: 100%; }
+    h1, h2, h3, .month-label, .drp-month { font-family: var(--font-headline); }
 
-    /* Header */
-    .header { background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%); color: white; padding: 20px 16px; margin: -16px -16px 20px; position: relative; }
-    .header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
-    .header p { font-size: 13px; opacity: 0.85; margin-top: 2px; }
-    .header .logout { background: rgba(255,255,255,0.18); backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.15); color: white; padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 13px; position: absolute; right: 16px; top: 20px; transition: all 0.15s; }
-    .header .logout:hover { background: rgba(255,255,255,0.28); }
+    /* Tab heading (headline-lg + body-sm), mirrors the reference "Header Section" */
+    .tab-heading { margin-bottom: 16px; }
+    .tab-heading h2 { font-size: 24px; line-height: 32px; letter-spacing: -0.01em; font-weight: 600; color: var(--gray-900); margin-bottom: 4px; }
+    .tab-heading p { font-size: 14px; line-height: 20px; color: var(--gray-600); }
+    .welcome-text { font-size: 14px; line-height: 20px; color: var(--gray-600); margin-bottom: 16px; }
+
+    /* TopAppBar-style header (true fixed bar, full viewport width) */
+    .header { background: var(--gray-50); color: var(--gray-900); height: 64px; position: fixed; top: 0; left: 0; width: 100%; z-index: 30; border-bottom: 1px solid var(--gray-200); }
+    .header-inner { max-width: 640px; height: 100%; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.2px; color: var(--primary); flex: 1; text-align: center; }
+    .header .logout { background: none; border: none; color: var(--primary); width: 40px; height: 40px; border-radius: var(--radius-full); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; flex-shrink: 0; }
+    .header .logout:hover { background: var(--gray-100); }
+    .header-spacer { width: 40px; flex-shrink: 0; }
+    #password-view, #portal-view { padding-top: 84px; }
 
     /* Cards */
-    .card { background: white; border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-100); transition: box-shadow 0.2s; }
-    .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--gray-900); display: flex; align-items: center; gap: 8px; }
-    .card h2 .card-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .card { background: white; border-radius: var(--radius-lg); border: 1px solid var(--gray-200); box-shadow: var(--shadow-sm); padding: 20px; margin-bottom: 12px; transition: box-shadow 0.2s; }
+    .card h2 { font-size: 20px; line-height: 28px; font-weight: 600; margin-bottom: 12px; color: var(--gray-900); display: flex; align-items: center; gap: 8px; }
+    .card h2 .card-icon { color: var(--primary); flex-shrink: 0; font-variation-settings: 'FILL' 1; }
 
     /* Forms */
     .form-group { margin-bottom: 14px; }
     .form-group label { display: block; font-size: 13px; font-weight: 500; color: var(--gray-600); margin-bottom: 4px; }
     input[type="text"], input[type="password"], input[type="email"], input[type="date"], select {
-      width: 100%; padding: 10px 12px; border: 1px solid var(--gray-200); border-radius: var(--radius);
-      font-size: 16px; background: white; color: var(--gray-800); transition: border-color 0.15s, box-shadow 0.15s;
+      width: 100%; padding: 12px; border: 1px solid var(--gray-200); border-radius: var(--radius);
+      font-size: 16px; background: white; color: var(--gray-800); transition: border-color 0.15s, box-shadow 0.15s; min-height: 44px;
     }
-    input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
+    input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,55,176,0.12); }
     input:disabled, select:disabled { background: var(--gray-100); color: var(--gray-400); cursor: not-allowed; }
 
     /* Buttons */
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 16px; border-radius: var(--radius); border: none; font-size: 14px; font-weight: 500; cursor: pointer; width: 100%; transition: all 0.15s; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 16px; border-radius: var(--radius); border: none; font-size: 14px; font-weight: 500; cursor: pointer; width: 100%; transition: all 0.15s; min-height: 44px; }
     .btn-primary { background: var(--primary); color: white; }
-    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(79,70,229,0.3); }
-    .btn-primary:active { transform: translateY(0); }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-primary:hover { background: var(--primary-container); color: var(--on-primary-container); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-success { background: var(--success); color: white; }
-    .btn-success:hover { background: #047857; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(5,150,105,0.3); }
-    .btn-success:active { transform: translateY(0); }
-    .btn-success:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-success:hover { background: #047857; }
+    .btn-success:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-outline { background: white; color: var(--gray-700); border: 1px solid var(--gray-300); }
     .btn-outline:hover { background: var(--gray-50); border-color: var(--gray-400); }
     .btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -84,12 +109,12 @@
     .pref-card .dates-row .sep { color: var(--gray-400); font-size: 18px; flex-shrink: 0; }
     .pref-type-toggle { display: flex; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--gray-200); }
     .pref-type-toggle button { flex: 1; padding: 8px; border: none; background: white; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
-    .pref-type-toggle button.sel-pref { background: #dbeafe; color: #1e40af; }
-    .pref-type-toggle button.sel-avoid { background: var(--danger-light); color: var(--danger); }
+    .pref-type-toggle button.sel-pref { background: var(--secondary-container); color: var(--on-secondary-container); }
+    .pref-type-toggle button.sel-avoid { background: var(--danger-light); color: var(--on-danger-light); }
 
     /* Remove button */
-    .remove-icon { background: none; border: none; color: var(--gray-400); cursor: pointer; padding: 6px; border-radius: 6px; transition: all 0.15s; display: flex; align-items: center; }
-    .remove-icon:hover { color: var(--danger); background: var(--danger-light); }
+    .remove-icon { background: none; border: none; color: var(--gray-400); cursor: pointer; padding: 8px; border-radius: var(--radius-full); transition: all 0.15s; display: flex; align-items: center; }
+    .remove-icon:hover { color: var(--on-danger-light); background: var(--danger-light); }
 
     /* Calendar Mini */
     .mini-cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -98,7 +123,7 @@
     .mini-cal-header .month-label { font-weight: 600; font-size: 14px; }
     .mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
     .mini-cal-grid .day-header { font-size: 10px; color: var(--gray-500); padding: 4px 0; font-weight: 600; }
-    .mini-cal-grid .day-cell { font-size: 12px; padding: 4px 2px; border-radius: 6px; cursor: default; position: relative; min-height: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: background 0.1s; }
+    .mini-cal-grid .day-cell { font-size: 12px; padding: 4px 2px; border-radius: var(--radius); cursor: default; position: relative; min-height: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: background 0.1s; }
     .mini-cal-grid .day-cell.today { outline: 2px solid var(--primary); outline-offset: -1px; }
     .mini-cal-grid .day-cell.weekend { color: var(--gray-400); }
     .mini-cal-grid .day-cell.has-shift { font-weight: 600; }
@@ -117,7 +142,7 @@
     .drp-header .drp-month { font-weight: 600; font-size: 13px; color: var(--gray-800); }
     .drp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; text-align: center; }
     .drp-grid .drp-day-header { font-size: 10px; color: var(--gray-400); padding: 4px 0; font-weight: 600; }
-    .drp-grid .drp-day { font-size: 12px; padding: 6px 2px; border-radius: 6px; cursor: pointer; transition: all 0.1s; color: var(--gray-700); }
+    .drp-grid .drp-day { font-size: 12px; padding: 8px 2px; border-radius: var(--radius); cursor: pointer; transition: all 0.1s; color: var(--gray-700); min-height: 36px; display: flex; align-items: center; justify-content: center; }
     .drp-grid .drp-day:hover { background: var(--primary-light); }
     .drp-grid .drp-day.drp-empty { cursor: default; }
     .drp-grid .drp-day.drp-empty:hover { background: none; }
@@ -146,21 +171,23 @@
     /* Label chips */
     .label-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: white; margin: 1px; }
 
-    /* Tabs */
-    .tabs { display: flex; background: white; border-radius: var(--radius-lg); padding: 4px; margin-bottom: 16px; gap: 4px; overflow-x: auto; box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); }
-    .tab { padding: 8px 14px; font-size: 13px; font-weight: 500; color: var(--gray-500); border: none; background: none; cursor: pointer; border-radius: var(--radius); white-space: nowrap; flex-shrink: 0; transition: all 0.15s; flex: 1; text-align: center; }
-    .tab:hover { color: var(--gray-700); background: var(--gray-50); }
-    .tab.active { color: var(--primary); background: var(--primary-light); font-weight: 600; }
+    /* Bottom navigation (M3 BottomNavBar) */
+    .bottom-nav { position: fixed; left: 0; bottom: 0; width: 100%; z-index: 40; display: flex; justify-content: space-around; align-items: center; gap: 2px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: rgba(255,255,255,0.94); backdrop-filter: blur(8px); border-top: 1px solid var(--gray-200); }
+    .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 8px 10px; font-size: 11px; font-weight: 600; color: var(--gray-500); border: none; background: none; cursor: pointer; border-radius: var(--radius-full); white-space: nowrap; flex: 1; transition: all 0.15s; min-height: 48px; }
+    .tab .material-symbols-outlined { font-size: 22px; }
+    .tab:hover { background: var(--gray-100); }
+    .tab.active { color: var(--on-secondary-container); background: var(--secondary-container); }
+    .tab.active .material-symbols-outlined { font-variation-settings: 'FILL' 1; }
 
     /* Messages */
     .msg { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-    .msg-info { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+    .msg-info { background: var(--secondary-container); color: var(--on-secondary-container); border: 1px solid var(--gray-300); }
     .msg-success { background: var(--success-light); color: #065f46; border: 1px solid #a7f3d0; }
     .msg-warning { background: var(--warning-light); color: #92400e; border: 1px solid #fde68a; }
-    .msg-error { background: var(--danger-light); color: var(--danger); border: 1px solid #fecaca; }
+    .msg-error { background: var(--danger-light); color: var(--on-danger-light); border: 1px solid #ffb4ab; }
 
     /* Status badge */
-    .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--radius-full); font-size: 12px; font-weight: 600; }
     .status-submitted { background: var(--success-light); color: #065f46; border: 1px solid #a7f3d0; }
     .status-draft { background: var(--warning-light); color: #92400e; border: 1px solid #fde68a; }
 
@@ -181,14 +208,36 @@
     .portal-footer a { color: var(--gray-500); text-decoration: underline; }
 
     .hidden { display: none !important; }
+    #portal-view { padding-bottom: 76px; }
     .empty-state { text-align: center; padding: 24px 16px; color: var(--gray-400); }
     .empty-state p { font-size: 13px; margin-top: 4px; }
-    .empty-state svg { margin: 0 auto 8px; opacity: 0.4; }
+    .empty-state svg, .empty-state .material-symbols-outlined { display: block; margin: 0 auto 8px; opacity: 0.4; font-size: 40px; }
 
     @media (min-width: 480px) {
       .container { padding: 24px; }
-      .header { margin: -24px -24px 24px; padding: 24px; }
       .shift-item .shift-type { min-width: 140px; }
+    }
+
+    /* ─── Web / Desktop layout ──────────────────────────────────────── */
+    @media (min-width: 768px) {
+      .container { max-width: 960px; padding: 32px; }
+      .header-inner { max-width: 960px; padding: 0 32px; }
+      #login-view, #password-view { max-width: 420px; margin: 0 auto; }
+
+      /* Bottom nav becomes a horizontal top tab bar instead of a mobile dock */
+      .bottom-nav { position: static; width: auto; justify-content: flex-start; gap: 6px; padding: 4px 0 20px; background: none; backdrop-filter: none; border-top: none; border-bottom: 1px solid var(--gray-200); border-radius: 0; margin-bottom: 24px; }
+      .tab { flex: 0 0 auto; flex-direction: row; padding: 10px 18px; font-size: 14px; gap: 8px; min-height: auto; }
+      .tab .material-symbols-outlined { font-size: 20px; }
+      #portal-view { padding-bottom: 32px; }
+      .toast { bottom: 24px; }
+
+      /* Cards flow into a responsive two-column layout on wide screens */
+      .tab-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); align-items: start; gap: 20px; }
+      .tab-content .tab-heading { grid-column: 1 / -1; margin-bottom: 4px; }
+      .tab-content .card { margin-bottom: 0; }
+
+      /* Action buttons: compact size, left-aligned under the actual content */
+      #action-buttons .btn { flex: 0 0 auto; width: auto; min-width: 180px; }
     }
   </style>
 </head>
@@ -198,8 +247,8 @@
   <!-- LOGIN -->
   <div id="login-view">
     <div style="padding-top: 60px; text-align: center;">
-      <div style="display:inline-flex;background:linear-gradient(135deg, var(--primary), #6366f1);padding:14px;border-radius:16px;margin-bottom:16px;box-shadow:0 4px 12px rgba(79,70,229,0.3);">
-        <svg width="32" height="32" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <div style="display:inline-flex;background:var(--primary-light);padding:14px;border-radius:var(--radius-full);margin-bottom:16px;">
+        <span class="material-symbols-outlined" style="font-size:32px;color:var(--primary);">calendar_month</span>
       </div>
       <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;letter-spacing:-0.3px;">Schichtplan Manager</h1>
       <p style="color:var(--gray-500);font-size:14px;margin-bottom:28px;">Mitarbeiter-Portal</p>
@@ -218,16 +267,20 @@
     </div>
     <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--gray-400);">
       <p>Schichtplan Manager &copy; 2026</p>
-      <p><a href="/portal/impressum.html" style="color:var(--gray-500);text-decoration:underline;">Impressum</a></p>
+      <p><a href="/impressum.html" style="color:var(--gray-500);text-decoration:underline;">Impressum</a></p>
     </div>
   </div>
 
   <!-- CHANGE PASSWORD -->
   <div id="password-view" class="hidden">
     <div class="header">
-      <h1>Passwort ändern</h1>
-      <p>Bitte vergeben Sie ein neues Passwort</p>
+      <div class="header-inner">
+        <div class="header-spacer"></div>
+        <h1>Passwort ändern</h1>
+        <div class="header-spacer"></div>
+      </div>
     </div>
+    <p class="welcome-text" style="text-align:center;">Bitte vergeben Sie ein neues Passwort</p>
     <div class="card">
       <div class="form-group">
         <label>Neues Passwort (min. 6 Zeichen)</label>
@@ -245,34 +298,53 @@
   <!-- MAIN PORTAL -->
   <div id="portal-view" class="hidden">
     <div class="header">
-      <h1>Schichtplan Manager</h1>
-      <p id="portal-welcome"></p>
-      <button class="logout" onclick="doLogout()">Abmelden</button>
+      <div class="header-inner">
+        <div class="header-spacer"></div>
+        <h1>Schichtplan Manager</h1>
+        <button class="logout" onclick="doLogout()" title="Abmelden" aria-label="Abmelden">
+          <span class="material-symbols-outlined">logout</span>
+        </button>
+      </div>
     </div>
+    <p id="portal-welcome" class="welcome-text"></p>
 
     <div id="status-bar" class="hidden" style="margin-bottom:12px;"></div>
 
-    <div class="tabs">
-      <button class="tab active" data-tab="vacation" onclick="switchTab('vacation')">Urlaub</button>
-      <button class="tab" data-tab="preferences" onclick="switchTab('preferences')">Präferenzen</button>
-      <button class="tab" data-tab="schedule" onclick="switchTab('schedule')">Schichtplan</button>
-      <button class="tab hidden" id="swap-tab-btn" data-tab="swap" onclick="switchTab('swap')">Tauschen</button>
+    <div class="bottom-nav">
+      <button class="tab active" data-tab="vacation" onclick="switchTab('vacation')">
+        <span class="material-symbols-outlined">event_busy</span>
+        <span>Urlaub</span>
+      </button>
+      <button class="tab" data-tab="preferences" onclick="switchTab('preferences')">
+        <span class="material-symbols-outlined">settings_account_box</span>
+        <span>Präferenzen</span>
+      </button>
+      <button class="tab" data-tab="schedule" onclick="switchTab('schedule')">
+        <span class="material-symbols-outlined">calendar_month</span>
+        <span>Schichtplan</span>
+      </button>
+      <button class="tab hidden" id="swap-tab-btn" data-tab="swap" onclick="switchTab('swap')">
+        <span class="material-symbols-outlined">swap_horizontal_circle</span>
+        <span>Tauschen</span>
+      </button>
     </div>
 
     <!-- VACATION TAB -->
     <div id="tab-vacation" class="tab-content">
+      <div class="tab-heading">
+        <h2>Urlaub</h2>
+        <p>Verwalten Sie Ihre Urlaubszeiträume für die aktuelle Planungsperiode.</p>
+      </div>
       <div class="card">
         <h2>
-          <span class="card-icon" style="background:#ede9fe;">
-            <svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          </span>
+          <span class="card-icon material-symbols-outlined">flight_takeoff</span>
           Urlaubszeiträume
           <span id="vacation-total-days" style="margin-left:auto;font-size:12px;font-weight:500;color:var(--gray-500);"></span>
         </h2>
         <div id="vacation-locked" class="msg msg-warning hidden"></div>
         <div id="vacation-ranges"></div>
         <div id="vacation-empty" class="empty-state hidden">
-          <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="material-symbols-outlined">flight_takeoff</span>
           <p>Noch keine Urlaubszeiträume eingetragen.</p>
           <p>Tippen Sie auf den Button, um einen Zeitraum hinzuzufügen.</p>
         </div>
@@ -282,17 +354,19 @@
 
     <!-- PREFERENCES TAB -->
     <div id="tab-preferences" class="tab-content hidden">
+      <div class="tab-heading">
+        <h2>Präferenzen</h2>
+        <p>Geben Sie an, welche Schichten Sie bevorzugen oder vermeiden möchten.</p>
+      </div>
       <div class="card">
         <h2>
-          <span class="card-icon" style="background:#fef3c7;">
-            <svg width="16" height="16" fill="none" stroke="#d97706" stroke-width="2" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-          </span>
+          <span class="card-icon material-symbols-outlined">tune</span>
           Schichtpräferenzen
         </h2>
         <div id="pref-locked" class="msg msg-warning hidden"></div>
         <div id="preferences-list"></div>
         <div id="pref-empty" class="empty-state hidden">
-          <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span class="material-symbols-outlined">tune</span>
           <p>Noch keine Schichtpräferenzen eingetragen.</p>
           <p>Geben Sie an, welche Schichten Sie bevorzugen oder vermeiden möchten.</p>
         </div>
@@ -302,11 +376,13 @@
 
     <!-- SCHEDULE TAB -->
     <div id="tab-schedule" class="tab-content hidden">
+      <div class="tab-heading">
+        <h2>Schichtplan</h2>
+        <p>Ihr aktueller Dienstplan im Überblick.</p>
+      </div>
       <div class="card" id="calendar-card">
         <h2>
-          <span class="card-icon" style="background:#dbeafe;">
-            <svg width="16" height="16" fill="none" stroke="#2563eb" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          </span>
+          <span class="card-icon material-symbols-outlined">calendar_today</span>
           Kalender
         </h2>
         <div id="schedule-unreleased" class="msg msg-info hidden">Der Schichtplan wurde noch nicht freigegeben.</div>
@@ -320,37 +396,70 @@
       </div>
       <div class="card">
         <h2>
-          <span class="card-icon" style="background:#d1fae5;">
-            <svg width="16" height="16" fill="none" stroke="#059669" stroke-width="2" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
-          </span>
+          <span class="card-icon material-symbols-outlined">event_note</span>
           Mein Schichtplan
         </h2>
         <div id="schedule-list" class="shift-list"></div>
       </div>
       <div class="card hidden" id="labels-card">
-        <h2>Labels</h2>
+        <h2>
+          <span class="card-icon material-symbols-outlined">label</span>
+          Labels
+        </h2>
         <div id="labels-list"></div>
       </div>
     </div>
 
     <!-- SWAP TAB -->
     <div id="tab-swap" class="tab-content hidden">
+      <div class="tab-heading">
+        <h2>Tauschen</h2>
+        <p>Bieten Sie Schichten zum Tausch an und verwalten Sie Ihre Angebote.</p>
+      </div>
       <div class="card">
-        <h2>Schichten zum Tausch anbieten</h2>
+        <h2>
+          <span class="card-icon material-symbols-outlined">sync_alt</span>
+          Schichten zum Tausch anbieten
+        </h2>
         <div id="swap-not-released" class="msg msg-info hidden">Der Schichtplan wurde noch nicht freigegeben.</div>
         <div id="swap-not-enabled" class="msg msg-info hidden">Schichttausch ist nicht aktiviert.</div>
         <p id="swap-info" class="hidden" style="font-size:13px;color:var(--gray-600);margin-bottom:12px;">Wählen Sie eine Schicht aus, die Sie zum Tausch anbieten möchten.</p>
         <div id="swap-shift-list"></div>
       </div>
+      <div class="card hidden" id="takeover-offers-card">
+        <h2>
+          <span class="card-icon material-symbols-outlined">person_add</span>
+          Verfügbare Angebote zur Übernahme
+        </h2>
+        <p style="font-size:13px;color:var(--gray-600);margin-bottom:12px;">Diese Schichten wurden von Kolleg:innen zum Tausch angeboten. Sie können sie direkt übernehmen, ohne selbst eine Schicht abzugeben.</p>
+        <div id="available-takeover-offers"></div>
+        <div id="takeover-offers-empty" class="empty-state hidden">
+          <span class="material-symbols-outlined">person_add</span>
+          <p>Aktuell keine Angebote von Kolleg:innen verfügbar.</p>
+        </div>
+      </div>
       <div class="card" id="swap-offers-card">
-        <h2>Meine Tauschangebote</h2>
+        <h2>
+          <span class="card-icon material-symbols-outlined">compare_arrows</span>
+          Meine Tauschangebote
+        </h2>
         <div id="my-swap-offers"></div>
         <div id="swap-offers-empty" class="empty-state hidden">
           <p>Noch keine Schichten zum Tausch angeboten.</p>
         </div>
       </div>
+      <div class="card hidden" id="takeover-requests-card">
+        <h2>
+          <span class="card-icon material-symbols-outlined">how_to_reg</span>
+          Meine Übernahme-Anfragen
+        </h2>
+        <div id="my-takeover-requests"></div>
+      </div>
       <div class="card hidden" id="swap-matches-card">
-        <h2>Matches</h2>
+        <h2>
+          <span class="card-icon material-symbols-outlined">check_circle</span>
+          Matches
+        </h2>
         <div id="my-swap-matches"></div>
       </div>
     </div>
@@ -380,7 +489,7 @@
 <!-- Footer -->
 <div class="portal-footer" id="main-footer">
   <p>Schichtplan Manager &copy; 2026</p>
-  <p><a href="/portal/impressum.html">Impressum</a></p>
+  <p><a href="/impressum.html">Impressum</a></p>
 </div>
 
 <script>
@@ -718,7 +827,7 @@ function renderVacation() {
       <div class="item-header">
         <span class="item-num">Zeitraum ${i + 1}${days >= 0 ? ` · ${days} Tag(e)` : ''}</span>
         ${isLocked ? '' : `<button class="remove-icon" onclick="removeVacation(${i})" title="Entfernen">
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <span class="material-symbols-outlined" style="font-size:18px;">close</span>
         </button>`}
       </div>
       <div id="${pickerId}"></div>`;
@@ -775,7 +884,7 @@ function renderPreferences() {
       <div class="pref-header">
         <span class="pref-num">Präferenz ${i + 1}</span>
         ${isLocked ? '' : `<button class="remove-icon" onclick="removePreference(${i})" title="Entfernen">
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <span class="material-symbols-outlined" style="font-size:18px;">close</span>
         </button>`}
       </div>
       <select onchange="preferences[${i}].shiftType=this.value" ${isLocked ? 'disabled' : ''}>
@@ -785,8 +894,8 @@ function renderPreferences() {
       </select>
       <div id="${pickerId}"></div>
       <div class="pref-type-toggle">
-        <button class="${p.preferred ? 'sel-pref' : ''}" onclick="preferences[${i}].preferred=true;renderPreferences()" ${isLocked ? 'disabled' : ''}>👍 Gewünscht</button>
-        <button class="${!p.preferred ? 'sel-avoid' : ''}" onclick="preferences[${i}].preferred=false;renderPreferences()" ${isLocked ? 'disabled' : ''}>👎 Vermeiden</button>
+        <button class="${p.preferred ? 'sel-pref' : ''}" onclick="preferences[${i}].preferred=true;renderPreferences()" ${isLocked ? 'disabled' : ''}>Gewünscht</button>
+        <button class="${!p.preferred ? 'sel-avoid' : ''}" onclick="preferences[${i}].preferred=false;renderPreferences()" ${isLocked ? 'disabled' : ''}>Vermeiden</button>
       </div>`;
     c.appendChild(div);
     renderDateRangePicker(pickerId, p.startDate, p.endDate, (s, e) => {
@@ -934,7 +1043,7 @@ async function doSave(action) {
 function showToast(text, type) {
   let existing = document.querySelector('.toast'); if (existing) existing.remove();
   const t = document.createElement('div'); t.className = 'toast';
-  t.style.background = type === 'error' ? '#dc2626' : type === 'success' ? '#059669' : '#4f46e5';
+  t.style.background = type === 'error' ? 'var(--danger)' : type === 'success' ? 'var(--success)' : 'var(--primary)';
   t.style.color = 'white'; t.textContent = text; document.body.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
@@ -942,7 +1051,8 @@ function showToast(text, type) {
 // ─── Swap ────────────────────────────────────────────────────────────
 let swapOffers = [];
 let swapMatches = [];
-let swapSettings = { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false };
+let availableTakeoverOffers = [];
+let swapSettings = { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false, allowDirectTakeover: false };
 let swapModalRanges = [];
 
 function updateSwapTabVisibility() {
@@ -966,6 +1076,7 @@ async function loadSwapData() {
     const d = await resp.json();
     swapOffers = d.offers || [];
     swapMatches = d.matches || [];
+    availableTakeoverOffers = d.availableOffers || [];
     if (d.swapSettings) swapSettings = d.swapSettings;
     renderSwapTab();
   } catch {}
@@ -973,8 +1084,104 @@ async function loadSwapData() {
 
 function renderSwapTab() {
   renderSwapShiftList();
+  renderAvailableTakeoverOffers();
   renderMySwapOffers();
+  renderMyTakeoverRequests();
   renderSwapMatches();
+}
+
+function renderAvailableTakeoverOffers() {
+  const card = document.getElementById('takeover-offers-card');
+  const c = document.getElementById('available-takeover-offers');
+  const emptyEl = document.getElementById('takeover-offers-empty');
+  if (!card || !c) return;
+
+  if (!swapSettings.allowDirectTakeover) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+
+  if (availableTakeoverOffers.length === 0) {
+    c.innerHTML = '';
+    emptyEl.classList.remove('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+
+  c.innerHTML = availableTakeoverOffers.map(o => {
+    const startStr = new Date(o.startDate).toLocaleDateString('de-DE');
+    const endStr = new Date(o.endDate).toLocaleDateString('de-DE');
+    return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+        <div>
+          <div style="font-weight:600;font-size:13px;">${SHIFT_NAMES[o.shiftType] || o.shiftType}</div>
+          <div style="font-size:12px;color:var(--gray-500);">${startStr} — ${endStr}</div>
+          <div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Angeboten von ${o.employeeName}${o.departmentName ? ' · ' + o.departmentName : ''}</div>
+        </div>
+        ${o.alreadyRequested
+          ? '<span style="padding:6px 12px;font-size:11px;color:var(--gray-500);white-space:nowrap;">Angefragt</span>'
+          : `<button onclick="requestTakeover('${o.id}')" style="padding:6px 14px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-full);cursor:pointer;white-space:nowrap;">Anfragen</button>`
+        }
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function requestTakeover(offerId) {
+  try {
+    const resp = await fetch('/api/portal/swap-offer/request-takeover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ offerId }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) { showToast(d.error || 'Fehler', 'error'); return; }
+    showToast('✓ Anfrage gesendet! Der Administrator muss sie noch bestätigen.', 'success');
+    await loadSwapData();
+  } catch { showToast('Verbindungsfehler', 'error'); }
+}
+
+async function withdrawTakeoverRequest(matchId) {
+  try {
+    const resp = await fetch('/api/portal/swap-offer/withdraw-takeover-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ matchId }),
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showToast(d.error || 'Fehler', 'error'); return; }
+    showToast('✓ Anfrage zurückgezogen', 'success');
+    await loadSwapData();
+  } catch { showToast('Verbindungsfehler', 'error'); }
+}
+
+function renderMyTakeoverRequests() {
+  const card = document.getElementById('takeover-requests-card');
+  const c = document.getElementById('my-takeover-requests');
+  if (!card || !c) return;
+
+  const myRequests = swapMatches.filter(m => m.takeoverEmployeeId === employeeId);
+  if (myRequests.length === 0) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+
+  c.innerHTML = myRequests.map(m => {
+    const info = m.swapInfo || {};
+    const startStr = info.startDate ? new Date(info.startDate).toLocaleDateString('de-DE') : '';
+    const endStr = info.endDate ? new Date(info.endDate).toLocaleDateString('de-DE') : '';
+    const statusLabel = m.status === 'pending' ? 'Ausstehend' : m.status === 'approved' ? '✓ Genehmigt' : 'Abgelehnt';
+    const statusColor = m.status === 'pending' ? 'var(--warning)' : m.status === 'approved' ? 'var(--success)' : 'var(--gray-400)';
+    return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+        <div>
+          <div style="font-weight:600;font-size:13px;">${SHIFT_NAMES[info.shiftType] || info.shiftType || ''}</div>
+          <div style="font-size:12px;color:var(--gray-500);">${startStr} — ${endStr}</div>
+          ${info.counterpartName ? `<div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Von ${info.counterpartName}</div>` : ''}
+          <div style="font-size:11px;font-weight:600;color:${statusColor};margin-top:4px;">${statusLabel}</div>
+        </div>
+        ${m.status === 'pending'
+          ? `<button onclick="withdrawTakeoverRequest('${m.id}')" style="padding:6px 12px;font-size:11px;background:var(--danger-light);color:var(--on-danger-light);border:1px solid #ffb4ab;border-radius:var(--radius-full);cursor:pointer;white-space:nowrap;">Zurückziehen</button>`
+          : ''
+        }
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderSwapShiftList() {
@@ -1033,7 +1240,7 @@ function openSwapOfferForm(assignmentId) {
   const endStr = new Date(a.endDate).toLocaleDateString('de-DE');
 
   modal.innerHTML = `
-    <div style="background:white;border-radius:16px;padding:24px;max-width:420px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+    <div style="background:white;border-radius:var(--radius-lg);padding:24px;max-width:420px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);">
       <h3 style="margin:0 0 4px;">Schicht zum Tausch anbieten</h3>
       <p style="font-size:13px;color:var(--gray-600);margin:0 0 16px;">
         ${SHIFT_NAMES[a.shiftType]} — ${startStr} bis ${endStr}
@@ -1184,7 +1391,7 @@ function renderMySwapOffers() {
             ${willingStr ? `<div style="font-size:11px;color:var(--gray-500);margin-top:4px;">Akzeptiert: ${willingStr}</div>` : ''}
             ${rangesStr ? `<div style="font-size:11px;color:var(--gray-500);">Zeitraum: ${rangesStr}</div>` : ''}
           </div>
-          <button onclick="withdrawSwapOffer('${o.id}')" style="padding:4px 10px;font-size:11px;background:#fee2e2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;cursor:pointer;">Zurückziehen</button>
+          <button onclick="withdrawSwapOffer('${o.id}')" style="padding:6px 12px;font-size:11px;background:var(--danger-light);color:var(--on-danger-light);border:1px solid #ffb4ab;border-radius:var(--radius-full);cursor:pointer;">Zurückziehen</button>
         </div>
       </div>`;
     }).join('');
@@ -1196,7 +1403,7 @@ function renderMySwapOffers() {
       const startStr = new Date(o.startDate).toLocaleDateString('de-DE');
       const endStr = new Date(o.endDate).toLocaleDateString('de-DE');
       const statusLabel = o.status === 'matched' ? '🎉 Gematcht' : o.status === 'withdrawn' ? 'Zurückgezogen' : o.status;
-      const statusColor = o.status === 'matched' ? '#059669' : '#9ca3af';
+      const statusColor = o.status === 'matched' ? 'var(--success)' : 'var(--gray-400)';
       return `<div style="background:var(--gray-50);border:1px solid var(--gray-100);border-radius:10px;padding:10px;margin-top:6px;opacity:0.7;">
         <div style="font-size:13px;">${SHIFT_NAMES[o.shiftType] || o.shiftType} — ${startStr} bis ${endStr}</div>
         <div style="font-size:11px;color:${statusColor};font-weight:600;margin-top:2px;">${statusLabel}</div>
@@ -1212,11 +1419,24 @@ function renderSwapMatches() {
   const c = document.getElementById('my-swap-matches');
   if (!card || !c) return;
 
-  const relevantMatches = swapMatches.filter(m => m.status === 'approved');
+  // Exclude takeover matches where I'm the requester — those are already shown
+  // in "Meine Übernahme-Anfragen" with their own status.
+  const relevantMatches = swapMatches.filter(m => m.status === 'approved' && m.takeoverEmployeeId !== employeeId);
   if (relevantMatches.length === 0) { card.classList.add('hidden'); return; }
 
   card.classList.remove('hidden');
   c.innerHTML = relevantMatches.map(m => {
+    if (m.takeoverEmployeeId) {
+      const info = m.swapInfo || {};
+      const startStr = info.startDate ? new Date(info.startDate).toLocaleDateString('de-DE') : '';
+      const endStr = info.endDate ? new Date(info.endDate).toLocaleDateString('de-DE') : '';
+      return `<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:12px;margin-bottom:8px;">
+        <div style="font-weight:600;font-size:13px;color:#059669;">✓ Übernahme genehmigt</div>
+        <div style="font-size:12px;color:var(--gray-600);margin-top:4px;">
+          Ihre Schicht ${SHIFT_NAMES[info.shiftType] || info.shiftType || ''}${startStr ? ` (${startStr} – ${endStr})` : ''} wurde von ${info.counterpartName || 'einem/einer Kolleg:in'} übernommen.
+        </div>
+      </div>`;
+    }
     return `<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:12px;margin-bottom:8px;">
       <div style="font-weight:600;font-size:13px;color:#059669;">✓ Tausch genehmigt</div>
       <div style="font-size:12px;color:var(--gray-600);margin-top:4px;">Der Tausch wurde vom Administrator genehmigt und im Schichtplan aktualisiert.</div>

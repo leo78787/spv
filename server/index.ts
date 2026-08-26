@@ -29,7 +29,7 @@ import {
   getAllCredentialInfo,
   clearAllCredentials,
 } from './portalAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail } from './mailer.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail } from './mailer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
@@ -1039,20 +1039,148 @@ app.post('/api/portal/swap-offer/withdraw', portalAuthMiddleware, (req, res) => 
   res.json({ success: true });
 });
 
-/** Portal: get own swap offers */
+/** Portal: request to directly take over a colleague's offered shift (no counter-offer) */
+app.post('/api/portal/swap-offer/request-takeover', portalAuthMiddleware, (req, res) => {
+  try {
+    const employeeId = (req as any).employeeId;
+    const { offerId } = req.body;
+    const state = loadState();
+
+    const swapSettings = state.swapSettings || { enabled: false, allowDirectTakeover: false };
+    if (!swapSettings.enabled || !swapSettings.allowDirectTakeover) {
+      res.status(403).json({ error: 'Direktübernahme ist nicht aktiviert.' });
+      return;
+    }
+    if (!state.planReleased) {
+      res.status(403).json({ error: 'Schichtplan ist noch nicht freigegeben.' });
+      return;
+    }
+
+    const offers = state.swapOffers || [];
+    const offer = offers.find((o: any) => o.id === offerId);
+    if (!offer) { res.status(404).json({ error: 'Angebot nicht gefunden.' }); return; }
+    if (offer.status !== 'open') { res.status(400).json({ error: 'Angebot ist nicht mehr verfügbar.' }); return; }
+    if (offer.employeeId === employeeId) { res.status(400).json({ error: 'Sie können Ihre eigene Schicht nicht übernehmen.' }); return; }
+
+    if (swapSettings.onlyWithinDepartment) {
+      const employees = state.employees || [];
+      const owner = employees.find((e: any) => e.id === offer.employeeId);
+      const requester = employees.find((e: any) => e.id === employeeId);
+      if (!owner || !requester || owner.department !== requester.department) {
+        res.status(403).json({ error: 'Übernahme ist nur innerhalb der eigenen Abteilung erlaubt.' });
+        return;
+      }
+    }
+
+    const matches = state.swapMatches || [];
+    const existing = matches.find((m: any) =>
+      m.offerA === offerId && m.takeoverEmployeeId === employeeId && m.status === 'pending'
+    );
+    if (existing) { res.status(409).json({ error: 'Sie haben diese Schicht bereits angefragt.' }); return; }
+
+    const match = {
+      id: `match-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      offerA: offerId,
+      takeoverEmployeeId: employeeId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    matches.push(match);
+    state.swapMatches = matches;
+    saveState(state);
+    res.json({ success: true, match });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/** Portal: withdraw a pending direct-takeover request */
+app.post('/api/portal/swap-offer/withdraw-takeover-request', portalAuthMiddleware, (req, res) => {
+  const employeeId = (req as any).employeeId;
+  const { matchId } = req.body;
+
+  const state = loadState();
+  const matches = state.swapMatches || [];
+  const match = matches.find((m: any) => m.id === matchId);
+  if (!match) { res.status(404).json({ error: 'Anfrage nicht gefunden.' }); return; }
+  if (match.takeoverEmployeeId !== employeeId) { res.status(403).json({ error: 'Nicht Ihre Anfrage.' }); return; }
+  if (match.status !== 'pending') { res.status(400).json({ error: 'Anfrage wurde bereits bearbeitet.' }); return; }
+
+  const idx = matches.indexOf(match);
+  matches.splice(idx, 1);
+  state.swapMatches = matches;
+  saveState(state);
+  res.json({ success: true });
+});
+
+/** Portal: get own swap offers, own takeover requests, and colleagues' offers available for takeover */
 app.get('/api/portal/swap-offers', portalAuthMiddleware, (req, res) => {
   const employeeId = (req as any).employeeId;
   const state = loadState();
-  const offers = (state.swapOffers || []).filter((o: any) => o.employeeId === employeeId);
-  const matches = (state.swapMatches || []).filter((m: any) => {
-    const offerIds = offers.map((o: any) => o.id);
-    return offerIds.includes(m.offerA) || offerIds.includes(m.offerB);
-  });
-  res.json({
-    offers,
-    matches,
-    swapSettings: state.swapSettings || { enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false },
-  });
+  const allOffers = state.swapOffers || [];
+  const allMatches = state.swapMatches || [];
+  const employees = state.employees || [];
+  const departments = state.departments || [];
+
+  const swapSettings = state.swapSettings || {
+    enabled: false, onlyWithinDepartment: false, onlyWithinShiftType: false, allowRingSwap: false, allowDirectTakeover: false,
+  };
+
+  const offers = allOffers.filter((o: any) => o.employeeId === employeeId);
+  const offerIds = offers.map((o: any) => o.id);
+
+  const matches = allMatches
+    .filter((m: any) => offerIds.includes(m.offerA) || offerIds.includes(m.offerB) || m.takeoverEmployeeId === employeeId)
+    .map((m: any) => {
+      // Enrich takeover matches with shift + counterpart info from the viewer's perspective
+      if (m.takeoverEmployeeId) {
+        const offerA = allOffers.find((o: any) => o.id === m.offerA);
+        if (offerA) {
+          const owner = employees.find((e: any) => e.id === offerA.employeeId);
+          const taker = employees.find((e: any) => e.id === m.takeoverEmployeeId);
+          const counterpartName = m.takeoverEmployeeId === employeeId ? (owner?.name || 'Unbekannt') : (taker?.name || 'Unbekannt');
+          return {
+            ...m,
+            swapInfo: {
+              shiftType: offerA.shiftType,
+              startDate: offerA.startDate,
+              endDate: offerA.endDate,
+              counterpartName,
+            },
+          };
+        }
+      }
+      return m;
+    });
+
+  let availableOffers: any[] = [];
+  if (swapSettings.enabled && swapSettings.allowDirectTakeover) {
+    const me = employees.find((e: any) => e.id === employeeId);
+    const pendingRequestedOfferIds = new Set(
+      allMatches
+        .filter((m: any) => m.takeoverEmployeeId === employeeId && m.status === 'pending')
+        .map((m: any) => m.offerA)
+    );
+    availableOffers = allOffers
+      .filter((o: any) => o.status === 'open' && o.employeeId !== employeeId)
+      .filter((o: any) => {
+        if (!swapSettings.onlyWithinDepartment) return true;
+        const owner = employees.find((e: any) => e.id === o.employeeId);
+        return !!me && !!owner && me.department === owner.department;
+      })
+      .map((o: any) => {
+        const owner = employees.find((e: any) => e.id === o.employeeId);
+        const dept = owner ? departments.find((d: any) => d.id === owner.department) : null;
+        return {
+          ...o,
+          employeeName: owner?.name || 'Unbekannt',
+          departmentName: dept?.name || '',
+          alreadyRequested: pendingRequestedOfferIds.has(o.id),
+        };
+      });
+  }
+
+  res.json({ offers, matches, availableOffers, swapSettings });
 });
 
 /** Admin: check rule violations for a swap match before approving */
@@ -1133,6 +1261,37 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
               `${emp.name} kann ${SHIFT_LABELS[targetAssignment.shiftType] || targetAssignment.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
             );
           }
+        }
+      }
+    } else if (match.takeoverEmployeeId) {
+      // ── Direct takeover simulation (no counter-offer) ──
+      const offerA = offers.find((o: any) => o.id === match.offerA);
+      if (!offerA) { res.status(400).json({ error: 'Angebot nicht gefunden.', violations: [] }); return; }
+
+      const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+      if (!assignmentA) { res.status(400).json({ error: 'Schicht nicht gefunden.', violations: [] }); return; }
+
+      const tA = tempAssignments.find((a: any) => a.id === offerA.assignmentId);
+      if (tA) {
+        tA.employees = tA.employees.filter((id: string) => id !== offerA.employeeId);
+        tA.employees.push(match.takeoverEmployeeId);
+      }
+
+      const takeoverEmp = employees.find((e: any) => e.id === match.takeoverEmployeeId);
+      if (takeoverEmp) {
+        const otherAssignments = assignmentsWithoutSwap
+          .filter((a: any) => a.id !== assignmentA.id)
+          .map((a: any) => ({ ...a, employees: a.employees.filter((id: string) => id !== takeoverEmp.id) }));
+        const canTake = getAvailableEmployeesSorted(
+          [takeoverEmp], assignmentA.shiftType,
+          new Date(assignmentA.startDate), new Date(assignmentA.endDate),
+          otherAssignments, config, departments,
+        );
+        if (canTake.length === 0) {
+          const dt = new Date(assignmentA.startDate).toLocaleDateString('de-DE');
+          violationMessages.push(
+            `${takeoverEmp.name} kann ${SHIFT_LABELS[assignmentA.shiftType] || assignmentA.shiftType} ab ${dt} nicht übernehmen (Regelkonflikt)`
+          );
         }
       }
     } else {
@@ -1296,6 +1455,50 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
       }
 
       res.json({ success: true, match });
+    } else if (match.takeoverEmployeeId) {
+      // ── Direct takeover: giver loses the shift, requester takes it over (no counter-offer) ──
+      const offerA = offers.find((o: any) => o.id === match.offerA);
+      if (!offerA) { res.status(400).json({ error: 'Angebot nicht gefunden.' }); return; }
+
+      const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+      if (!assignmentA) { res.status(400).json({ error: 'Schicht nicht gefunden.' }); return; }
+
+      assignmentA.employees = assignmentA.employees.filter((id: string) => id !== offerA.employeeId);
+      if (!assignmentA.employees.includes(match.takeoverEmployeeId)) assignmentA.employees.push(match.takeoverEmployeeId);
+
+      offerA.status = 'matched';
+      match.status = 'approved';
+      match.resolvedAt = new Date().toISOString();
+
+      // Any other pending request (takeover or normal swap/ring) referencing this
+      // now-consumed offer is no longer valid — reject it immediately.
+      for (const m of matches) {
+        if (m.id === match.id || m.status !== 'pending') continue;
+        const refsOfferA = m.offerA === offerA.id || m.offerB === offerA.id ||
+          (m.ringOffers && m.ringOffers.includes(offerA.id));
+        if (refsOfferA) { m.status = 'rejected'; m.resolvedAt = new Date().toISOString(); }
+      }
+
+      state.swapOffers = offers;
+      state.swapMatches = matches;
+      saveState(state);
+
+      const employees = state.employees || [];
+      const giver = employees.find((e: any) => e.id === offerA.employeeId);
+      const taker = employees.find((e: any) => e.id === match.takeoverEmployeeId);
+
+      if (giver?.email) {
+        try {
+          await sendTakeoverMatchEmail(giver.email, giver.name, taker?.name || 'Kollege/in', offerA, 'giver');
+        } catch (e) { console.error('[takeover] mail to giver failed:', e); }
+      }
+      if (taker?.email) {
+        try {
+          await sendTakeoverMatchEmail(taker.email, taker.name, giver?.name || 'Kollege/in', offerA, 'taker');
+        } catch (e) { console.error('[takeover] mail to taker failed:', e); }
+      }
+
+      res.json({ success: true, match });
     } else {
       // ── Direct swap ──
       const offerA = offers.find((o: any) => o.id === match.offerA);
@@ -1381,6 +1584,17 @@ app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
 
         // Only reset offers that are still 'matched' back to 'open'
         for (const o of ringOffers) { if (o && o.status === 'matched') o.status = 'open'; }
+      } else if (match.takeoverEmployeeId) {
+        // Reverse direct takeover
+        const offerA = offers.find((o: any) => o.id === match.offerA);
+        if (offerA && plan) {
+          const assignmentA = (plan.assignments || []).find((a: any) => a.id === offerA.assignmentId);
+          if (assignmentA) {
+            assignmentA.employees = assignmentA.employees.filter((id: string) => id !== match.takeoverEmployeeId);
+            if (!assignmentA.employees.includes(offerA.employeeId)) assignmentA.employees.push(offerA.employeeId);
+          }
+        }
+        if (offerA && offerA.status === 'matched') offerA.status = 'open';
       } else {
         // Reverse direct swap
         const offerA = offers.find((o: any) => o.id === match.offerA);
@@ -1406,7 +1620,9 @@ app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
     // Check if all referenced offers are still open — if not, remove the match entirely
     const allOfferIds = isRing
       ? (match.ringOffers as string[])
-      : [match.offerA, match.offerB];
+      : match.takeoverEmployeeId
+        ? [match.offerA]
+        : [match.offerA, match.offerB];
     const allOpen = allOfferIds.every((id: string) => {
       const o = offers.find((x: any) => x.id === id);
       return o && o.status === 'open';
@@ -1443,7 +1659,9 @@ function findAndCreateMatches(state: any) {
     if (m.status !== 'pending') continue;
     const offerIds = (m.ringOffers && m.ringOffers.length > 0)
       ? m.ringOffers
-      : [m.offerA, m.offerB];
+      : m.takeoverEmployeeId
+        ? [m.offerA]
+        : [m.offerA, m.offerB];
     const hasInvalid = offerIds.some((id: string) => {
       const o = offers.find((x: any) => x.id === id);
       return !o || o.status !== 'open';
@@ -1667,21 +1885,11 @@ app.post('/api/swaps/scan', authMiddleware, (_req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// SERVE PORTAL SPA (catch-all for /portal routes)
-// ═══════════════════════════════════════════════════════════════════════
-
-const PORTAL_DIR = path.join(__dirname, '..', 'dist', 'portal');
-
-app.use('/portal', express.static(PORTAL_DIR));
-app.use('/portal', (_req, res) => {
-  const indexPath = path.join(PORTAL_DIR, 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.status(404).send('Portal not built yet');
-  }
-});
-
+// NOTE: The employee portal SPA (dist/portal) and the admin SPA (dist) are
+// served as static files directly by nginx on their own domains —
+// schichtapp.de (portal) and admin.schichtapp.de (admin) — so this backend
+// only needs to expose the /api/* endpoints above. See
+// /etc/nginx/sites-available/schichtapp.de and admin.schichtapp.de.
 // ═══════════════════════════════════════════════════════════════════════
 
 app.listen(PORT, () => {

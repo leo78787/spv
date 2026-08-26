@@ -200,6 +200,8 @@ export interface SwapSettings {
   onlyWithinShiftType: boolean;
   /** Allow ring swaps (A→B→C→A circular trades) */
   allowRingSwap: boolean;
+  /** Allow employees to directly take over an offered shift with no shift given in return */
+  allowDirectTakeover: boolean;
 }
 
 export const DEFAULT_SWAP_SETTINGS: SwapSettings = {
@@ -207,6 +209,7 @@ export const DEFAULT_SWAP_SETTINGS: SwapSettings = {
   onlyWithinDepartment: false,
   onlyWithinShiftType: false,
   allowRingSwap: false,
+  allowDirectTakeover: false,
 };
 
 // ── Swap requests & matches ─────────────────────────────────────────
@@ -232,9 +235,12 @@ export interface SwapOffer {
 export interface SwapMatch {
   id: string;
   offerA: string; // SwapOffer.id
-  offerB: string; // SwapOffer.id
+  /** For direct swaps: the other party's offer. Absent for direct takeovers. */
+  offerB?: string; // SwapOffer.id
   /** For ring swaps: ordered list of offer IDs forming the ring (A→B→C→...→A) */
   ringOffers?: string[];
+  /** For direct takeovers: the employee who wants to take over offerA's shift with no shift given in return */
+  takeoverEmployeeId?: string;
   /** Admin decision */
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;

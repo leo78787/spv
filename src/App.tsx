@@ -182,7 +182,7 @@ function App() {
       {/* Footer */}
       <footer className="mt-12 py-6 text-center text-sm text-gray-600 border-t border-gray-200">
         <p>Schichtplan Manager &copy; 2026</p>
-        <p className="mt-1"><a href="/portal/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
+        <p className="mt-1"><a href="https://schichtapp.de/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
       </footer>
     </div>
   );

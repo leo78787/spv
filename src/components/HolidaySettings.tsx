@@ -228,6 +228,19 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                     <p className="text-xs text-gray-500">Zusätzlich zu direkten Tauschen werden auch zirkuläre Tauschketten erkannt (A→B→C→A), bei denen mehrere Mitarbeiter ihre Schichten im Kreis tauschen.</p>
                   </div>
                 </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={swapSettings.allowDirectTakeover ?? false}
+                    onChange={e => setSwapSettings({ ...swapSettings, allowDirectTakeover: e.target.checked })}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Direktübernahme ohne Gegenleistung erlauben</span>
+                    <p className="text-xs text-gray-500">Mitarbeiter können angebotene Schichten von Kolleg:innen direkt übernehmen, ohne selbst eine Schicht im Tausch anzubieten. Der Administrator muss die Übernahme im Bereich &quot;Matches&quot; noch bestätigen oder ablehnen.</p>
+                  </div>
+                </label>
               </div>
             )}
           </div>

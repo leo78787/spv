@@ -13,6 +13,9 @@
  *   SMTP_PASS     — default: (empty, no auth against local relay)
  *   SMTP_FROM     — default: Schichtplan Manager <noreply@schichtapp.de>
  *   APP_BASE_URL  — default: https://schichtapp.de
+ *                   Base URL of the employee portal (its own domain/root,
+ *                   NOT the admin app, which now lives on a separate
+ *                   admin.schichtapp.de subdomain).
  */
 
 import nodemailer from 'nodemailer';
@@ -31,6 +34,9 @@ const transporter = nodemailer.createTransport({
   // The local Postfix relay does not require/offer auth; only send
   // credentials if a user was explicitly configured (e.g. external SMTP).
   auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+  // The local relay offers opportunistic STARTTLS with a self-signed
+  // certificate (OpenDKIM/Postfix setup), which Node rejects by default.
+  tls: { rejectUnauthorized: false },
 });
 
 export interface MailOptions {
@@ -59,7 +65,7 @@ export async function sendInvitationEmail(
   username: string,
   oneTimePassword: string,
 ): Promise<void> {
-  const portalUrl = `${APP_BASE_URL}/portal`;
+  const portalUrl = APP_BASE_URL;
   await sendMail({
     to,
     subject: 'Schichtplan Manager – Ihre Zugangsdaten',
@@ -92,7 +98,7 @@ export async function sendPlanNotificationEmail(
   employeeName: string,
   message: string,
 ): Promise<void> {
-  const portalUrl = `${APP_BASE_URL}/portal`;
+  const portalUrl = APP_BASE_URL;
   await sendMail({
     to,
     subject: 'Schichtplan Manager – Aktualisierung',
@@ -123,7 +129,7 @@ export async function sendRingSwapMatchEmail(
   newOffer: any,
   allParticipants: string[],
 ): Promise<void> {
-  const portalUrl = `${APP_BASE_URL}/portal`;
+  const portalUrl = APP_BASE_URL;
   const SHIFT_NAMES: Record<string, string> = {
     fruehschicht: 'Frühschicht (WE)',
     verschieben: 'Verschobene Schicht',
@@ -189,7 +195,7 @@ export async function sendSwapMatchEmail(
   myOffer: any,
   partnerOffer: any,
 ): Promise<void> {
-  const portalUrl = `${APP_BASE_URL}/portal`;
+  const portalUrl = APP_BASE_URL;
   const SHIFT_NAMES: Record<string, string> = {
     fruehschicht: 'Frühschicht (WE)',
     verschieben: 'Verschobene Schicht',
@@ -234,6 +240,71 @@ export async function sendSwapMatchEmail(
           </div>
           <p style="color: #6b7280; font-size: 14px;">Die Änderungen wurden automatisch in Ihrem Schichtplan übernommen.</p>
           <a href="${portalUrl}" style="display: inline-block; margin-top: 16px; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Schichtplan ansehen</a>
+        </div>
+      </div>
+    `,
+  });
+}
+
+/**
+ * Send a direct-takeover notification email (no counter-offer involved).
+ * `role` distinguishes whether the recipient gave away the shift ('giver')
+ * or took it over ('taker').
+ */
+export async function sendTakeoverMatchEmail(
+  to: string,
+  employeeName: string,
+  counterpartName: string,
+  offer: any,
+  role: 'giver' | 'taker',
+): Promise<void> {
+  const portalUrl = APP_BASE_URL;
+  const SHIFT_NAMES: Record<string, string> = {
+    fruehschicht: 'Frühschicht (WE)',
+    verschieben: 'Verschobene Schicht',
+    nachtbereitschaft: 'Nachtbereitschaft',
+  };
+  const formatDate = (d: string) => {
+    const date = new Date(d);
+    return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  const shift = `${SHIFT_NAMES[offer.shiftType] || offer.shiftType} (${formatDate(offer.startDate)} – ${formatDate(offer.endDate)})`;
+  const isGiver = role === 'giver';
+  const subject = isGiver
+    ? 'Schichtplan Manager – Ihre Schicht wurde übernommen'
+    : 'Schichtplan Manager – Sie haben eine Schicht übernommen';
+  const introText = isGiver
+    ? `${counterpartName} hat Ihre angebotene Schicht übernommen.`
+    : `Sie haben die von ${counterpartName} angebotene Schicht übernommen.`;
+
+  await sendMail({
+    to,
+    subject,
+    text: `Hallo ${employeeName},\n\n${introText}\n\nSchicht: ${shift}\n\nDie Änderungen wurden automatisch in Ihrem Schichtplan übernommen.\n\nSie können Ihren aktualisierten Schichtplan unter ${portalUrl} einsehen.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: linear-gradient(135deg, #0ea5e9, #059669); color: white; padding: 24px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h1 style="margin: 0; font-size: 24px;">Direktübernahme genehmigt</h1>
+          <p style="margin: 8px 0 0; opacity: 0.9;">Schichtplan Manager</p>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+          <p>Hallo <strong>${employeeName}</strong>,</p>
+          <p>${introText}</p>
+          <div style="margin: 16px 0; padding: 16px; background: #f9fafb; border-radius: 8px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px; font-weight: bold; color: #374151; width: 120px;">Schicht:</td>
+                <td style="padding: 8px;">${shift}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px; font-weight: bold; color: #374151;">${isGiver ? 'Übernommen von:' : 'Vorheriger Inhaber:'}</td>
+                <td style="padding: 8px;">${counterpartName}</td>
+              </tr>
+            </table>
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">Die Änderungen wurden automatisch in Ihrem Schichtplan übernommen.</p>
+          <a href="${portalUrl}" style="display: inline-block; margin-top: 16px; background: #059669; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Schichtplan ansehen</a>
         </div>
       </div>
     `,

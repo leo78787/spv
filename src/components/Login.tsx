@@ -80,7 +80,7 @@ export function Login({ onSuccess }: Props) {
       </form>
       <div className="absolute bottom-6 left-0 right-0 text-center text-xs text-gray-400">
         <p>Schichtplan Manager &copy; 2026</p>
-        <p className="mt-1"><a href="/portal/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
+        <p className="mt-1"><a href="https://schichtapp.de/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
       </div>
     </div>
   );
