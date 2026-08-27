@@ -8,7 +8,7 @@
  */
 
 import { Employee, ShiftAssignment, ShiftType } from '../types';
-import { SchedulerConfig, generateAutomaticShiftPlan } from './scheduler';
+import { SchedulerConfig, generateAutomaticShiftPlan, getEmployeeActiveWeight, MIN_ACTIVE_WEIGHT } from './scheduler';
 
 // ─── fairness score helpers ───────────────────────────────────────────────────
 
@@ -32,23 +32,39 @@ export interface FairnessScores {
 /**
  * Computes fairness scores from a set of assignments.
  * Uses allowedShiftTypes to determine eligibility per shift type.
+ *
+ * When `periodRange` is given, each employee's shift counts are normalized by
+ * their active-tenure weight within that range (see getEmployeeActiveWeight),
+ * so partial-tenure employees are judged against their proportional fair
+ * share rather than the same absolute count as full-period employees.
+ * Employees with zero active weight in the range (not employed at all during
+ * it) are excluded entirely, since they can't be fairly judged.
  */
 export function computeFairnessScores(
   employees: Employee[],
-  assignments: ShiftAssignment[]
+  assignments: ShiftAssignment[],
+  periodRange?: { start: Date; end: Date }
 ): FairnessScores {
-  const allIds = employees.map(e => e.id);
-  const nachtFruehIds = employees
+  const weightOf = (e: Employee) => periodRange ? getEmployeeActiveWeight(e, periodRange.start, periodRange.end) : 1;
+  const judgeable = periodRange ? employees.filter(e => weightOf(e) > 0) : employees;
+
+  const allIds = judgeable.map(e => e.id);
+  const nachtFruehIds = judgeable
     .filter(e => {
       const allowed = e.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
       return allowed.includes('nachtbereitschaft') || allowed.includes('fruehschicht');
     })
     .map(e => e.id);
 
+  const empById = new Map(judgeable.map(e => [e.id, e]));
   const countFor = (ids: string[], type: ShiftType | null) =>
-    ids.map(id =>
-      assignments.filter(a => a.employees.includes(id) && (type ? a.shiftType === type : true)).length
-    );
+    ids.map(id => {
+      const raw = assignments.filter(a => a.employees.includes(id) && (type ? a.shiftType === type : true)).length;
+      if (!periodRange) return raw;
+      const emp = empById.get(id)!;
+      const weight = Math.max(MIN_ACTIVE_WEIGHT, weightOf(emp));
+      return raw / weight;
+    });
 
   return {
     overall:     cvFairness(countFor(allIds, null)),
@@ -57,6 +73,7 @@ export function computeFairnessScores(
     frueh:       cvFairness(countFor(nachtFruehIds, 'fruehschicht')),
   };
 }
+
 
 // ─── delta ────────────────────────────────────────────────────────────────────
 
@@ -115,9 +132,10 @@ const TRIAL_COUNT = 3;
 /** Average multiple random runs to get a stable score estimate. */
 function run(employees: Employee[], config: SchedulerConfig, year: number, startMonth: number): FairnessScores {
   const scores: FairnessScores[] = [];
+  const periodRange = { start: new Date(year, startMonth, 1), end: new Date(year, startMonth + PREVIEW_MONTHS, 0) };
   for (let i = 0; i < TRIAL_COUNT; i++) {
     const { assignments } = generateAutomaticShiftPlan(employees, year, startMonth, PREVIEW_MONTHS, config);
-    scores.push(computeFairnessScores(employees, assignments));
+    scores.push(computeFairnessScores(employees, assignments, periodRange));
   }
   const avg = (key: keyof FairnessScores) =>
     +( scores.reduce((s, sc) => s + sc[key], 0) / TRIAL_COUNT ).toFixed(1);

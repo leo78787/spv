@@ -28,6 +28,44 @@ import {
 } from 'date-fns';
 
 /**
+ * Whether an employee's employment window ([hireDate, terminationDate], both
+ * optional/open-ended) fully covers a given shift date range. Used to exclude
+ * not-yet-hired / already-left employees from scheduling.
+ */
+export function isEmployeeActiveDuring(employee: Employee, shiftStart: Date, shiftEnd: Date): boolean {
+  const hire = employee.hireDate ? startOfDay(new Date(employee.hireDate)) : null;
+  const termination = employee.terminationDate ? startOfDay(new Date(employee.terminationDate)) : null;
+  if (hire && startOfDay(shiftStart) < hire) return false;
+  if (termination && startOfDay(shiftEnd) > termination) return false;
+  return true;
+}
+
+/**
+ * Fraction (0..1) of days within [rangeStart, rangeEnd] during which the
+ * employee is employed, based on hireDate/terminationDate. Used to give
+ * partial-tenure employees a proportionally fair (not equal) share of shifts:
+ * an employee active for e.g. half of a planning period should end up with
+ * roughly half the shifts of a full-period employee, not the same amount.
+ */
+export function getEmployeeActiveWeight(employee: Employee, rangeStart: Date, rangeEnd: Date): number {
+  const rStart = startOfDay(rangeStart);
+  const rEnd = startOfDay(rangeEnd);
+  const totalDays = Math.round((rEnd.getTime() - rStart.getTime()) / 86400000) + 1;
+  if (totalDays <= 0) return 1;
+
+  const hire = employee.hireDate ? startOfDay(new Date(employee.hireDate)) : null;
+  const termination = employee.terminationDate ? startOfDay(new Date(employee.terminationDate)) : null;
+
+  const activeStart = hire && hire > rStart ? hire : rStart;
+  const activeEnd = termination && termination < rEnd ? termination : rEnd;
+  const activeDays = Math.round((activeEnd.getTime() - activeStart.getTime()) / 86400000) + 1;
+  return Math.max(0, Math.min(1, activeDays / totalDays));
+}
+
+/** Floor applied to active weight when used as a division denominator, to avoid inflating counts to infinity. */
+export const MIN_ACTIVE_WEIGHT = 0.02;
+
+/**
  * Check if employee can work on a specific date considering vacation boundaries
  * Rule: No weekend work before or after vacation
  */
@@ -327,12 +365,17 @@ export function getAvailableEmployeesSorted(
   endDate: Date,
   existingAssignments: ShiftAssignment[],
   config: SchedulerConfig = DEFAULT_SCHEDULER_CONFIG,
-  _departments?: Department[]
+  _departments?: Department[],
+  /** Overall planning-period date range, used to weight fairness sorting proportionally to each employee's active tenure. Falls back to raw counts when omitted. */
+  planRange?: { start: Date; end: Date }
 ): Employee[] {
   const { rules } = config;
 
   // Filter available employees
   const available = employees.filter(emp => {
+    // Employment window: exclude employees not yet hired / already left for this shift's dates
+    if (!isEmployeeActiveDuring(emp, startDate, endDate)) return false;
+
     // Per-employee shift-type restriction
     if (rules.respectEmployeeShiftTypes) {
       const allowed = emp.allowedShiftTypes ?? ['fruehschicht', 'verschieben', 'nachtbereitschaft'];
@@ -476,11 +519,19 @@ export function getAvailableEmployeesSorted(
     return true;
   });
   
-  // Sort by number of shifts of this type (ascending - fewest first)
+  // Sort by number of shifts of this type (ascending - fewest first).
+  // When a planRange is given, normalize each employee's raw count by their
+  // active-tenure weight within that range, so partial-tenure employees are
+  // compared on a proportional (not absolute) basis — e.g. someone employed
+  // for half the period with half as many shifts is treated as "on par",
+  // not as "underworked" relative to a full-period employee.
   return available.sort((a, b) => {
     const aCount = countShiftTypeForEmployee(a.id, shiftType, existingAssignments);
     const bCount = countShiftTypeForEmployee(b.id, shiftType, existingAssignments);
-    return aCount - bCount;
+    if (!planRange) return aCount - bCount;
+    const aWeight = Math.max(MIN_ACTIVE_WEIGHT, getEmployeeActiveWeight(a, planRange.start, planRange.end));
+    const bWeight = Math.max(MIN_ACTIVE_WEIGHT, getEmployeeActiveWeight(b, planRange.start, planRange.end));
+    return (aCount / aWeight) - (bCount / bWeight);
   });
 }
 
@@ -723,6 +774,7 @@ export function generateAutomaticShiftPlan(
   const assignments: ShiftAssignment[] = [];
   const violations: SchedulerViolation[] = [];
   const startDate = new Date(startYear, startMonth, 1);
+  const planRange = { start: startDate, end: new Date(startYear, startMonth + months, 0) };
   const periods = generateShiftPeriodsForRange(startDate, months);
   const { shiftCounts, rules } = config;
 
@@ -779,7 +831,8 @@ export function generateAutomaticShiftPlan(
         period.endDate,
         assignments,
         config,
-        departments
+        departments,
+        planRange
       );
       
       // Select employees — with Ü55 slot reservation for verschieben

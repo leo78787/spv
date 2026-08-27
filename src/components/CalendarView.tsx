@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useStore, getAuthToken } from '../store';
-import { ShiftType, ShiftAssignment, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department } from '../types';
+import { useStore } from '../store';
+import { ShiftType, ShiftAssignment, Employee, SHIFT_LABELS, SHIFT_REQUIREMENTS, Department, getPeriodDateRange } from '../types';
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Filter, Edit2, X, Download, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Filter, Edit2, X, Download, AlertTriangle, CheckCircle2, Clock, Circle, UserX, Lock, Unlock } from 'lucide-react';
 import ViolationPipeline from './ViolationPipeline';
 import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, isBlockedFromVerschiebenDueToAdjacentFruehschicht, isBlockedFromVerschiebenAfterNacht, isBlockedFromConsecutiveVerschieben, hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG, canWorkOnDate } from '../utils/scheduler';
 import { LabelModal } from './LabelModal';
@@ -27,12 +27,12 @@ import {
 } from 'date-fns';
 
 export function CalendarView() {
-  const { 
-    employees, 
-    departments, 
-    currentYear, 
+  const {
+    employees,
+    departments,
+    currentYear,
     setCurrentYear,
-    shiftPlan,
+    planningPeriods,
     customHolidays,
     updateShiftAssignment,
     acknowledgeViolation,
@@ -68,36 +68,62 @@ export function CalendarView() {
     date: Date;
   } | null>(null);
 
-  // Plan release state
-  const [planReleased, setPlanReleased] = useState(false);
-  const [releasing, setReleasing] = useState(false);
-  const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
-  const [releasePassword, setReleasePassword] = useState('');
+  // The planning period covering the currently displayed month (if any) —
+  // release status, employee lock, and the shift plan itself are all
+  // per-period now, so the calendar is simply "whatever period covers this month".
+  const activePeriod = React.useMemo(() => {
+    const cursor = new Date(currentYear, currentMonth, 15); // mid-month, safe from boundary edge cases
+    return planningPeriods.find(p => {
+      const { start, end } = getPeriodDateRange(p);
+      return cursor >= start && cursor <= end;
+    }) ?? null;
+  }, [planningPeriods, currentYear, currentMonth]);
 
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) return;
-    fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(d => setPlanReleased(!!d.released)).catch(() => {});
-  }, []);
+  type MonthStatus = 'released' | 'planning' | 'none';
+  const monthStatus: MonthStatus = !activePeriod ? 'none' : activePeriod.released ? 'released' : 'planning';
 
-  const togglePlanRelease = async () => {
-    const token = getAuthToken();
-    if (!token) return;
-    setReleasing(true);
-    try {
-      const resp = await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ released: !planReleased }),
-      });
-      if (resp.ok) setPlanReleased(!planReleased);
-    } catch {}
-    setReleasing(false);
-    setReleaseConfirmOpen(false);
-    setReleasePassword('');
+  // Employment-window helpers (Eintritts-/Austrittsdatum) for the currently displayed month
+  const monthStart = startOfMonth(new Date(currentYear, currentMonth, 1));
+  const monthEnd = endOfMonth(new Date(currentYear, currentMonth, 1));
+
+  /** The latest end-date among an employee's assignments (across all planning periods) that fall after their termination date. Null if there are none. */
+  const lastPostTerminationShiftEnd = (emp: Employee): Date | null => {
+    if (!emp.terminationDate) return null;
+    const term = startOfDay(new Date(emp.terminationDate));
+    let latest: Date | null = null;
+    for (const p of planningPeriods) {
+      for (const a of (p.assignments || [])) {
+        if (!a.employees.includes(emp.id)) continue;
+        const end = startOfDay(new Date(a.endDate));
+        if (end > term && (!latest || end > latest)) latest = end;
+      }
+    }
+    return latest;
   };
-  
+
+  /** Whether an employee's row should appear in the calendar for the currently displayed month. */
+  const isEmployeeVisibleThisMonth = (emp: Employee): boolean => {
+    const hire = emp.hireDate ? startOfDay(new Date(emp.hireDate)) : null;
+    const term = emp.terminationDate ? startOfDay(new Date(emp.terminationDate)) : null;
+    if (hire && monthEnd < hire) return false; // not yet hired this month
+    if (!term || monthStart <= term) return true; // still employed for at least part of this month
+    // Month lies entirely after termination — only show through the month of their last leftover shift
+    const lastShiftEnd = lastPostTerminationShiftEnd(emp);
+    return !!lastShiftEnd && monthStart <= lastShiftEnd;
+  };
+
+  /** Whether the "Ausgetreten" indicator is relevant for the currently displayed month (i.e. the month has reached their termination date). */
+  const isTerminationRelevantThisMonth = (emp: Employee): boolean => {
+    if (!emp.terminationDate) return false;
+    return monthEnd >= startOfDay(new Date(emp.terminationDate));
+  };
+
+  /** Whether a given day, for a given employee, falls after their termination date (shifts there are shown grayed-out). */
+  const isPostTerminationDay = (emp: Employee, day: Date): boolean => {
+    if (!emp.terminationDate) return false;
+    return startOfDay(day) > startOfDay(new Date(emp.terminationDate));
+  };
+
   const handlePreviousMonth = () => {
     setCurrentMonth(prev => {
       if (prev === 0) {
@@ -129,18 +155,19 @@ export function CalendarView() {
     return eachDayOfInterval({ start: monthStart, end: monthEnd });
   };
   
-  // Filter employees by department
-  const filteredEmployees = selectedDepartment === 'all'
+  // Filter employees by department and by employment window for the displayed month
+  const filteredEmployees = (selectedDepartment === 'all'
     ? employees
-    : employees.filter(emp => emp.department === selectedDepartment);
-  
+    : employees.filter(emp => emp.department === selectedDepartment)
+  ).filter(isEmployeeVisibleThisMonth);
+
   // Get shifts for a specific employee on a specific day
   const getShiftsForEmployeeOnDay = (employeeId: string, date: Date): ShiftType[] => {
-    if (!shiftPlan) return [];
-    
+    if (!activePeriod) return [];
+
     const shifts: ShiftType[] = [];
-    
-    shiftPlan.assignments.forEach(assignment => {
+
+    activePeriod.assignments.forEach(assignment => {
       if (!assignment.employees.includes(employeeId)) return;
       
       const assignmentStart = startOfDay(new Date(assignment.startDate));
@@ -158,9 +185,9 @@ export function CalendarView() {
   
   // Get assignment for a specific shift type and date
   const getAssignmentForDate = (shiftType: ShiftType, date: Date): ShiftAssignment | null => {
-    if (!shiftPlan) return null;
-    
-    const assignment = shiftPlan.assignments.find(a => {
+    if (!activePeriod) return null;
+
+    const assignment = activePeriod.assignments.find(a => {
       if (a.shiftType !== shiftType) return false;
       
       const start = startOfDay(new Date(a.startDate));
@@ -206,7 +233,7 @@ export function CalendarView() {
   // Toggle employee in shift assignment
   // perform toggle (assign/unassign) for an employee on the open assignment
   const applyAssignmentChange = (employeeId: string) => {
-    if (!editingShift) return;
+    if (!editingShift || !activePeriod) return;
     const currentEmployees = editingShift.assignment.employees;
     const isAssigned = currentEmployees.includes(employeeId);
 
@@ -219,7 +246,7 @@ export function CalendarView() {
       employees: updatedEmployees
     };
 
-    updateShiftAssignment(updatedAssignment);
+    updateShiftAssignment(activePeriod.id, updatedAssignment);
     setEditingShift({ ...editingShift, assignment: updatedAssignment });
   };
 
@@ -239,10 +266,10 @@ export function CalendarView() {
     const empObj = employees.find(e => e.id === employeeId);
     if (!empObj) return;
 
-    const config = shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG;
+    const config = activePeriod?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG;
     const rules = config.rules;
     const shiftType = editingShift.assignment.shiftType;
-    const allAssignments = shiftPlan?.assignments || [];
+    const allAssignments = activePeriod?.assignments || [];
     const assignmentStart = new Date(editingShift.assignment.startDate);
     const assignmentEnd = new Date(editingShift.assignment.endDate);
 
@@ -369,25 +396,25 @@ export function CalendarView() {
     }
   };
 
-  // --- Export helpers (JSON + XLSX) ---
+  // --- Export helpers (JSON + XLSX) — export the period covering the displayed month ---
   const downloadPlanJSON = () => {
-    if (!shiftPlan) return;
-    const payload = { shiftPlan, employees, departments, labels, calendarLabels };
+    if (!activePeriod) return;
+    const payload = { shiftPlan: activePeriod, employees, departments, labels, calendarLabels };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const start = shiftPlan.startMonth !== undefined ? `${shiftPlan.startMonth + 1}` : 'full';
-    a.download = `schichtplan_${shiftPlan.year}_${start}.json`;
+    const start = activePeriod.startMonth !== undefined ? `${activePeriod.startMonth + 1}` : 'full';
+    a.download = `schichtplan_${activePeriod.year}_${start}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const downloadPlanXLSX = () => {
-    if (!shiftPlan) return;
+    if (!activePeriod) return;
     const wb = XLSX.utils.book_new();
-    const startMonth = shiftPlan.startMonth ?? 0;
-    const monthsCount = shiftPlan.months ?? 12;
+    const startMonth = activePeriod.startMonth ?? 0;
+    const monthsCount = activePeriod.months ?? 12;
 
     // ----- helper styles (xlsx-js-style format) -----
     const mkFill = (rgb: string) => ({ patternType: 'solid' as const, fgColor: { rgb } });
@@ -408,7 +435,7 @@ export function CalendarView() {
 
     for (let m = 0; m < monthsCount; m++) {
       const absoluteMonth = startMonth + m;
-      const year = shiftPlan.year + Math.floor(absoluteMonth / 12);
+      const year = activePeriod.year + Math.floor(absoluteMonth / 12);
       const monthIndex = absoluteMonth % 12;
       const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
       const monthLabel = `${getMonthName(monthIndex)} ${year}`;
@@ -597,7 +624,7 @@ export function CalendarView() {
       XLSX.utils.book_append_sheet(wb, ws, sheetName);
     }
 
-    const fname = `schichtplan_${shiftPlan.year}_${startMonth + 1}.xlsx`;
+    const fname = `schichtplan_${activePeriod.year}_${startMonth + 1}.xlsx`;
     XLSX.writeFile(wb, fname);
   };
   
@@ -609,18 +636,6 @@ export function CalendarView() {
   // customHolidays with disabled=true hide the builtin holiday on that date
   const customHolidayMap = Object.fromEntries((customHolidays || []).filter((h: any) => !h.disabled).map((h: any) => [h.date, h.name]));
   const holidayMap: Record<string,string> = { ...berlinHolidays, ...customHolidayMap };
-  
-  if (!shiftPlan) {
-    return (
-      <div className="p-6">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-          <CalendarIcon className="mx-auto mb-3 text-yellow-600" size={48} />
-          <h3 className="text-lg font-semibold text-yellow-800 mb-2">Kein Schichtplan vorhanden</h3>
-          <p className="text-yellow-700">Bitte erstellen Sie zuerst einen Schichtplan in der Planung.</p>
-        </div>
-      </div>
-    );
-  }
   
   return (
     <div className="p-3 sm:p-6">
@@ -648,39 +663,56 @@ export function CalendarView() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => downloadPlanJSON()}
-              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
+              disabled={!activePeriod}
+              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
               title="Schichtplan (.json) herunterladen"
             >
               <Download size={14} /> Plan (.json)
             </button>
             <button
               onClick={() => downloadPlanXLSX()}
-              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm"
+              disabled={!activePeriod}
+              className="px-3 py-1 border border-gray-200 rounded-md hover:bg-gray-50 flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
               title="Schichtplan (.xlsx) herunterladen"
             >
               <Download size={14} /> Excel (.xlsx)
             </button>
-            <button
-              onClick={() => setReleaseConfirmOpen(true)}
-              disabled={releasing}
-              className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${
-                planReleased
-                  ? 'bg-green-100 text-green-700 border border-green-300 hover:bg-green-200'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+            {/* Read-only month status — release/lock is managed per Planungsperiode under "Planung" */}
+            <span
+              className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium border ${
+                monthStatus === 'released' ? 'bg-green-100 text-green-800 border-green-300'
+                : monthStatus === 'planning' ? 'bg-amber-100 text-amber-800 border-amber-300'
+                : 'bg-gray-100 text-gray-500 border-gray-300'
               }`}
-              title={planReleased ? 'Freigabe aufheben' : 'Plan an Mitarbeitende freigeben'}
+              title="Freigabe und Änderungssperre werden pro Planungsperiode unter „Planung“ verwaltet."
             >
-              {planReleased ? <><Unlock size={14} /> Freigabe aufheben</> : <><Lock size={14} /> Freigeben</>}
-            </button>
+              {monthStatus === 'released' && <><CheckCircle2 size={14} /> Freigegeben</>}
+              {monthStatus === 'planning' && <><Clock size={14} /> In Planung</>}
+              {monthStatus === 'none' && <><Circle size={14} /> Noch nicht angelegt</>}
+            </span>
+
+            {/* Read-only employee-lock status for the active period */}
+            {activePeriod && (
+              <span
+                className={`px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium border ${
+                  activePeriod.employeesLocked
+                    ? 'bg-red-100 text-red-800 border-red-300'
+                    : 'bg-gray-100 text-gray-600 border-gray-300'
+                }`}
+                title="Freigabe und Änderungssperre werden pro Planungsperiode unter „Planung“ verwaltet."
+              >
+                {activePeriod.employeesLocked ? <><Lock size={14} /> Gesperrt</> : <><Unlock size={14} /> Nicht gesperrt</>}
+              </span>
+            )}
 
             {/* Violation pipeline badge — only violations within the planned period */}
             {(() => {
-              const planYear = shiftPlan?.year ?? new Date().getFullYear();
-              const planStartMonth = shiftPlan?.startMonth ?? 0;
-              const planMonths = shiftPlan?.months ?? 12;
+              const planYear = activePeriod?.year ?? new Date().getFullYear();
+              const planStartMonth = activePeriod?.startMonth ?? 0;
+              const planMonths = activePeriod?.months ?? 12;
               const planPeriodStart = new Date(planYear, planStartMonth, 1);
               const planPeriodEnd = new Date(planYear, planStartMonth + planMonths, 0);
-              const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+              const filteredViolations = (activePeriod?.violations ?? []).filter(v => {
                 const vDate = new Date(v.startDate);
                 return vDate >= planPeriodStart && vDate <= planPeriodEnd;
               });
@@ -695,9 +727,33 @@ export function CalendarView() {
                 </button>
               ) : null;
             })()}
+
+            {/* Warning: ausgetretene Mitarbeiter mit noch bestehenden Schichten in diesem Monat */}
+            {(() => {
+              if (!activePeriod) return null;
+              const affected = employees.filter(emp => {
+                if (!emp.terminationDate) return false;
+                const term = startOfDay(new Date(emp.terminationDate));
+                return activePeriod.assignments.some(a =>
+                  a.employees.includes(emp.id)
+                  && startOfDay(new Date(a.endDate)) > term
+                  && startOfDay(new Date(a.startDate)) <= monthEnd
+                  && startOfDay(new Date(a.endDate)) >= monthStart
+                );
+              });
+              return affected.length > 0 ? (
+                <span
+                  className="px-3 py-1 rounded-md flex items-center gap-2 text-sm font-medium bg-orange-100 text-orange-800 border border-orange-300"
+                  title={`Ausgetretene Mitarbeitende mit noch bestehender Schicht in diesem Monat: ${affected.map(e => e.name).join(', ')}`}
+                >
+                  <UserX size={14} />
+                  {affected.length} fehlende Neubesetzung{affected.length !== 1 ? 'en' : ''}
+                </span>
+              ) : null;
+            })()}
           </div>
         </div>
-        
+
         {/* Department Filter */}
         <div className="flex items-center gap-4 mb-4">
           <div className="flex items-center gap-2">
@@ -760,7 +816,7 @@ export function CalendarView() {
                     const dowIndexMonFirst = (dayOfWeek + 6) % 7; // map 1->0 (Mo), 0->6 (So)
 
                     // detect assignment coverage mismatches (too few / too many assigned)
-                    const assignmentsCovering = (shiftPlan?.assignments || []).filter(a => {
+                    const assignmentsCovering = (activePeriod?.assignments || []).filter(a => {
                       const aStart = startOfDay(new Date(a.startDate));
                       const aEnd = startOfDay(new Date(a.endDate));
                       const dayNorm = startOfDay(day);
@@ -770,7 +826,7 @@ export function CalendarView() {
                     const mismatches = assignmentsCovering.map(a => {
                       // Use the config stored with the plan so warnings reflect the actual target counts
                       const required =
-                        shiftPlan?.schedulerConfig?.shiftCounts[a.shiftType as keyof typeof shiftPlan.schedulerConfig.shiftCounts]
+                        activePeriod?.schedulerConfig?.shiftCounts[a.shiftType as keyof typeof activePeriod.schedulerConfig.shiftCounts]
                         ?? SHIFT_REQUIREMENTS[a.shiftType]?.count
                         ?? 0;
                       const actual = (a.employees || []).length;
@@ -779,14 +835,14 @@ export function CalendarView() {
                     }).filter(m => m.diff !== 0);
 
                     // Detect completely missing shift types (no assignment exists at all)
-                    if (shiftPlan && (shiftPlan.assignments?.length ?? 0) > 0) {
+                    if (activePeriod && (activePeriod.assignments?.length ?? 0) > 0) {
                       const expectedTypes: ShiftType[] = (dayOfWeek >= 1 && dayOfWeek <= 5)
                         ? ['verschieben', 'nachtbereitschaft']
                         : ['fruehschicht', 'nachtbereitschaft'];
                       for (const st of expectedTypes) {
                         const covered = assignmentsCovering.some(a => a.shiftType === st);
                         if (!covered) {
-                          const required = shiftPlan?.schedulerConfig?.shiftCounts[st] ?? SHIFT_REQUIREMENTS[st]?.count ?? 0;
+                          const required = activePeriod?.schedulerConfig?.shiftCounts[st] ?? SHIFT_REQUIREMENTS[st]?.count ?? 0;
                           if (required > 0) {
                             // Compute proper period dates for the missing shift type
                             let pStart: Date;
@@ -943,6 +999,14 @@ export function CalendarView() {
                                 {employee.isOver55 && (
                                   <span className="inline-block px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-100 text-amber-800 border border-amber-300">Ü55</span>
                                 )}
+                                {employee.terminationDate && isTerminationRelevantThisMonth(employee) && (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 px-1 py-0.5 text-[10px] font-semibold rounded bg-gray-200 text-gray-600 border border-gray-300"
+                                    title={`Ausgetreten am ${format(new Date(employee.terminationDate), 'dd.MM.yyyy')}`}
+                                  >
+                                    <UserX size={9} /> Ausgetreten
+                                  </span>
+                                )}
                               </div>
                               <div className="text-xs text-gray-600">{getDepartmentName(employee.department)}</div>
                               <div className="flex gap-1 mt-1">
@@ -979,17 +1043,23 @@ export function CalendarView() {
                                     ) : (
                                       <>
                                         {/* Shifts */}
-                                        {shifts.length > 0 && shifts.map((shift, shiftIndex) => (
-                                          <div 
-                                            key={shiftIndex}
-                                            onClick={() => handleShiftClick(employee.id, day, shift)}
-                                            className={`${getShiftColor(shift)} text-xs px-1 py-0.5 rounded text-center font-semibold cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center gap-0.5`}
-                                            title={`${shift} - Klicken zum Bearbeiten`}
-                                          >
-                                            {getShiftLabel(shift)}
-                                            <Edit2 size={8} className="opacity-60" />
-                                          </div>
-                                        ))}
+                                        {shifts.length > 0 && shifts.map((shift, shiftIndex) => {
+                                          const isPostTermination = isPostTerminationDay(employee, day);
+                                          return (
+                                            <div
+                                              key={shiftIndex}
+                                              onClick={() => handleShiftClick(employee.id, day, shift)}
+                                              className={`${isPostTermination ? 'bg-gray-300 text-gray-600' : getShiftColor(shift)} text-xs px-1 py-0.5 rounded text-center font-semibold cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center gap-0.5`}
+                                              title={isPostTermination
+                                                ? `${shift} — Mitarbeiter ist ausgetreten. Schicht muss neu besetzt werden.`
+                                                : `${shift} - Klicken zum Bearbeiten`}
+                                            >
+                                              {isPostTermination && <AlertTriangle size={8} />}
+                                              {getShiftLabel(shift)}
+                                              <Edit2 size={8} className="opacity-60" />
+                                            </div>
+                                          );
+                                        })}
                                         
                                         {/* Labels */}
                                         {cellLabels.length > 0 && cellLabels.map((label: any) => (
@@ -1055,7 +1125,7 @@ export function CalendarView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Zuweisungen:</span>
-                <span className="font-semibold">{shiftPlan.assignments.length}</span>
+                <span className="font-semibold">{activePeriod?.assignments.length ?? 0}</span>
               </div>
             </div>
           </div>
@@ -1157,10 +1227,10 @@ export function CalendarView() {
                 {(() => {
                   const assignmentStart = startOfDay(new Date(editingShift.assignment.startDate));
                   const assignmentEnd = endOfDay(new Date(editingShift.assignment.endDate));
-                  const allAssignments = shiftPlan?.assignments || [];
+                  const allAssignments = activePeriod?.assignments || [];
                   const shiftType = editingShift.assignment.shiftType;
-                  const rules = shiftPlan?.schedulerConfig?.rules ?? DEFAULT_SCHEDULER_CONFIG.rules;
-                  const config = shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG;
+                  const rules = activePeriod?.schedulerConfig?.rules ?? DEFAULT_SCHEDULER_CONFIG.rules;
+                  const config = activePeriod?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG;
 
                   // Canonical list of OTHER assignments (excluding the one being edited)
                   const otherAssignments = allAssignments.filter(a => a.id !== editingShift.assignment.id);
@@ -1433,12 +1503,12 @@ export function CalendarView() {
 
       {/* Violation Pipeline */}
       {showPipeline && (() => {
-        const planYear = shiftPlan?.year ?? new Date().getFullYear();
-        const planStartMonth = shiftPlan?.startMonth ?? 0;
-        const planMonths = shiftPlan?.months ?? 12;
+        const planYear = activePeriod?.year ?? new Date().getFullYear();
+        const planStartMonth = activePeriod?.startMonth ?? 0;
+        const planMonths = activePeriod?.months ?? 12;
         const planPeriodStart = new Date(planYear, planStartMonth, 1);
         const planPeriodEnd = new Date(planYear, planStartMonth + planMonths, 0);
-        const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+        const filteredViolations = (activePeriod?.violations ?? []).filter(v => {
           const vDate = new Date(v.startDate);
           return vDate >= planPeriodStart && vDate <= planPeriodEnd;
         });
@@ -1446,7 +1516,7 @@ export function CalendarView() {
         <ViolationPipeline
           violations={filteredViolations}
           employees={employees}
-          onAcknowledge={(id) => acknowledgeViolation(id)}
+          onAcknowledge={(id) => activePeriod && acknowledgeViolation(activePeriod.id, id)}
           onClose={() => setShowPipeline(false)}
           onView={(v) => {
             // Jump to the month of the violation
@@ -1461,55 +1531,6 @@ export function CalendarView() {
         ) : null;
       })()}
 
-      {/* Release / Revoke confirmation modal */}
-      {releaseConfirmOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-3">
-              {planReleased ? 'Freigabe aufheben' : 'Plan freigeben'}
-            </h3>
-            <p className="text-gray-600 mb-4">
-              {planReleased
-                ? 'Möchten Sie wirklich die Freigabe des Schichtplans aufheben? Mitarbeitende können den Plan dann nicht mehr im Portal einsehen.'
-                : 'Möchten Sie den Schichtplan für die Mitarbeitenden freigeben? Der Plan wird im Mitarbeiter-Portal sichtbar.'}
-            </p>
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort eingeben</label>
-              <input
-                type="password"
-                value={releasePassword}
-                onChange={e => setReleasePassword(e.target.value)}
-                placeholder="Passwort"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                onKeyDown={e => { if (e.key === 'Enter' && releasePassword === '2026') togglePlanRelease(); }}
-              />
-              {releasePassword.length > 0 && releasePassword !== '2026' && (
-                <p className="text-sm text-red-500 mt-1">Falsches Passwort</p>
-              )}
-            </div>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => { setReleaseConfirmOpen(false); setReleasePassword(''); }}
-                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-              >
-                Abbrechen
-              </button>
-              <button
-                onClick={togglePlanRelease}
-                disabled={releasing || releasePassword !== '2026'}
-                className={`px-4 py-2 rounded-md text-white font-medium ${
-                  releasePassword !== '2026' ? 'bg-gray-400 cursor-not-allowed' :
-                  planReleased
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-indigo-600 hover:bg-indigo-700'
-                }`}
-              >
-                {releasing ? 'Wird verarbeitet…' : planReleased ? 'Freigabe aufheben' : 'Freigeben'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

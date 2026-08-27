@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { useStore, getAuthToken } from '../store';
-import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS } from '../types';
-import { generateId, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate } from '../utils/helpers';
-import { UserPlus, Trash2, Edit2, Save, X, Mail, Send, RefreshCw, CheckCircle, AlertCircle, Lock, Unlock } from 'lucide-react';
+import { Employee, ShiftPreference, ShiftType, SHIFT_LABELS, getPeriodDateRange } from '../types';
+import { generateId, parseVacationRanges, processImportPreview, getBerlinHolidays, formatDate, formatDateForInput, parseDateInput } from '../utils/helpers';
+import { getEmployeeActiveWeight } from '../utils/scheduler';
+import { periodLabel } from './PlanningPeriodManager';
+import { UserPlus, Trash2, Edit2, Save, X, Mail, Send, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMonths, isSameDay } from 'date-fns';
 import * as XLSX from 'xlsx-js-style';
 
 export function EmployeeManagement() {
-  const { employees, departments, customHolidays, addEmployee, updateEmployee, deleteEmployee, batchImport } = useStore();
+  const { employees, departments, planningPeriods, customHolidays, addEmployee, updateEmployee, deleteEmployee, batchImport } = useStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  const [selectedPeriodId, setSelectedPeriodIdState] = useState<string>(
+    () => localStorage.getItem('spm-employees-period') || 'all'
+  );
+  const setSelectedPeriodId = (id: string) => {
+    setSelectedPeriodIdState(id);
+    localStorage.setItem('spm-employees-period', id);
+  };
 
   // Import from Excel/CSV
   const [importPreview, setImportPreview] = useState<any[] | null>(null);
@@ -31,9 +40,6 @@ export function EmployeeManagement() {
   const [credentialInfo, setCredentialInfo] = useState<Record<string, { username: string; mustChangePassword: boolean }>>({});
   const [invitingId, setInvitingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [employeesLocked, setEmployeesLocked] = useState(false);
-  const [lockLoading, setLockLoading] = useState(false);
-  const [planReleased, setPlanReleased] = useState(false);
 
   // Delete confirmation modal state
   const [deleteTarget, setDeleteTarget] = useState<Employee | null>(null);
@@ -44,6 +50,14 @@ export function EmployeeManagement() {
     setTimeout(() => setToast(null), 4000);
   };
 
+  // If the persisted period selection no longer exists (e.g. it was deleted), fall back to "Alle Zeiträume"
+  useEffect(() => {
+    if (selectedPeriodId !== 'all' && planningPeriods.length > 0 && !planningPeriods.some(p => p.id === selectedPeriodId)) {
+      setSelectedPeriodId('all');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planningPeriods]);
+
   useEffect(() => {
     const token = getAuthToken();
     if (!token) return;
@@ -53,36 +67,6 @@ export function EmployeeManagement() {
       .catch(() => {});
   }, [employees]);
 
-  useEffect(() => {
-    const token = getAuthToken();
-    if (!token) return;
-    fetch('/api/employees/lock', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => setEmployeesLocked(!!d.employeesLocked))
-      .catch(() => {});
-    fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => setPlanReleased(!!d.released))
-      .catch(() => {});
-  }, [employees]);
-
-  const toggleLock = async () => {
-    setLockLoading(true);
-    try {
-      const token = getAuthToken();
-      const resp = await fetch('/api/employees/lock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ locked: !employeesLocked }),
-      });
-      if (resp.ok) {
-        setEmployeesLocked(!employeesLocked);
-        showToast('success', !employeesLocked ? 'Mitarbeiteränderungen gesperrt' : 'Mitarbeiteränderungen freigegeben');
-      }
-    } catch { showToast('error', 'Fehler beim Sperren'); }
-    setLockLoading(false);
-  };
-  
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -103,7 +87,9 @@ export function EmployeeManagement() {
         allowedShiftTypes: formData.allowedShiftTypes || ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
         vacationDays: formData.vacationDays || [],
         vacationRanges: formData.vacationRanges || [],
-        preferences: formData.preferences || []
+        preferences: formData.preferences || [],
+        hireDate: formData.hireDate,
+        terminationDate: formData.terminationDate,
       };
       addEmployee(newEmployee);
     }
@@ -396,6 +382,27 @@ export function EmployeeManagement() {
     return total;
   };
 
+  // ── Planning-period filter (list view only — the edit form always shows/edits the full history) ──
+  const selectedPeriod = selectedPeriodId === 'all' ? null : planningPeriods.find(p => p.id === selectedPeriodId) ?? null;
+  const selectedPeriodRange = selectedPeriod ? getPeriodDateRange(selectedPeriod) : null;
+
+  /** Vacation ranges/days of an employee that overlap the selected period (or all of them, if no period is selected). */
+  const vacationForSelectedPeriod = (emp: Employee) => {
+    if (!selectedPeriodRange) return { vacationRanges: emp.vacationRanges || [], vacationDays: emp.vacationDays || [] };
+    const { start, end } = selectedPeriodRange;
+    return {
+      vacationRanges: (emp.vacationRanges || []).filter(r => startOfDay(new Date(r.startDate)) <= end && startOfDay(new Date(r.endDate)) >= start),
+      vacationDays: (emp.vacationDays || []).filter(d => { const dd = startOfDay(new Date(d)); return dd >= start && dd <= end; }),
+    };
+  };
+
+  /** Shift preferences of an employee that overlap the selected period (or all of them, if no period is selected). */
+  const preferencesForSelectedPeriod = (emp: Employee): ShiftPreference[] => {
+    if (!selectedPeriodRange) return emp.preferences || [];
+    const { start, end } = selectedPeriodRange;
+    return (emp.preferences || []).filter(p => startOfDay(new Date(p.startDate)) <= end && startOfDay(new Date(p.endDate)) >= start);
+  };
+
   // Vacation ranges (multi-day)
   // Range picker modal state
   const [rangePickerOpen, setRangePickerOpen] = useState(false);
@@ -568,22 +575,6 @@ export function EmployeeManagement() {
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={toggleLock}
-            disabled={lockLoading || (employeesLocked && planReleased)}
-            title={employeesLocked && planReleased ? 'Entsperren nicht möglich — Plan ist freigegeben' : undefined}
-            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
-              employeesLocked
-                ? planReleased
-                  ? 'bg-red-400 text-white cursor-not-allowed opacity-60'
-                  : 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
-          >
-            {employeesLocked ? <Lock size={18} /> : <Unlock size={18} />}
-            <span className="hidden sm:inline">{employeesLocked ? 'Änderungen gesperrt' : 'Änderungen sperren'}</span>
-            <span className="sm:hidden">{employeesLocked ? 'Gesperrt' : 'Sperren'}</span>
-          </button>
-          <button
             onClick={() => {
               if (showAddForm) {
                 resetForm();
@@ -712,6 +703,29 @@ export function EmployeeManagement() {
               />
               <span className="text-sm font-medium text-gray-700">Ü55 Mitarbeiter</span>
             </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Eintrittsdatum</label>
+              <input
+                type="date"
+                value={formData.hireDate ? formatDateForInput(formData.hireDate) : ''}
+                onChange={e => setFormData({ ...formData, hireDate: e.target.value ? parseDateInput(e.target.value) : undefined })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Leer = bereits vor jeder Planungsperiode beschäftigt</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Austrittsdatum</label>
+              <input
+                type="date"
+                value={formData.terminationDate ? formatDateForInput(formData.terminationDate) : ''}
+                onChange={e => setFormData({ ...formData, terminationDate: e.target.value ? parseDateInput(e.target.value) : undefined })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Leer = weiterhin beschäftigt. Bereits zugewiesene Schichten danach werden im Kalender ausgegraut und als Warnung angezeigt.</p>
+            </div>
           </div>
 
           <div className="mb-4">
@@ -1058,25 +1072,45 @@ export function EmployeeManagement() {
       
       {/* Employee List */}
 
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-700">Abteilung:</label>
-          <select
-            value={selectedDepartment}
-            onChange={e => setSelectedDepartment(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="all">Alle Abteilungen</option>
-            {departments.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Abteilung:</label>
+            <select
+              value={selectedDepartment}
+              onChange={e => setSelectedDepartment(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="all">Alle Abteilungen</option>
+              {departments.map(d => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-700">Planungsperiode:</label>
+            <select
+              value={selectedPeriodId}
+              onChange={e => setSelectedPeriodId(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="all">Alle Zeiträume</option>
+              {planningPeriods.map(p => (
+                <option key={p.id} value={p.id}>{periodLabel(p)}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="text-sm text-gray-600">Angezeigt: {selectedDepartment === 'all' ? employees.length : employees.filter(emp => emp.department === selectedDepartment).length}</div>
+        <div className="text-sm text-gray-600">
+          Angezeigt: {(selectedDepartment === 'all' ? employees : employees.filter(emp => emp.department === selectedDepartment))
+            .filter(emp => !selectedPeriodRange || getEmployeeActiveWeight(emp, selectedPeriodRange.start, selectedPeriodRange.end) > 0).length}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        { (selectedDepartment === 'all' ? employees : employees.filter(emp => emp.department === selectedDepartment)).map(employee => {
+        { (selectedDepartment === 'all' ? employees : employees.filter(emp => emp.department === selectedDepartment))
+            .filter(emp => !selectedPeriodRange || getEmployeeActiveWeight(emp, selectedPeriodRange.start, selectedPeriodRange.end) > 0)
+            .map(employee => {
           const dept = departments.find(d => d.id === employee.department);
           return (
             <div key={employee.id} className="bg-white p-4 rounded-lg shadow-md hover:shadow-lg transition-shadow">
@@ -1120,32 +1154,50 @@ export function EmployeeManagement() {
                   {employee.portalStatus === 'submitted' && (
                     <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md text-xs">Eingereicht</span>
                   )}
+                  {employee.hireDate && (
+                    <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-md text-xs">
+                      Eintritt: {formatDate(employee.hireDate)}
+                    </span>
+                  )}
+                  {employee.terminationDate && (
+                    <span className={`px-2 py-1 rounded-md text-xs font-semibold ${
+                      new Date(employee.terminationDate) < new Date()
+                        ? 'bg-gray-200 text-gray-600'
+                        : 'bg-orange-100 text-orange-800'
+                    }`}>
+                      Austritt: {formatDate(employee.terminationDate)}
+                    </span>
+                  )}
                 </div>
 
 
-                
-                {(employee.vacationDays.length > 0 || (employee.vacationRanges?.length || 0) > 0) && (
-                  <div className="text-gray-600">
-                    <span className="font-medium">Urlaub:</span>
-                    <span className="ml-2 font-semibold">{calcTotalVacationDays(employee)} Tag(e)</span>
-                    <div className="text-sm mt-1">
-                      {employee.vacationRanges && employee.vacationRanges.length > 0 && (
-                        <div className="mt-1 space-y-1">
-                          {employee.vacationRanges.map((r, i) => (
-                            <div key={i} className="text-xs text-gray-600">{new Date(r.startDate).toLocaleDateString('de-DE')} — {new Date(r.endDate).toLocaleDateString('de-DE')}</div>
-                          ))}
-                        </div>
-                      )}
-                      {employee.vacationDays && employee.vacationDays.length > 0 && (
-                        <div className="mt-1 text-xs text-gray-600">(Einzeltage: {employee.vacationDays.length})</div>
-                      )}
+
+                {(() => {
+                  const { vacationRanges: periodVacationRanges, vacationDays: periodVacationDays } = vacationForSelectedPeriod(employee);
+                  if (periodVacationDays.length === 0 && periodVacationRanges.length === 0) return null;
+                  return (
+                    <div className="text-gray-600">
+                      <span className="font-medium">Urlaub{selectedPeriod ? ` (${periodLabel(selectedPeriod)})` : ''}:</span>
+                      <span className="ml-2 font-semibold">{calcTotalVacationDays({ vacationRanges: periodVacationRanges, vacationDays: periodVacationDays })} Tag(e)</span>
+                      <div className="text-sm mt-1">
+                        {periodVacationRanges.length > 0 && (
+                          <div className="mt-1 space-y-1">
+                            {periodVacationRanges.map((r, i) => (
+                              <div key={i} className="text-xs text-gray-600">{new Date(r.startDate).toLocaleDateString('de-DE')} — {new Date(r.endDate).toLocaleDateString('de-DE')}</div>
+                            ))}
+                          </div>
+                        )}
+                        {periodVacationDays.length > 0 && (
+                          <div className="mt-1 text-xs text-gray-600">(Einzeltage: {periodVacationDays.length})</div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 
-                {employee.preferences.length > 0 && (
+                {preferencesForSelectedPeriod(employee).length > 0 && (
                   <p className="text-gray-600">
-                    <span className="font-medium">Präferenzen:</span> {employee.preferences.length}
+                    <span className="font-medium">Präferenzen{selectedPeriod ? ` (${periodLabel(selectedPeriod)})` : ''}:</span> {preferencesForSelectedPeriod(employee).length}
                   </p>
                 )}
               </div>

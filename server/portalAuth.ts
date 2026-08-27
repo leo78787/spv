@@ -209,3 +209,13 @@ export function getAllCredentialInfo(): Record<string, { username: string; mustC
   }
   return result;
 }
+
+/** Read the complete portal data (credentials + sessions) as-is — used for full-system backups. */
+export function getFullPortalData(): PortalData {
+  return load();
+}
+
+/** Overwrite the complete portal data (credentials + sessions) — used to restore from a full-system backup. */
+export function restorePortalData(data: PortalData): void {
+  save(data);
+}

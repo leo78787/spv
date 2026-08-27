@@ -5,6 +5,8 @@ import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
 import { SHIFT_LABELS } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
+import { PlanningPeriodManager } from './PlanningPeriodManager';
+import { getPeriodDateRange } from '../types';
 import { ImpactFactors, ImpactDelta, CountImpact, FairnessScores } from '../utils/fairnessImpact';
 import {
   getOptimiserState,
@@ -18,12 +20,31 @@ import {
   type OptimiserManagerState,
 } from '../services/optimiserManager';
 
-// Module-level cache so preview survives component unmounts (tab switches)
-let moduleCachedImpactSnapshot: string | null = null;
-let moduleCachedImpactFactors: ImpactFactors | null = null;
+// Module-level cache so the fairness preview survives component unmounts
+// (tab switches) AND remembers every input combination seen so far — not
+// just the most recent one. The computation itself runs server-side (see
+// postModuleFairnessRequest below); this cache exists purely so re-visiting
+// a rule/shift-count combination already seen this session shows the result
+// instantly instead of re-triggering a server round-trip.
+const IMPACT_CACHE_MAX_SIZE = 50;
+const moduleImpactCache = new Map<string, ImpactFactors>();
+function getCachedImpact(snapshot: string): ImpactFactors | undefined {
+  return moduleImpactCache.get(snapshot);
+}
+function setCachedImpact(snapshot: string, result: ImpactFactors) {
+  // Re-insert to mark as most-recently-used, then evict the oldest entry once over the cap.
+  moduleImpactCache.delete(snapshot);
+  moduleImpactCache.set(snapshot, result);
+  if (moduleImpactCache.size > IMPACT_CACHE_MAX_SIZE) {
+    const oldestKey = moduleImpactCache.keys().next().value;
+    if (oldestKey !== undefined) moduleImpactCache.delete(oldestKey);
+  }
+}
 // Persist schedulerConfig edits while the user navigates away so the component
 // can restore the in-progress settings and continue computing when remounted.
 let moduleCachedSchedulerConfig: SchedulerConfig | null = null;
+// Persist the selected planning period across tab switches
+let modulePersistedPeriodId: string | null = null;
 
 // Module-level fairness computation via server API
 let moduleFairnessAbort: AbortController | null = null;
@@ -55,9 +76,7 @@ function postModuleFairnessRequest(payload: { employees: any; schedulerConfig: a
     .then(async (resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const result = await resp.json();
-      // Update module cache
-      moduleCachedImpactFactors = result;
-      moduleCachedImpactSnapshot = snapshot;
+      setCachedImpact(snapshot, result);
       for (const l of moduleFairnessListeners) l({ id, result, snapshot });
     })
     .catch((err) => {
@@ -141,16 +160,48 @@ function CountImpactBadges({
 }
 
 export function ShiftPlanning() {
-  const { employees, departments, shiftPlan, addEmployee, addDepartment, setShiftPlan, addLabel, addCalendarLabel, acknowledgeViolation } = useStore();
-  const [selectedYear, setSelectedYear] = useState(() => shiftPlan?.year ?? new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState<number>(() => shiftPlan?.startMonth ?? 0);
+  const {
+    employees, departments, planningPeriods,
+    addEmployee, addDepartment, addLabel, addCalendarLabel, acknowledgeViolation,
+    applyGeneratedPeriod, importPeriodContent, clearPeriodAssignments, setPeriodReleased,
+  } = useStore();
+
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(modulePersistedPeriodId);
+  useEffect(() => { modulePersistedPeriodId = selectedPeriodId; }, [selectedPeriodId]);
+
+  // Auto-select a sensible default period once periods are loaded: prefer the
+  // one covering today, otherwise the most recently created one.
+  useEffect(() => {
+    if (planningPeriods.length === 0) return;
+    if (selectedPeriodId && planningPeriods.some(p => p.id === selectedPeriodId)) return;
+    const today = new Date();
+    const covering = planningPeriods.find(p => {
+      const { start, end } = getPeriodDateRange(p);
+      return today >= start && today <= end;
+    });
+    // createdAt may be a Date (revived from the server) or a plain ISO string —
+    // compare by timestamp so this works regardless of which.
+    const fallback = [...planningPeriods].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0];
+    setSelectedPeriodId((covering ?? fallback)?.id ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planningPeriods.length]);
+
+  const selectedPeriod = planningPeriods.find(p => p.id === selectedPeriodId) ?? null;
+  const selectedYear = selectedPeriod?.year ?? new Date().getFullYear();
+  const selectedMonth = selectedPeriod?.startMonth ?? 0;
+
   const [isGenerating, setIsGenerating] = useState(false);
   // Open the planning rules / shift‑counts panel by default
   const [showConfig, setShowConfig] = useState(true);
   const [showPipeline, setShowPipeline] = useState(false);
   const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfig>(
-    () => moduleCachedSchedulerConfig ?? shiftPlan?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG
+    () => moduleCachedSchedulerConfig ?? selectedPeriod?.schedulerConfig ?? DEFAULT_SCHEDULER_CONFIG
   );
+  // Reload the scheduler config saved with a period whenever the selected period changes
+  useEffect(() => {
+    if (selectedPeriod?.schedulerConfig) setSchedulerConfig(selectedPeriod.schedulerConfig);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPeriodId]);
   // ── Optimizer state (persisted in module-level manager) ─────────────────
   const [optimiserState, setOptimiserState] = useState<OptimiserManagerState>(getOptimiserState);
   useEffect(() => subscribeOptimiser(setOptimiserState), []);
@@ -175,11 +226,11 @@ export function ShiftPlanning() {
   // Auto-calibrate ms/iteration when employees or config change so the
   // time estimate is available before the user starts.
   useEffect(() => {
-    if (employees.length > 0 && !isOptimising) {
-      calibrate(employees, schedulerConfig, selectedYear, selectedMonth);
+    if (employees.length > 0 && !isOptimising && selectedPeriod) {
+      calibrate(employees, schedulerConfig, selectedPeriod.id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees.length, schedulerConfig, selectedYear, selectedMonth]);
+  }, [employees.length, schedulerConfig, selectedPeriodId]);
 
   const [generationResult, setGenerationResult] = useState<{
     success: boolean;
@@ -232,8 +283,6 @@ export function ShiftPlanning() {
       if (result) {
         setImpactFactors(result);
         computedSnapshotRef.current = snapshot ?? lastSnapshotRef.current ?? null;
-        moduleCachedImpactFactors = result;
-        moduleCachedImpactSnapshot = snapshot ?? lastSnapshotRef.current ?? moduleCachedImpactSnapshot;
       }
       setIsComputingImpact(false);
     };
@@ -252,8 +301,6 @@ export function ShiftPlanning() {
     if (employees.length === 0) {
       lastSnapshotRef.current = null;
       computedSnapshotRef.current = null;
-      moduleCachedImpactSnapshot = null;
-      moduleCachedImpactFactors = null;
       setImpactFactors(null);
       setIsComputingImpact(false);
       return;
@@ -265,11 +312,15 @@ export function ShiftPlanning() {
       .sort((a, b) => a.id.localeCompare(b.id));
     const snapshot = JSON.stringify({ employees: empSummary, schedulerConfig, selectedYear, selectedMonth });
 
-    // If a module-level cache exists for this exact snapshot, reuse it and
-    // avoid any recomputation (this preserves the preview across unmounts)
-    if (moduleCachedImpactSnapshot === snapshot && moduleCachedImpactFactors) {
-      setImpactFactors(moduleCachedImpactFactors);
+    // If this exact input combination (employees/rules/shift-counts/period) has
+    // already been computed this session — e.g. toggling a rule back off after
+    // trying it on — reuse the cached server result instantly instead of
+    // re-triggering a computation.
+    const cached = getCachedImpact(snapshot);
+    if (cached) {
+      setImpactFactors(cached);
       computedSnapshotRef.current = snapshot;
+      lastSnapshotRef.current = snapshot;
       setIsComputingImpact(false);
       return;
     }
@@ -306,20 +357,14 @@ export function ShiftPlanning() {
     moduleCachedSchedulerConfig = schedulerConfig;
   }, [schedulerConfig]);
 
-  // Shared release-check helper: shows warning modal if plan is released, otherwise runs action immediately
+  // Shared release-check helper: shows warning modal if the selected period is
+  // released, otherwise runs action immediately
   const checkReleaseAndRun = async (action: () => void) => {
-    try {
-      const token = getAuthToken();
-      const relResp = await fetch('/api/plan/release', { headers: { Authorization: `Bearer ${token}` } });
-      if (relResp.ok) {
-        const { released } = await relResp.json();
-        if (released) {
-          setPendingAction(() => action);
-          setReleaseWarningOpen(true);
-          return;
-        }
-      }
-    } catch { /* ignore release-check errors */ }
+    if (selectedPeriod?.released) {
+      setPendingAction(() => action);
+      setReleaseWarningOpen(true);
+      return;
+    }
     action();
   };
 
@@ -338,16 +383,10 @@ export function ShiftPlanning() {
 
   const doGenerate = async () => {
     setReleaseWarningOpen(false);
+    if (!selectedPeriod) return;
 
     // Revoke release if currently released
-    try {
-      const token = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
+    if (selectedPeriod.released) setPeriodReleased(selectedPeriod.id, false);
 
     setIsGenerating(true);
     setGenerationResult(null);
@@ -363,9 +402,7 @@ export function ShiftPlanning() {
         },
         body: JSON.stringify({
           employees,
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
+          periodId: selectedPeriod.id,
           schedulerConfig,
         }),
       });
@@ -374,43 +411,33 @@ export function ShiftPlanning() {
 
       const data = await resp.json();
 
-      // Revive dates from JSON
-      const assignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      const violations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-
-      // Store the complete plan at once (avoids race condition with concurrent saveToServer calls)
-      const completePlan = {
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations,
-        assignments,
-        algorithm: 'automatisch generiert',
+      // Revive dates from JSON and apply the server-persisted period as-is
+      const revivedPeriod = {
+        ...data.period,
+        assignments: (data.period.assignments || []).map((a: any) => ({
+          ...a,
+          startDate: new Date(a.startDate),
+          endDate: new Date(a.endDate),
+        })),
+        violations: (data.period.violations || []).map((v: any) => ({
+          ...v,
+          startDate: new Date(v.startDate),
+          endDate: new Date(v.endDate),
+        })),
       };
-      setShiftPlan(completePlan as any);
-      // Clear calendar labels for the new plan
-      // (createShiftPlan used to do this, but we bypass it now)
+      applyGeneratedPeriod(revivedPeriod);
 
       // Open the pipeline automatically if there are unresolvable violations
-      if (violations.length > 0) {
+      if (revivedPeriod.violations.length > 0) {
         setShowPipeline(true);
       }
 
-      const end = new Date(selectedYear, selectedMonth + 12, 0);
+      const end = new Date(selectedYear, selectedMonth + (selectedPeriod.months ?? 12), 0);
 
       setGenerationResult({
         success: true,
         message: `Schichtplan erfolgreich generiert für ${getMonthName(selectedMonth)} ${selectedYear} — ${getMonthName(end.getMonth())} ${end.getFullYear()}`,
-        assignmentCount: assignments.length,
+        assignmentCount: revivedPeriod.assignments.length,
       });
     } catch (error) {
       setGenerationResult({
@@ -425,22 +452,17 @@ export function ShiftPlanning() {
 
   // ── Optimizer handlers (delegate to persistent manager) ────────────────
   const doOptimise = useCallback(() => {
-    if (employees.length === 0) return;
+    if (employees.length === 0 || !selectedPeriod) return;
     setReleaseWarningOpen(false);
 
     // Revoke release if currently released
-    const token = getAuthToken();
-    fetch('/api/plan/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ released: false }),
-    }).catch(() => { /* ignore */ });
+    if (selectedPeriod.released) setPeriodReleased(selectedPeriod.id, false);
 
     // Use current plan assignments as baseline (from equality step)
-    const baseline = shiftPlan?.assignments;
-    const baseViolations = shiftPlan?.violations;
-    startOptimisation(employees, schedulerConfig, selectedYear, selectedMonth, baseline, baseViolations);
-  }, [employees, schedulerConfig, selectedYear, selectedMonth, shiftPlan?.assignments, shiftPlan?.violations]);
+    const baseline = selectedPeriod.assignments;
+    const baseViolations = selectedPeriod.violations;
+    startOptimisation(employees, schedulerConfig, selectedPeriod.id, baseline, baseViolations);
+  }, [employees, schedulerConfig, selectedPeriodId, selectedPeriod?.assignments, selectedPeriod?.violations]);
 
   const handleOptimise = useCallback(async () => {
     if (employees.length === 0) return;
@@ -454,18 +476,11 @@ export function ShiftPlanning() {
 
   // ── Equality optimizer handler ──────────────────────────────────────────
   const doEquality = useCallback(async () => {
-    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    if (employees.length === 0 || !selectedPeriod?.assignments?.length) return;
     setReleaseWarningOpen(false);
 
     // Revoke release if currently released
-    try {
-      const rToken = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
+    if (selectedPeriod.released) setPeriodReleased(selectedPeriod.id, false);
 
     setIsEqualizing(true);
     setEqualityResult(null);
@@ -480,40 +495,32 @@ export function ShiftPlanning() {
         body: JSON.stringify({
           employees,
           schedulerConfig,
-          baselineAssignments: shiftPlan.assignments,
+          baselineAssignments: selectedPeriod.assignments,
           maxIterations: 500,
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
+          periodId: selectedPeriod.id,
         }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const revivedAssignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      // Revive violation dates from JSON
-      const revivedViolations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-      setShiftPlan({
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations: revivedViolations,
-        assignments: revivedAssignments,
-        algorithm: 'gleichheits-optimiert',
-      } as any);
+      const revivedPeriod = {
+        ...data.period,
+        assignments: (data.period.assignments || []).map((a: any) => ({
+          ...a,
+          startDate: new Date(a.startDate),
+          endDate: new Date(a.endDate),
+        })),
+        violations: (data.period.violations || []).map((v: any) => ({
+          ...v,
+          startDate: new Date(v.startDate),
+          endDate: new Date(v.endDate),
+        })),
+      };
+      applyGeneratedPeriod(revivedPeriod);
       setEqualityResult({ improvements: data.improvements, ranges: data.ranges });
       setGenerationResult({
         success: true,
         message: `Gleichheitsoptimierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-        assignmentCount: revivedAssignments.length,
+        assignmentCount: revivedPeriod.assignments.length,
       });
     } catch (err) {
       setGenerationResult({
@@ -524,28 +531,21 @@ export function ShiftPlanning() {
     } finally {
       setIsEqualizing(false);
     }
-  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+  }, [employees, schedulerConfig, selectedPeriodId, selectedPeriod?.assignments]);
 
   const handleEquality = useCallback(async () => {
-    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    if (employees.length === 0 || !selectedPeriod?.assignments?.length) return;
     await checkReleaseAndRun(doEquality);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, shiftPlan?.assignments, doEquality]);
+  }, [employees, selectedPeriod?.assignments, doEquality]);
 
   // ── Total-balance optimizer handler (Step 2b) ───────────────────────────
   const doTotalBalance = useCallback(async () => {
-    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    if (employees.length === 0 || !selectedPeriod?.assignments?.length) return;
     setReleaseWarningOpen(false);
 
     // Revoke release if currently released
-    try {
-      const rToken = getAuthToken();
-      await fetch('/api/plan/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rToken}` },
-        body: JSON.stringify({ released: false }),
-      });
-    } catch { /* ignore */ }
+    if (selectedPeriod.released) setPeriodReleased(selectedPeriod.id, false);
 
     setIsTotalBalancing(true);
     setTotalBalanceResult(null);
@@ -560,39 +560,32 @@ export function ShiftPlanning() {
         body: JSON.stringify({
           employees,
           schedulerConfig,
-          baselineAssignments: shiftPlan.assignments,
+          baselineAssignments: selectedPeriod.assignments,
           maxIterations: 500,
-          year: selectedYear,
-          startMonth: selectedMonth,
-          months: 12,
+          periodId: selectedPeriod.id,
         }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const revivedAssignments = (data.assignments || []).map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      const revivedViolations = (data.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-      setShiftPlan({
-        year: selectedYear,
-        startMonth: selectedMonth,
-        months: 12,
-        schedulerConfig,
-        violations: revivedViolations,
-        assignments: revivedAssignments,
-        algorithm: 'gesamt-balanciert',
-      } as any);
+      const revivedPeriod = {
+        ...data.period,
+        assignments: (data.period.assignments || []).map((a: any) => ({
+          ...a,
+          startDate: new Date(a.startDate),
+          endDate: new Date(a.endDate),
+        })),
+        violations: (data.period.violations || []).map((v: any) => ({
+          ...v,
+          startDate: new Date(v.startDate),
+          endDate: new Date(v.endDate),
+        })),
+      };
+      applyGeneratedPeriod(revivedPeriod);
       setTotalBalanceResult({ improvements: data.improvements, ranges: data.ranges, totalRange: data.totalRange });
       setGenerationResult({
         success: true,
         message: `Gesamt-Balancierung: ${data.improvements} Verbesserungen in ${data.iterations} Iterationen`,
-        assignmentCount: revivedAssignments.length,
+        assignmentCount: revivedPeriod.assignments.length,
       });
     } catch (err) {
       setGenerationResult({
@@ -603,22 +596,22 @@ export function ShiftPlanning() {
     } finally {
       setIsTotalBalancing(false);
     }
-  }, [employees, schedulerConfig, shiftPlan?.assignments, selectedYear, selectedMonth, setShiftPlan]);
+  }, [employees, schedulerConfig, selectedPeriodId, selectedPeriod?.assignments]);
 
   const handleTotalBalance = useCallback(async () => {
-    if (employees.length === 0 || !shiftPlan?.assignments?.length) return;
+    if (employees.length === 0 || !selectedPeriod?.assignments?.length) return;
     await checkReleaseAndRun(doTotalBalance);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, shiftPlan?.assignments, doTotalBalance]);
+  }, [employees, selectedPeriod?.assignments, doTotalBalance]);
 
   const planStart = new Date(selectedYear, selectedMonth, 1);
-  const planEnd = new Date(selectedYear, selectedMonth + (shiftPlan?.months ?? 12), 0); // last day of the n-month range
-  const filteredViolations = (shiftPlan?.violations ?? []).filter(v => {
+  const planEnd = new Date(selectedYear, selectedMonth + (selectedPeriod?.months ?? 12), 0); // last day of the n-month range
+  const filteredViolations = (selectedPeriod?.violations ?? []).filter(v => {
     const vDate = new Date(v.startDate);
     return vDate >= planStart && vDate <= planEnd;
   });
 
-  const currentYearAssignments = shiftPlan?.assignments.filter((assignment) => {
+  const currentYearAssignments = selectedPeriod?.assignments.filter((assignment) => {
     const aStart = new Date(assignment.startDate);
     return aStart >= planStart && aStart <= planEnd;
   }) || [];
@@ -634,6 +627,11 @@ export function ShiftPlanning() {
   const onPlanFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    if (!selectedPeriod) {
+      alert('Bitte wählen Sie zuerst eine Planungsperiode aus, in die importiert werden soll.');
+      if (planFileRef.current) planFileRef.current.value = '';
+      return;
+    }
 
     try {
       const text = await f.text();
@@ -688,12 +686,19 @@ export function ShiftPlanning() {
         employees: (a.employees || []).map((id: string) => empMap[id] || id)
       }));
 
-      const finalPlan = { ...importedPlan, assignments: mappedAssignments };
-      if (!finalPlan.algorithm) {
-        finalPlan.algorithm = 'importiert';
-      }
-      setShiftPlan(finalPlan as any);
-      
+      // Merge only the plan content (assignments/violations/config/algorithm) into the
+      // currently selected period — the period's own date range is left untouched.
+      importPeriodContent(selectedPeriod.id, {
+        assignments: mappedAssignments,
+        violations: (importedPlan.violations || []).map((v: any) => ({
+          ...v,
+          startDate: new Date(v.startDate),
+          endDate: new Date(v.endDate),
+        })),
+        schedulerConfig: importedPlan.schedulerConfig,
+        algorithm: importedPlan.algorithm || 'importiert',
+      });
+
       // Import labels if present
       if (revived.labels && Array.isArray(revived.labels)) {
         revived.labels.forEach((label: any) => {
@@ -752,6 +757,17 @@ export function ShiftPlanning() {
         </div>
       </div>
 
+      <PlanningPeriodManager selectedPeriodId={selectedPeriodId} onSelect={setSelectedPeriodId} />
+
+      {!selectedPeriod ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
+          <AlertCircle className="mx-auto mb-2 text-amber-600" size={28} />
+          <p className="text-amber-800 text-sm">
+            Bitte wählen Sie oben eine Planungsperiode aus oder legen Sie eine neue an, um mit der Planung zu beginnen.
+          </p>
+        </div>
+      ) : (
+      <>
       {/* Scheduler Configuration Panel */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <button
@@ -901,34 +917,6 @@ export function ShiftPlanning() {
            ═══════════════════════════════════════════════════════════════════ */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
         <div className="space-y-4">
-          {/* Year / month selection */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Startjahr</label>
-              <select
-                value={selectedYear}
-                onChange={(e) => setSelectedYear(Number(e.target.value))}
-                className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                {[2024, 2025, 2026, 2027, 2028].map((year) => (
-                  <option key={year} value={year}>{year}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Startmonat</label>
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                className="w-full md:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                {Array.from({ length: 12 }).map((_, i) => (
-                  <option key={i} value={i}>{getMonthName(i)}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
           {employees.length === 0 && (
             <div className="flex items-start gap-2 text-amber-600 bg-amber-50 p-3 rounded-md">
               <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
@@ -952,8 +940,8 @@ export function ShiftPlanning() {
           {/* ─── Stepper ─────────────────────────────────────────────── */}
           {(() => {
             const hasEmployees = employees.length > 0;
-            const hasPlan = (shiftPlan?.assignments?.length ?? 0) > 0;
-            const algoTag = shiftPlan?.algorithm ?? '';
+            const hasPlan = (selectedPeriod?.assignments?.length ?? 0) > 0;
+            const algoTag = selectedPeriod?.algorithm ?? '';
             const step1Done = hasPlan; // any plan exists from step 1
             const step2Done = algoTag === 'gleichheits-optimiert' || algoTag === 'gesamt-balanciert' || algoTag === 'fairness-optimiert';
             const step3Done = algoTag === 'gesamt-balanciert' || algoTag === 'fairness-optimiert';
@@ -1178,10 +1166,10 @@ export function ShiftPlanning() {
           })()}
 
           {/* Algorithm tag + delete button */}
-          {shiftPlan?.algorithm && (
+          {selectedPeriod?.algorithm && (
             <div className="mt-2 flex items-center gap-4">
               <span className="text-sm text-gray-600">
-                Aktueller Plan-Algorithmus: <strong>{shiftPlan.algorithm}</strong>
+                Aktueller Plan-Algorithmus: <strong>{selectedPeriod.algorithm}</strong>
               </span>
               <button
                 onClick={() => setDeletePlanOpen(true)}
@@ -1333,6 +1321,8 @@ export function ShiftPlanning() {
           </li>
         </ul>
       </div>
+      </>
+      )}
     </div>
 
     {/* Violation Pipeline slide-over */}
@@ -1340,7 +1330,7 @@ export function ShiftPlanning() {
       <ViolationPipeline
         violations={filteredViolations}
         employees={employees}
-        onAcknowledge={(id) => acknowledgeViolation(id)}
+        onAcknowledge={(id) => selectedPeriod && acknowledgeViolation(selectedPeriod.id, id)}
         onClose={() => setShowPipeline(false)}
       />
     )}
@@ -1396,7 +1386,7 @@ export function ShiftPlanning() {
               Abbrechen
             </button>
             <button
-              onClick={() => { setShiftPlan(null as any); setDeletePlanOpen(false); }}
+              onClick={() => { if (selectedPeriod) clearPeriodAssignments(selectedPeriod.id); setDeletePlanOpen(false); }}
               className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 font-medium"
             >
               Endgültig löschen

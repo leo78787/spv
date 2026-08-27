@@ -86,6 +86,12 @@ export interface Employee {
   portalStatus?: 'none' | 'invited' | 'draft' | 'submitted';
   /** Employee-controlled email notification preferences (portal settings) */
   notificationPreferences?: NotificationPreferences;
+  /** Eintrittsdatum — date the employee joined. Undefined = employed since before any planning period. */
+  hireDate?: Date;
+  /** Austrittsdatum — date the employee left. Undefined = still employed. */
+  terminationDate?: Date;
+  /** Which planning period the employee last selected in their portal (Einstellungen). Server-resolved default when unset. */
+  portalSelectedPeriodId?: string;
 }
 
 // ── Employee portal notification preferences ────────────────────────
@@ -167,6 +173,42 @@ export interface ShiftPlan {
   assignments: ShiftAssignment[];
   /** Describes which algorithm or method produced this plan (e.g. "generiert", "fairness-optimiert", "importiert"). */
   algorithm?: string;
+}
+
+// ── Planning periods ─────────────────────────────────────────────────
+//
+// The app used to support exactly one global shift plan/year. It now
+// supports any number of independent "Planungsperioden" — each with its
+// own date range, its own generated assignments, and its own release /
+// employee-lock status. A PlanningPeriod is a ShiftPlan (the generated
+// content) plus period-level metadata and admin controls.
+
+export interface PlanningPeriod extends ShiftPlan {
+  id: string;
+  /** Optional human-readable label, e.g. "2026" or "Sommer 2026". Falls back to a date-based label when absent. */
+  name?: string;
+  /** Whether this period's shift plan has been released to employees (visible in their portal/calendar). */
+  released: boolean;
+  /** Whether employee self-service changes (vacation/preferences) are locked for this period. */
+  employeesLocked: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** Inclusive [start, end) day-range helper for a planning period. */
+export function getPeriodDateRange(period: Pick<PlanningPeriod, 'year' | 'startMonth' | 'months'>): { start: Date; end: Date } {
+  const startMonth = period.startMonth ?? 0;
+  const months = period.months ?? 12;
+  const start = new Date(period.year, startMonth, 1);
+  const end = new Date(period.year, startMonth + months, 0); // last day of the range, inclusive
+  return { start, end };
+}
+
+/** Whether two planning periods' date ranges overlap (inclusive). */
+export function periodsOverlap(a: Pick<PlanningPeriod, 'year' | 'startMonth' | 'months'>, b: Pick<PlanningPeriod, 'year' | 'startMonth' | 'months'>): boolean {
+  const ra = getPeriodDateRange(a);
+  const rb = getPeriodDateRange(b);
+  return ra.start <= rb.end && rb.start <= ra.end;
 }
 
 // Label types for calendar markings (e.g., training, meetings, etc.)

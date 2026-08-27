@@ -37,9 +37,7 @@ let abortController: AbortController | null = null;
 
 /** Parameters captured at start-time so the result can be applied later. */
 let applyContext: {
-  year: number;
-  startMonth: number;
-  months: number;
+  periodId: string;
   schedulerConfig: SchedulerConfig;
 } | null = null;
 
@@ -118,8 +116,7 @@ export function setTargets(targets: OptimiserTargets) {
 export async function calibrate(
   employees: Employee[],
   schedulerConfig: SchedulerConfig,
-  year: number,
-  startMonth: number,
+  periodId: string,
 ) {
   if (state.isOptimising) return;
   const token = getAuthToken();
@@ -131,7 +128,7 @@ export async function calibrate(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ employees, schedulerConfig, year, startMonth, targets: state.targets }),
+      body: JSON.stringify({ employees, schedulerConfig, periodId, targets: state.targets }),
     });
     if (resp.ok) {
       const data = await resp.json();
@@ -151,8 +148,7 @@ export async function calibrate(
 export function startOptimisation(
   employees: Employee[],
   schedulerConfig: SchedulerConfig,
-  year: number,
-  startMonth: number,
+  periodId: string,
   baselineAssignments?: any[],
   baselineViolations?: any[],
 ) {
@@ -164,7 +160,7 @@ export function startOptimisation(
   state.generationMessage = null;
   notify();
 
-  applyContext = { year, startMonth, months: 12, schedulerConfig };
+  applyContext = { periodId, schedulerConfig };
 
   abortController = new AbortController();
 
@@ -180,9 +176,7 @@ export function startOptimisation(
       employees,
       schedulerConfig,
       optimiserConfig: { maxIterations: state.maxIterations, targets: state.targets },
-      year,
-      startMonth,
-      months: 12,
+      periodId,
       ...(baselineAssignments ? { baselineAssignments } : {}),
       ...(baselineViolations ? { baselineViolations } : {}),
     }),
@@ -286,7 +280,7 @@ export async function checkAndResumeOptimisation(): Promise<void> {
       estimatedTotalMs: job.estimatedTotalMs,
       done: false,
     };
-    applyContext = { year: job.year, startMonth: job.startMonth, months: job.months, schedulerConfig: job.schedulerConfig };
+    applyContext = { periodId: job.periodId, schedulerConfig: job.schedulerConfig };
     notify();
 
     // Subscribe to live SSE stream
@@ -294,7 +288,7 @@ export async function checkAndResumeOptimisation(): Promise<void> {
   } else if (job.status === 'done' && job.hasResult) {
     // Server finished while we were away — fetch the result via subscribe endpoint
     // which sends the cached result immediately
-    applyContext = { year: job.year, startMonth: job.startMonth, months: job.months, schedulerConfig: job.schedulerConfig };
+    applyContext = { periodId: job.periodId, schedulerConfig: job.schedulerConfig };
     state.isOptimising = true; // will be cleared when result event arrives
     state.maxIterations = job.maxIterations;
     state.progress = {
@@ -373,25 +367,10 @@ function _handleSSEMessage(data: any) {
     const ctx = applyContext;
     if (ctx) {
       const store = useStore.getState();
-      const revivedAssignments = result.assignments.map((a: any) => ({
-        ...a,
-        startDate: new Date(a.startDate),
-        endDate: new Date(a.endDate),
-      }));
-      const revivedViolations = (result.violations || []).map((v: any) => ({
-        ...v,
-        startDate: new Date(v.startDate),
-        endDate: new Date(v.endDate),
-      }));
-      store.setShiftPlan({
-        year: ctx.year,
-        startMonth: ctx.startMonth,
-        months: ctx.months,
-        schedulerConfig: ctx.schedulerConfig,
-        violations: revivedViolations,
-        assignments: revivedAssignments,
-        algorithm: 'fairness-optimiert',
-      });
+      // The server already persisted the optimised result directly into the
+      // planning period (see /api/optimize's job completion handler) —
+      // refetch periods from the server so the local store reflects it exactly.
+      store.loadPlanningPeriods();
     }
 
     state.generationMessage = {

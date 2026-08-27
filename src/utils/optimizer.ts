@@ -25,6 +25,8 @@ import {
 } from '../types';
 import {
   generateAutomaticShiftPlan,
+  getEmployeeActiveWeight,
+  MIN_ACTIVE_WEIGHT,
 } from './scheduler';
 import { computeFairnessScores, FairnessScores } from './fairnessImpact';
 
@@ -107,13 +109,20 @@ function buildPools(employees: Employee[]): { label: string; pool: Employee[] }[
   return Array.from(poolMap.entries()).map(([key, pool]) => ({ label: key, pool }));
 }
 
-function perTypeRanges(pool: Employee[], assignments: ShiftAssignment[]): Record<ShiftType, number> {
+function perTypeRanges(pool: Employee[], assignments: ShiftAssignment[], periodRange?: { start: Date; end: Date }): Record<ShiftType, number> {
   const r = {} as Record<ShiftType, number>;
+  // Only judge employees who were actually active (even partially) during
+  // the period — an employee with zero active weight has no fair count to
+  // compare and would otherwise show up as a spurious "0" pulling the range down.
+  const judgeablePool = periodRange ? pool.filter(e => getEmployeeActiveWeight(e, periodRange.start, periodRange.end) > 0) : pool;
   for (const st of SHIFT_TYPES) {
-    if (pool.length === 0) { r[st] = 0; continue; }
-    const counts = pool.map(e =>
-      assignments.filter(a => a.shiftType === st && a.employees.includes(e.id)).length
-    );
+    if (judgeablePool.length === 0) { r[st] = 0; continue; }
+    const counts = judgeablePool.map(e => {
+      const raw = assignments.filter(a => a.shiftType === st && a.employees.includes(e.id)).length;
+      if (!periodRange) return raw;
+      const weight = Math.max(MIN_ACTIVE_WEIGHT, getEmployeeActiveWeight(e, periodRange.start, periodRange.end));
+      return raw / weight;
+    });
     r[st] = Math.max(...counts) - Math.min(...counts);
   }
   return r;
@@ -124,11 +133,12 @@ function worsensRanges(
   pools: { label: string; pool: Employee[] }[],
   baselineRangesPerPool: Map<string, Record<ShiftType, number>>,
   candidate: ShiftAssignment[],
+  periodRange?: { start: Date; end: Date },
 ): boolean {
   for (const { label, pool } of pools) {
     const baseR = baselineRangesPerPool.get(label)!;
-    const newR = perTypeRanges(pool, candidate);
-    if (SHIFT_TYPES.some(t => newR[t] > baseR[t])) return true;
+    const newR = perTypeRanges(pool, candidate, periodRange);
+    if (SHIFT_TYPES.some(t => newR[t] > baseR[t] + 1e-9)) return true;
   }
   return false;
 }
@@ -158,6 +168,7 @@ export function runOptimiser(
   departments?: Department[]
 ): OptimiserResult {
   const { maxIterations, targets } = optimiserConfig;
+  const periodRange = { start: new Date(year, startMonth, 1), end: new Date(year, startMonth + months, 0) };
 
   // ── Build per-pool baseline ranges (must never be worsened) ───────────
   const pools = buildPools(employees);
@@ -170,11 +181,11 @@ export function runOptimiser(
 
   // Record baseline per-type ranges per pool
   for (const { label, pool } of pools) {
-    baselineRangesPerPool.set(label, perTypeRanges(pool, baseline));
+    baselineRangesPerPool.set(label, perTypeRanges(pool, baseline, periodRange));
   }
 
   let bestAssignments = baseline;
-  let bestScores = computeFairnessScores(employees, baseline);
+  let bestScores = computeFairnessScores(employees, baseline, periodRange);
   let bestComposite = compositeScore(bestScores, targets);
 
   const progressInterval = Math.max(1, Math.floor(maxIterations / 200));
@@ -204,9 +215,9 @@ export function runOptimiser(
     );
 
     // Skip candidate if it worsens per-pool per-type ranges
-    if (worsensRanges(pools, baselineRangesPerPool, candidate)) continue;
+    if (worsensRanges(pools, baselineRangesPerPool, candidate, periodRange)) continue;
 
-    const candidateScores = computeFairnessScores(employees, candidate);
+    const candidateScores = computeFairnessScores(employees, candidate, periodRange);
     const candidateComposite = compositeScore(candidateScores, targets);
 
     if (candidateComposite > bestComposite) {

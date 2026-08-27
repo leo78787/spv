@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Employee, Department, ShiftAssignment, ShiftPlan, Holiday, Label, CalendarLabel, SchedulerConfig, SchedulerViolation, SwapSettings, DEFAULT_SWAP_SETTINGS, TabVisibility, DEFAULT_TAB_VISIBILITY } from './types';
+import { Employee, Department, ShiftAssignment, PlanningPeriod, Holiday, Label, CalendarLabel, SchedulerConfig, SwapSettings, DEFAULT_SWAP_SETTINGS, TabVisibility, DEFAULT_TAB_VISIBILITY } from './types';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Auth token helpers (stored in localStorage — only the token, not data)
@@ -54,7 +54,7 @@ const saveToServer = async (state: any) => {
         employees: state.employees,
         departments: state.departments,
         currentYear: state.currentYear,
-        shiftPlan: state.shiftPlan,
+        planningPeriods: state.planningPeriods,
         customHolidays: state.customHolidays,
         labels: state.labels,
         calendarLabels: state.calendarLabels,
@@ -105,7 +105,7 @@ export async function loadFromServer(): Promise<void> {
         { id: 'dept-3', name: 'Abteilung C' },
       ],
       currentYear: revived.currentYear ?? new Date().getFullYear(),
-      shiftPlan: revived.shiftPlan ?? null,
+      planningPeriods: revived.planningPeriods ?? [],
       customHolidays: revived.customHolidays ?? [],
       labels: revived.labels ?? [],
       calendarLabels: revived.calendarLabels ?? [],
@@ -121,7 +121,7 @@ interface AppState {
   employees: Employee[];
   departments: Department[];
   currentYear: number;
-  shiftPlan: ShiftPlan | null;
+  planningPeriods: PlanningPeriod[];
   customHolidays: Holiday[];
   labels: Label[];
   calendarLabels: CalendarLabel[];
@@ -161,14 +161,31 @@ interface AppState {
   // Tab visibility
   setTabVisibility: (vis: TabVisibility) => void;
 
-  // Shift plan actions
+  // Calendar month-navigation cursor (independent of planning periods)
   setCurrentYear: (year: number) => void;
-  createShiftPlan: (year: number, startMonth?: number, months?: number, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[], algorithm?: string) => void;
-  setShiftPlan: (plan: ShiftPlan | null) => void;
-  updateShiftAssignment: (assignment: ShiftAssignment) => void;
-  deleteShiftAssignment: (id: string) => void;
-  confirmShiftAssignment: (id: string) => void;
-  acknowledgeViolation: (id: string) => void;
+
+  // ── Planning periods ──────────────────────────────────────────────
+  // Create/update/delete/release/lock go through dedicated REST endpoints
+  // (for server-side overlap validation and release-email side effects),
+  // then update local state from the server's response.
+  loadPlanningPeriods: () => Promise<void>;
+  createPlanningPeriod: (input: { name?: string; year: number; startMonth: number; months: number; schedulerConfig?: SchedulerConfig }) => Promise<{ period: PlanningPeriod; overlapWarning: string | null } | null>;
+  updatePlanningPeriod: (id: string, input: { name?: string; year?: number; startMonth?: number; months?: number; schedulerConfig?: SchedulerConfig }) => Promise<{ period: PlanningPeriod; overlapWarning: string | null } | null>;
+  deletePlanningPeriod: (id: string) => Promise<boolean>;
+  setPeriodReleased: (id: string, released: boolean) => Promise<boolean>;
+  setPeriodLocked: (id: string, locked: boolean) => Promise<boolean>;
+  /** Replace a period's contents locally after /api/generate or an optimiser endpoint already persisted it server-side. */
+  applyGeneratedPeriod: (period: PlanningPeriod) => void;
+  /** Merge arbitrary content (assignments/violations/algorithm/schedulerConfig) into an existing period and autosave — used by JSON import. */
+  importPeriodContent: (periodId: string, updates: Partial<PlanningPeriod>) => void;
+  /** Clear a period's generated assignments/violations/algorithm (keeps its date range/name) and autosave. */
+  clearPeriodAssignments: (periodId: string) => void;
+
+  // Per-assignment edits within a period (simple local mutation + autosave, like before)
+  updateShiftAssignment: (periodId: string, assignment: ShiftAssignment) => void;
+  deleteShiftAssignment: (periodId: string, id: string) => void;
+  confirmShiftAssignment: (periodId: string, id: string) => void;
+  acknowledgeViolation: (periodId: string, id: string) => void;
 }
 
 export const useStore = create<AppState>((set) => {
@@ -181,7 +198,7 @@ export const useStore = create<AppState>((set) => {
       { id: 'dept-3', name: 'Abteilung C' },
     ],
     currentYear: new Date().getFullYear(),
-    shiftPlan: null as ShiftPlan | null,
+    planningPeriods: [] as PlanningPeriod[],
     customHolidays: [] as Holiday[],
     labels: [] as Label[],
     calendarLabels: [] as CalendarLabel[],
@@ -334,88 +351,203 @@ export const useStore = create<AppState>((set) => {
       saveToServer(newState);
       return newState;
     }),
-    
-    createShiftPlan: (year: number, startMonth = 0, months = 12, schedulerConfig?: SchedulerConfig, violations?: SchedulerViolation[], algorithm?: string) => set((state) => {
-      const newState = {
-        ...state,
-        // When creating a fresh plan we remove any calendar label assignments
-        // so old per-day annotations do not carry over to the new schedule.
-        calendarLabels: [],
-        shiftPlan: { year, startMonth, months, schedulerConfig, violations: violations ?? [], assignments: [], algorithm }
-      };
-      saveToServer(newState);
-      return newState;
-    }),
 
-    acknowledgeViolation: (id: string) => set((state) => {
-      if (!state.shiftPlan) return state;
-      const newState = {
-        ...state,
-        shiftPlan: {
-          ...state.shiftPlan,
-          violations: (state.shiftPlan.violations ?? []).filter(v => v.id !== id)
-        }
-      };
-      saveToServer(newState);
-      return newState;
-    }),
-
-    // Replace entire shiftPlan (used for JSON import)
-    setShiftPlan: (plan: ShiftPlan | null) => set((state) => {
-      const newState = { ...state, shiftPlan: plan, calendarLabels: plan ? [] : state.calendarLabels };
-      saveToServer(newState);
-      return newState;
-    }),
-    
-    updateShiftAssignment: (assignment: ShiftAssignment) => set((state) => {
-      if (!state.shiftPlan) return state;
-      
-      const existingIndex = state.shiftPlan.assignments.findIndex(a => a.id === assignment.id);
-      
-      let newState;
-      if (existingIndex >= 0) {
-        const newAssignments = [...state.shiftPlan.assignments];
-        newAssignments[existingIndex] = assignment;
-        newState = {
-          ...state,
-          shiftPlan: { ...state.shiftPlan, assignments: newAssignments }
-        };
-      } else {
-        newState = {
-          ...state,
-          shiftPlan: {
-            ...state.shiftPlan,
-            assignments: [...state.shiftPlan.assignments, assignment]
-          }
-        };
+    // ── Planning periods ────────────────────────────────────────────
+    loadPlanningPeriods: async () => {
+      const token = getAuthToken();
+      if (!token) return;
+      try {
+        const resp = await fetch('/api/state', { headers: { Authorization: `Bearer ${token}` } });
+        if (!resp.ok) return;
+        const raw = await resp.json();
+        const revived = reviveDatesInState(raw);
+        set((state) => ({ ...state, planningPeriods: revived.planningPeriods ?? [] }));
+      } catch (err) {
+        console.error('Error loading planning periods:', err);
       }
+    },
+
+    createPlanningPeriod: async (input: { name?: string; year: number; startMonth: number; months: number; schedulerConfig?: SchedulerConfig }) => {
+      const token = getAuthToken();
+      if (!token) return null;
+      try {
+        const resp = await fetch('/api/periods', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(input, dateNoonReplacer),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { console.error('createPlanningPeriod failed:', data?.error); return null; }
+        const period = reviveDatesInState(data.period) as PlanningPeriod;
+        set((state) => ({ ...state, planningPeriods: [...state.planningPeriods, period] }));
+        return { period, overlapWarning: data.overlapWarning ?? null };
+      } catch (err) {
+        console.error('Error creating planning period:', err);
+        return null;
+      }
+    },
+
+    updatePlanningPeriod: async (id: string, input: { name?: string; year?: number; startMonth?: number; months?: number; schedulerConfig?: SchedulerConfig }) => {
+      const token = getAuthToken();
+      if (!token) return null;
+      try {
+        const resp = await fetch(`/api/periods/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(input, dateNoonReplacer),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { console.error('updatePlanningPeriod failed:', data?.error); return null; }
+        const period = reviveDatesInState(data.period) as PlanningPeriod;
+        set((state) => ({ ...state, planningPeriods: state.planningPeriods.map(p => p.id === id ? period : p) }));
+        return { period, overlapWarning: data.overlapWarning ?? null };
+      } catch (err) {
+        console.error('Error updating planning period:', err);
+        return null;
+      }
+    },
+
+    deletePlanningPeriod: async (id: string) => {
+      const token = getAuthToken();
+      if (!token) return false;
+      try {
+        const resp = await fetch(`/api/periods/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!resp.ok) return false;
+        set((state) => ({ ...state, planningPeriods: state.planningPeriods.filter(p => p.id !== id) }));
+        return true;
+      } catch (err) {
+        console.error('Error deleting planning period:', err);
+        return false;
+      }
+    },
+
+    setPeriodReleased: async (id: string, released: boolean) => {
+      const token = getAuthToken();
+      if (!token) return false;
+      try {
+        const resp = await fetch(`/api/periods/${id}/release`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ released }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { console.error('setPeriodReleased failed:', data?.error); return false; }
+        const period = reviveDatesInState(data.period) as PlanningPeriod;
+        set((state) => ({ ...state, planningPeriods: state.planningPeriods.map(p => p.id === id ? period : p) }));
+        return true;
+      } catch (err) {
+        console.error('Error releasing planning period:', err);
+        return false;
+      }
+    },
+
+    setPeriodLocked: async (id: string, locked: boolean) => {
+      const token = getAuthToken();
+      if (!token) return false;
+      try {
+        const resp = await fetch(`/api/periods/${id}/lock`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ locked }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { console.error('setPeriodLocked failed:', data?.error); return false; }
+        const period = reviveDatesInState(data.period) as PlanningPeriod;
+        set((state) => ({ ...state, planningPeriods: state.planningPeriods.map(p => p.id === id ? period : p) }));
+        return true;
+      } catch (err) {
+        console.error('Error locking planning period:', err);
+        return false;
+      }
+    },
+
+    applyGeneratedPeriod: (period: PlanningPeriod) => set((state) => ({
+      ...state,
+      planningPeriods: state.planningPeriods.map(p => p.id === period.id ? period : p),
+    })),
+
+    importPeriodContent: (periodId: string, updates: Partial<PlanningPeriod>) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
+      const newState = {
+        ...state,
+        planningPeriods: state.planningPeriods.map(p => p.id === periodId ? { ...p, ...updates } : p),
+      };
       saveToServer(newState);
       return newState;
     }),
-    
-    deleteShiftAssignment: (id: string) => set((state) => {
-      if (!state.shiftPlan) return state;
+
+    clearPeriodAssignments: (periodId: string) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
       const newState = {
         ...state,
-        shiftPlan: {
-          ...state.shiftPlan,
-          assignments: state.shiftPlan.assignments.filter(a => a.id !== id)
-        }
+        planningPeriods: state.planningPeriods.map(p =>
+          p.id === periodId ? { ...p, assignments: [], violations: [], algorithm: undefined } : p
+        ),
+      };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    acknowledgeViolation: (periodId: string, id: string) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
+      const newState = {
+        ...state,
+        planningPeriods: state.planningPeriods.map(p =>
+          p.id === periodId ? { ...p, violations: (p.violations ?? []).filter(v => v.id !== id) } : p
+        ),
+      };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    updateShiftAssignment: (periodId: string, assignment: ShiftAssignment) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
+
+      const existingIndex = period.assignments.findIndex(a => a.id === assignment.id);
+      const newAssignments = existingIndex >= 0
+        ? period.assignments.map((a, i) => i === existingIndex ? assignment : a)
+        : [...period.assignments, assignment];
+
+      const newState = {
+        ...state,
+        planningPeriods: state.planningPeriods.map(p =>
+          p.id === periodId ? { ...p, assignments: newAssignments } : p
+        ),
       };
       saveToServer(newState);
       return newState;
     }),
     
-    confirmShiftAssignment: (id: string) => set((state) => {
-      if (!state.shiftPlan) return state;
+    deleteShiftAssignment: (periodId: string, id: string) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
       const newState = {
         ...state,
-        shiftPlan: {
-          ...state.shiftPlan,
-          assignments: state.shiftPlan.assignments.map(a =>
-            a.id === id ? { ...a, confirmed: true } : a
-          )
-        }
+        planningPeriods: state.planningPeriods.map(p =>
+          p.id === periodId ? { ...p, assignments: p.assignments.filter(a => a.id !== id) } : p
+        ),
+      };
+      saveToServer(newState);
+      return newState;
+    }),
+    
+    confirmShiftAssignment: (periodId: string, id: string) => set((state) => {
+      const period = state.planningPeriods.find(p => p.id === periodId);
+      if (!period) return state;
+      const newState = {
+        ...state,
+        planningPeriods: state.planningPeriods.map(p =>
+          p.id === periodId
+            ? { ...p, assignments: p.assignments.map(a => a.id === id ? { ...a, confirmed: true } : a) }
+            : p
+        ),
       };
       saveToServer(newState);
       return newState;

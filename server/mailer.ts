@@ -39,11 +39,18 @@ const transporter = nodemailer.createTransport({
   tls: { rejectUnauthorized: false },
 });
 
+export interface MailAttachment {
+  filename: string;
+  content: string | Buffer;
+  contentType?: string;
+}
+
 export interface MailOptions {
   to: string;
   subject: string;
   text: string;
   html: string;
+  attachments?: MailAttachment[];
 }
 
 export async function sendMail(opts: MailOptions): Promise<void> {
@@ -53,6 +60,7 @@ export async function sendMail(opts: MailOptions): Promise<void> {
     subject: opts.subject,
     text: opts.text,
     html: opts.html,
+    attachments: opts.attachments,
   });
 }
 

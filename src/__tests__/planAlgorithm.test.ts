@@ -2,18 +2,43 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../store';
 import { reviveImportedPlan } from '../utils/helpers';
 
-describe('Shift plan algorithm metadata', () => {
+describe('Planning period algorithm metadata', () => {
   beforeEach(() => {
-    // only clear the existing plan; other state isn't needed for these tests
-    useStore.setState({ shiftPlan: null });
+    useStore.setState({ planningPeriods: [] });
   });
 
-  it('records the algorithm passed to createShiftPlan', () => {
+  it('records the algorithm applied to a planning period', () => {
+    useStore.setState({
+      planningPeriods: [{
+        id: 'p1',
+        year: 2026,
+        startMonth: 0,
+        months: 12,
+        assignments: [],
+        violations: [],
+        released: false,
+        employeesLocked: false,
+        createdAt: new Date().toISOString(),
+      }],
+    });
+
     const store = useStore.getState();
-    store.createShiftPlan(2026, 0, 12, undefined, [], 'foo-algo');
-    const after = useStore.getState();
-    expect(after.shiftPlan).not.toBeNull();
-    expect(after.shiftPlan?.algorithm).toBe('foo-algo');
+    store.applyGeneratedPeriod({
+      id: 'p1',
+      year: 2026,
+      startMonth: 0,
+      months: 12,
+      assignments: [],
+      violations: [],
+      algorithm: 'foo-algo',
+      released: false,
+      employeesLocked: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    const after = useStore.getState().planningPeriods.find(p => p.id === 'p1');
+    expect(after).not.toBeUndefined();
+    expect(after?.algorithm).toBe('foo-algo');
   });
 
   it('revived import preserves algorithm and defaults missing', () => {

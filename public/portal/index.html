@@ -150,6 +150,8 @@
     .drp-grid .drp-day.drp-selected { background: var(--primary); color: white; font-weight: 600; }
     .drp-grid .drp-day.drp-in-range { background: var(--primary-light); color: var(--primary); }
     .drp-grid .drp-day.drp-today { outline: 2px solid var(--primary); outline-offset: -1px; }
+    .drp-grid .drp-day.drp-out-of-range { background: var(--gray-100); color: var(--gray-300); opacity: 0.6; cursor: not-allowed; }
+    .drp-grid .drp-day.drp-out-of-range:hover { background: var(--gray-100); }
     .drp-info { font-size: 12px; color: var(--gray-500); margin-top: 8px; text-align: center; }
 
     .drp-compact { display: flex; align-items: center; justify-content: center; padding: 8px 12px; background: white; border: 1px solid var(--gray-200); border-radius: var(--radius); font-size: 14px; font-weight: 500; color: var(--gray-700); transition: all 0.15s; cursor: pointer; }
@@ -203,6 +205,15 @@
     .settings-email-box { margin-bottom: 16px; padding: 12px; background: var(--gray-50); border-radius: var(--radius); border: 1px solid var(--gray-200); }
     .settings-email-box .label { font-size: 11px; color: var(--gray-500); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 2px; }
     .settings-email-box .value { font-size: 14px; font-weight: 600; color: var(--gray-800); word-break: break-all; }
+
+    /* Planning period indicator (welcome bar) + selector (settings modal) */
+    .period-indicator { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 5px 10px 5px 8px; border-radius: var(--radius-full); cursor: pointer; margin-bottom: 12px; border: 1px solid transparent; transition: filter 0.15s; }
+    .period-indicator:hover { filter: brightness(0.97); }
+    .period-indicator.status-released { background: var(--success-light); color: #065f46; border-color: #a7f3d0; }
+    .period-indicator.status-planning { background: var(--warning-light); color: #92400e; border-color: #fde68a; }
+    .period-section { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--gray-100); }
+    .period-section .settings-row-title { font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 6px; }
+    .period-status-desc { font-size: 12px; color: var(--gray-500); margin-top: 6px; }
     .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--gray-100); }
     .settings-row:first-of-type { border-top: none; }
     .settings-row .settings-row-title { font-size: 14px; font-weight: 600; color: var(--gray-800); }
@@ -326,6 +337,7 @@
       </div>
     </div>
     <p id="portal-welcome" class="welcome-text"></p>
+    <div id="period-indicator" class="period-indicator hidden" onclick="openSettingsModal()"></div>
 
     <div id="status-bar" class="hidden" style="margin-bottom:12px;"></div>
 
@@ -508,7 +520,7 @@
   <div id="settings-modal" class="modal-overlay hidden">
     <div class="modal-box">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h3 style="margin:0;">Benachrichtigungen</h3>
+        <h3 style="margin:0;">Einstellungen</h3>
         <button onclick="closeSettingsModal()" style="background:none;border:none;cursor:pointer;color:var(--gray-400);display:flex;padding:4px;" aria-label="Schließen">
           <span class="material-symbols-outlined">close</span>
         </button>
@@ -517,6 +529,12 @@
         <div class="label">Ihre E-Mail-Adresse</div>
         <div class="value" id="settings-email">—</div>
       </div>
+      <div class="period-section">
+        <div class="settings-row-title">Planungsperiode</div>
+        <select id="settings-period-select" onchange="onPeriodSelectChange(this.value)"></select>
+        <div class="period-status-desc" id="settings-period-info"></div>
+      </div>
+      <div class="settings-row-title" style="margin-bottom:0;">Benachrichtigungen</div>
       <div id="settings-rows">
         <div class="settings-row">
           <div>
@@ -583,12 +601,12 @@ const SHIFT_NAMES = {
 // ─── Date Range Picker ───────────────────────────────────────────────
 const drpStates = {};
 
-function renderDateRangePicker(containerId, startDate, endDate, onChange, disabled) {
+function renderDateRangePicker(containerId, startDate, endDate, onChange, disabled, minISO, maxISO) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
   if (!drpStates[containerId]) {
-    const sd = startDate ? new Date(startDate + 'T00:00:00') : null;
+    const sd = startDate ? new Date(startDate + 'T00:00:00') : (minISO ? new Date(minISO + 'T00:00:00') : null);
     drpStates[containerId] = {
       month: sd ? sd.getMonth() : new Date().getMonth(),
       year: sd ? sd.getFullYear() : new Date().getFullYear(),
@@ -606,6 +624,8 @@ function renderDateRangePicker(containerId, startDate, endDate, onChange, disabl
   }
   st.onChange = onChange;
   st.disabled = !!disabled;
+  st.minISO = minISO || null;
+  st.maxISO = maxISO || null;
   if (st.disabled) st.open = false;
 
   const sd = st.startDate ? new Date(st.startDate + 'T00:00:00') : null;
@@ -660,14 +680,16 @@ function renderDateRangePicker(containerId, startDate, endDate, onChange, disabl
     const date = new Date(st.year, st.month, d);
     const dow = date.getDay();
     const isWe = dow === 0 || dow === 6;
+    const outOfRange = (st.minISO && iso < st.minISO) || (st.maxISO && iso > st.maxISO);
     let cls = 'drp-day';
     if (isWe) cls += ' drp-weekend';
     if (iso === todayISO) cls += ' drp-today';
+    if (outOfRange) cls += ' drp-out-of-range';
     if (st.startDate && st.endDate && st.startDate === st.endDate && iso === st.startDate) cls += ' drp-selected';
     else if (st.startDate && iso === st.startDate) cls += ' drp-selected';
     else if (st.endDate && iso === st.endDate) cls += ' drp-selected';
     else if (st.startDate && st.endDate && iso > st.startDate && iso < st.endDate) cls += ' drp-in-range';
-    html += `<div class="${cls}" onclick="drpSelect('${containerId}','${iso}')">${d}</div>`;
+    html += `<div class="${cls}" ${outOfRange ? '' : `onclick="drpSelect('${containerId}','${iso}')"`}>${d}</div>`;
   }
   html += '</div>';
 
@@ -678,6 +700,9 @@ function renderDateRangePicker(containerId, startDate, endDate, onChange, disabl
     html += '<div class="drp-info">Enddatum wählen</div>';
   } else if (st.phase === 'done' && st.startDate && st.endDate) {
     html += `<button class="btn btn-primary btn-sm" onclick="drpConfirm('${containerId}')" style="margin-top:8px;width:100%;">Bestätigen</button>`;
+  }
+  if (st.minISO || st.maxISO) {
+    html += `<div class="drp-info" style="margin-top:4px;">Nur innerhalb der ausgewählten Planungsperiode wählbar</div>`;
   }
   html += '</div>';
   container.innerHTML = html;
@@ -710,6 +735,7 @@ function drpNav(containerId, dir) {
 function drpSelect(containerId, iso) {
   const st = drpStates[containerId];
   if (!st || st.disabled) return;
+  if ((st.minISO && iso < st.minISO) || (st.maxISO && iso > st.maxISO)) return;
 
   if (st.phase === 'start' || st.phase === 'done') {
     // First click (or restart): set start, clear end
@@ -733,7 +759,10 @@ function drpSelect(containerId, iso) {
 function drpRerender(containerId) {
   const st = drpStates[containerId];
   if (!st) return;
-  renderDateRangePicker(containerId, st.startDate, st.endDate, st.onChange, st.disabled);
+  // Must forward minISO/maxISO too — otherwise every internal re-render (day
+  // click, month nav, toggle) would wipe the period bounds after the very
+  // first interaction, letting the end date land outside the selected period.
+  renderDateRangePicker(containerId, st.startDate, st.endDate, st.onChange, st.disabled, st.minISO, st.maxISO);
 }
 
 // ─── Boot ────────────────────────────────────────────────────────────
@@ -794,7 +823,80 @@ function openSettingsModal() {
   document.getElementById('notif-planRelease').checked = !!notificationPrefs.planRelease;
   document.getElementById('notif-scheduleChanges').checked = !!notificationPrefs.scheduleChanges;
   document.getElementById('notif-swapMatches').checked = !!notificationPrefs.swapMatches;
+  renderPeriodSettings();
   document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+// ─── Planning periods ────────────────────────────────────────────────
+const MONTH_NAMES_DE = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+
+function periodLabel(p) {
+  if (p.name) return p.name;
+  const startAbs = p.year * 12 + p.startMonth;
+  const endAbs = startAbs + (p.months || 12) - 1;
+  const endYear = Math.floor(endAbs / 12), endMonth = ((endAbs % 12) + 12) % 12;
+  return `${MONTH_NAMES_DE[p.startMonth]} ${p.year} – ${MONTH_NAMES_DE[endMonth]} ${endYear}`;
+}
+
+function periodStatusDescription(p) {
+  if (!p) return '';
+  if (p.released) return 'Freigegeben — Sie können Ihre Schichten einsehen und ggf. tauschen.';
+  if (p.employeesLocked) return 'In Planung — Änderungen sind derzeit vom Administrator gesperrt.';
+  return 'In Planung — Sie können Urlaub und Präferenzen eintragen.';
+}
+
+/** Small clickable pill under the welcome text, visible on every tab, showing the active period + status. */
+function renderPeriodIndicator() {
+  const el = document.getElementById('period-indicator');
+  if (!el) return;
+  const p = data && data.selectedPeriod;
+  if (!p) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.className = `period-indicator status-${p.released ? 'released' : 'planning'}`;
+  el.innerHTML = `<span class="material-symbols-outlined" style="font-size:16px;">event</span> ${periodLabel(p)} · ${p.released ? 'Freigegeben' : 'In Planung'} <span class="material-symbols-outlined" style="font-size:16px;">expand_more</span>`;
+}
+
+/** Period selector inside the settings modal. */
+function renderPeriodSettings() {
+  const sel = document.getElementById('settings-period-select');
+  const info = document.getElementById('settings-period-info');
+  if (!sel || !data) return;
+  const periods = data.availablePeriods || [];
+  if (periods.length === 0) {
+    sel.innerHTML = '<option value="">Keine Planungsperioden vorhanden</option>';
+    sel.disabled = true;
+    if (info) info.textContent = '';
+    return;
+  }
+  sel.disabled = false;
+  const selectedId = data.selectedPeriod ? data.selectedPeriod.id : '';
+  sel.innerHTML = periods.map(p =>
+    `<option value="${p.id}"${p.id === selectedId ? ' selected' : ''}>${periodLabel(p)} — ${p.released ? 'Freigegeben' : 'In Planung'}</option>`
+  ).join('');
+  if (info) info.textContent = periodStatusDescription(data.selectedPeriod);
+}
+
+async function onPeriodSelectChange(periodId) {
+  if (!periodId) return;
+  try {
+    const resp = await fetch('/api/portal/select-period', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ periodId }),
+    });
+    if (!resp.ok) throw new Error('failed');
+    await loadData();
+    // Jump the mini-calendar to the newly selected period's start month
+    if (data.selectedPeriod) {
+      calYear = data.selectedPeriod.year;
+      calMonth = data.selectedPeriod.startMonth;
+      renderCalendar();
+    }
+    renderPeriodSettings();
+    showToast('✓ Planungsperiode gewechselt', 'success');
+  } catch {
+    showToast('Fehler beim Wechseln der Periode', 'error');
+    renderPeriodSettings();
+  }
 }
 
 function closeSettingsModal() {
@@ -835,12 +937,13 @@ async function loadData() {
   }));
 
   portalStatus = data.employee.portalStatus || 'none';
-  isLocked = !!data.planReleased || !!data.employeesLocked || portalStatus === 'submitted';
+  isLocked = !!data.planReleased || !!data.employeesLocked || portalStatus === 'submitted' || !data.selectedPeriod;
 
   notificationPrefs = data.notificationPreferences || { planRelease: true, scheduleChanges: true, swapMatches: true };
 
   document.getElementById('portal-welcome').textContent = `Hallo, ${data.employee.name}`;
   showView('portal-view');
+  renderPeriodIndicator();
   renderStatusBar();
   renderVacation();
   renderPreferences();
@@ -890,7 +993,8 @@ function renderStatusBar() {
 }
 
 function updateLockState() {
-  const lockMsg = data.planReleased ? 'Schichtplan ist freigegeben — Änderungen sind gesperrt.'
+  const lockMsg = !data.selectedPeriod ? 'Es ist noch keine Planungsperiode angelegt.'
+    : data.planReleased ? 'Schichtplan ist freigegeben — Änderungen sind gesperrt.'
     : data.employeesLocked ? 'Änderungen wurden vom Administrator gesperrt.'
     : portalStatus === 'submitted' ? 'Ihre Daten wurden eingereicht. Änderungen sind nicht mehr möglich.' : '';
   const showLock = isLocked;
@@ -916,12 +1020,23 @@ async function pollVersion() {
 }
 
 // ─── Vacation ────────────────────────────────────────────────────────
+/** ISO date bounds [min, max] of the currently selected planning period, or null if none. */
+function getSelectedPeriodBounds() {
+  if (!data || !data.selectedPeriod) return null;
+  const p = data.selectedPeriod;
+  const start = new Date(p.year, p.startMonth, 1);
+  const end = new Date(p.year, p.startMonth + (p.months || 12), 0);
+  const toISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { min: toISO(start), max: toISO(end) };
+}
+
 function renderVacation() {
   const c = document.getElementById('vacation-ranges');
   const emptyEl = document.getElementById('vacation-empty');
   c.innerHTML = '';
   if (vacationRanges.length === 0) { emptyEl.classList.remove('hidden'); updateVacationTotal(); return; }
   emptyEl.classList.add('hidden');
+  const bounds = getSelectedPeriodBounds();
   vacationRanges.forEach((r, i) => {
     const div = document.createElement('div'); div.className = 'vacation-item';
     const days = calcDays(r.startDate, r.endDate);
@@ -939,7 +1054,7 @@ function renderVacation() {
       vacationRanges[i].startDate = s;
       vacationRanges[i].endDate = e;
       renderVacation();
-    }, isLocked);
+    }, isLocked, bounds?.min, bounds?.max);
   });
   updateVacationTotal();
 }
@@ -959,9 +1074,10 @@ function removeVacation(i) {
 }
 function addVacationRange() {
   const idx = vacationRanges.length;
-  const n = new Date();
+  const bounds = getSelectedPeriodBounds();
+  const n = bounds ? new Date(bounds.min + 'T00:00:00') : new Date();
   vacationRanges.push({ startDate: '', endDate: '' });
-  drpStates[`vac-drp-${idx}`] = { month: n.getMonth(), year: n.getFullYear(), open: true, phase: 'start', startDate: null, endDate: null };
+  drpStates[`vac-drp-${idx}`] = { month: n.getMonth(), year: n.getFullYear(), open: true, phase: 'start', startDate: null, endDate: null, minISO: bounds?.min, maxISO: bounds?.max };
   renderVacation();
 }
 function calcDays(start, end) {
@@ -980,6 +1096,7 @@ function renderPreferences() {
   c.innerHTML = '';
   if (preferences.length === 0) { emptyEl.classList.remove('hidden'); return; }
   emptyEl.classList.add('hidden');
+  const bounds = getSelectedPeriodBounds();
   preferences.forEach((p, i) => {
     const div = document.createElement('div'); div.className = 'pref-card';
     const pickerId = `pref-drp-${i}`;
@@ -1005,7 +1122,7 @@ function renderPreferences() {
       preferences[i].startDate = s;
       preferences[i].endDate = e;
       renderPreferences();
-    }, isLocked);
+    }, isLocked, bounds?.min, bounds?.max);
   });
 }
 function removePreference(i) {
@@ -1015,9 +1132,10 @@ function removePreference(i) {
 }
 function addPreference() {
   const idx = preferences.length;
-  const n = new Date();
+  const bounds = getSelectedPeriodBounds();
+  const n = bounds ? new Date(bounds.min + 'T00:00:00') : new Date();
   preferences.push({ shiftType: 'fruehschicht', startDate: '', endDate: '', preferred: true });
-  drpStates[`pref-drp-${idx}`] = { month: n.getMonth(), year: n.getFullYear(), open: true, phase: 'start', startDate: null, endDate: null };
+  drpStates[`pref-drp-${idx}`] = { month: n.getMonth(), year: n.getFullYear(), open: true, phase: 'start', startDate: null, endDate: null, minISO: bounds?.min, maxISO: bounds?.max };
   renderPreferences();
 }
 

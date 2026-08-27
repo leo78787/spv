@@ -17,6 +17,7 @@ var DEFAULT_SCHEDULER_CONFIG = {
     noConsecutiveVerschieben: true,
     noConsecutiveNacht: true,
     noConsecutiveFruehschicht: true,
+    noNachtBeforeVacation: true,
     respectEmployeeShiftTypes: true,
     respectAvoidancePreferences: true,
     departmentDiversity: true
@@ -122,6 +123,26 @@ function subDays(date, amount) {
 }
 
 // src/utils/scheduler.ts
+function isEmployeeActiveDuring(employee, shiftStart, shiftEnd) {
+  const hire = employee.hireDate ? startOfDay(new Date(employee.hireDate)) : null;
+  const termination = employee.terminationDate ? startOfDay(new Date(employee.terminationDate)) : null;
+  if (hire && startOfDay(shiftStart) < hire) return false;
+  if (termination && startOfDay(shiftEnd) > termination) return false;
+  return true;
+}
+function getEmployeeActiveWeight(employee, rangeStart, rangeEnd) {
+  const rStart = startOfDay(rangeStart);
+  const rEnd = startOfDay(rangeEnd);
+  const totalDays = Math.round((rEnd.getTime() - rStart.getTime()) / 864e5) + 1;
+  if (totalDays <= 0) return 1;
+  const hire = employee.hireDate ? startOfDay(new Date(employee.hireDate)) : null;
+  const termination = employee.terminationDate ? startOfDay(new Date(employee.terminationDate)) : null;
+  const activeStart = hire && hire > rStart ? hire : rStart;
+  const activeEnd = termination && termination < rEnd ? termination : rEnd;
+  const activeDays = Math.round((activeEnd.getTime() - activeStart.getTime()) / 864e5) + 1;
+  return Math.max(0, Math.min(1, activeDays / totalDays));
+}
+var MIN_ACTIVE_WEIGHT = 0.02;
 function canWorkOnDate(employee, date, respectVacationWeekend = true) {
   const d = startOfDay(date);
   const hasVacationOn = (day) => {
@@ -250,9 +271,28 @@ function isBlockedFromNachtAfterVerschieben(employee, nachtStartDate, assignment
     return daysDiff >= 1 && daysDiff <= 7;
   });
 }
-function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, existingAssignments, config2 = DEFAULT_SCHEDULER_CONFIG, _departments) {
+function isBlockedFromNachtBeforeVacation(employee, nachtEndDate) {
+  const checkDay = (day) => {
+    const dayStart = startOfDay(day);
+    const single = (employee.vacationDays || []).some(
+      (vacDay) => startOfDay(new Date(vacDay)).getTime() === dayStart.getTime()
+    );
+    if (single) return true;
+    return (employee.vacationRanges || []).some((r) => {
+      const s = startOfDay(new Date(r.startDate));
+      const e = endOfDay(new Date(r.endDate));
+      return isWithinInterval(dayStart, { start: s, end: e });
+    });
+  };
+  for (let d = 1; d <= 7; d++) {
+    if (checkDay(addDays(nachtEndDate, d))) return true;
+  }
+  return false;
+}
+function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, existingAssignments, config2 = DEFAULT_SCHEDULER_CONFIG, _departments, planRange) {
   const { rules } = config2;
   const available = employees2.filter((emp) => {
+    if (!isEmployeeActiveDuring(emp, startDate, endDate)) return false;
     if (rules.respectEmployeeShiftTypes) {
       const allowed = emp.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
       if (!allowed.includes(shiftType)) return false;
@@ -297,6 +337,9 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
     }
     if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
       if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
+    }
+    if (rules.noNachtBeforeVacation && shiftType === "nachtbereitschaft") {
+      if (isBlockedFromNachtBeforeVacation(emp, endDate)) return false;
     }
     const daysDiffFromEnd = (a) => Math.round((new Date(a.startDate).getTime() - endDate.getTime()) / (1e3 * 60 * 60 * 24));
     if (rules.noVerschiebenAfterNacht && shiftType === "nachtbereitschaft") {
@@ -352,7 +395,10 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
   return available.sort((a, b) => {
     const aCount = countShiftTypeForEmployee(a.id, shiftType, existingAssignments);
     const bCount = countShiftTypeForEmployee(b.id, shiftType, existingAssignments);
-    return aCount - bCount;
+    if (!planRange) return aCount - bCount;
+    const aWeight = Math.max(MIN_ACTIVE_WEIGHT, getEmployeeActiveWeight(a, planRange.start, planRange.end));
+    const bWeight = Math.max(MIN_ACTIVE_WEIGHT, getEmployeeActiveWeight(b, planRange.start, planRange.end));
+    return aCount / aWeight - bCount / bWeight;
   });
 }
 function selectEmployeesWithDepartmentDiversity(employees2, requiredCount, useDiversity = true) {
@@ -416,6 +462,7 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
   const assignments = [];
   const violations = [];
   const startDate = new Date(startYear, startMonth2, 1);
+  const planRange = { start: startDate, end: new Date(startYear, startMonth2 + months, 0) };
   const periods = generateShiftPeriodsForRange(startDate, months);
   const { shiftCounts, rules } = config2;
   const typeOrder = {
@@ -445,6 +492,7 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
     noConsecutiveVerschieben: "Keine zwei Versetzt-Wochen hintereinander",
     noConsecutiveNacht: "Keine zwei Nachtschichten hintereinander",
     noConsecutiveFruehschicht: "Keine zwei Fr\xFChschichten hintereinander",
+    noNachtBeforeVacation: "Keine Nacht in der Woche vor Urlaub",
     respectEmployeeShiftTypes: "Erlaubte Schichttypen pro MA",
     noWeekendAroundVacation: "Kein WE um Urlaub",
     noFruehschichtAdjacentToVerschieben: "Keine Fr\xFChschicht angrenzend an Versetzt",
@@ -461,7 +509,8 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
       period.endDate,
       assignments,
       config2,
-      departments
+      departments,
+      planRange
     );
     const useDiversity = rules.departmentDiversity;
     let selected;
@@ -527,15 +576,22 @@ function cvFairness(counts) {
   const stdDev = Math.sqrt(variance);
   return Math.max(0, 100 - stdDev / avg * 100);
 }
-function computeFairnessScores(employees2, assignments) {
-  const allIds = employees2.map((e) => e.id);
-  const nachtFruehIds = employees2.filter((e) => {
+function computeFairnessScores(employees2, assignments, periodRange) {
+  const weightOf = (e) => periodRange ? getEmployeeActiveWeight(e, periodRange.start, periodRange.end) : 1;
+  const judgeable = periodRange ? employees2.filter((e) => weightOf(e) > 0) : employees2;
+  const allIds = judgeable.map((e) => e.id);
+  const nachtFruehIds = judgeable.filter((e) => {
     const allowed = e.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
     return allowed.includes("nachtbereitschaft") || allowed.includes("fruehschicht");
   }).map((e) => e.id);
-  const countFor = (ids, type) => ids.map(
-    (id) => assignments.filter((a) => a.employees.includes(id) && (type ? a.shiftType === type : true)).length
-  );
+  const empById = new Map(judgeable.map((e) => [e.id, e]));
+  const countFor = (ids, type) => ids.map((id) => {
+    const raw = assignments.filter((a) => a.employees.includes(id) && (type ? a.shiftType === type : true)).length;
+    if (!periodRange) return raw;
+    const emp = empById.get(id);
+    const weight = Math.max(MIN_ACTIVE_WEIGHT, weightOf(emp));
+    return raw / weight;
+  });
   return {
     overall: cvFairness(countFor(allIds, null)),
     verschieben: cvFairness(countFor(allIds, "verschieben")),
@@ -556,9 +612,10 @@ var PREVIEW_MONTHS = 12;
 var TRIAL_COUNT = 3;
 function run(employees2, config2, year2, startMonth2) {
   const scores = [];
+  const periodRange = { start: new Date(year2, startMonth2, 1), end: new Date(year2, startMonth2 + PREVIEW_MONTHS, 0) };
   for (let i = 0; i < TRIAL_COUNT; i++) {
     const { assignments } = generateAutomaticShiftPlan(employees2, year2, startMonth2, PREVIEW_MONTHS, config2);
-    scores.push(computeFairnessScores(employees2, assignments));
+    scores.push(computeFairnessScores(employees2, assignments, periodRange));
   }
   const avg = (key) => +(scores.reduce((s, sc) => s + sc[key], 0) / TRIAL_COUNT).toFixed(1);
   return {
