@@ -1075,14 +1075,25 @@ export function CalendarView() {
                                           </div>
                                         ))}
                                         
-                                        {/* Empty placeholder */}
+                                        {/* Empty placeholder — only when there's truly nothing in the cell yet */}
                                         {shifts.length === 0 && cellLabels.length === 0 && (
-                                          <div 
+                                          <div
                                             onClick={() => setLabelModalData({ employeeId: employee.id, employeeName: employee.name, date: day })}
                                             className="text-xs text-gray-300 text-center py-0.5 cursor-pointer hover:bg-gray-100 rounded transition-colors"
                                             title="Label hinzufügen"
                                           >
                                             -
+                                          </div>
+                                        )}
+
+                                        {/* Add-label affordance — a shift being assigned shouldn't block adding a label too */}
+                                        {shifts.length > 0 && (
+                                          <div
+                                            onClick={() => setLabelModalData({ employeeId: employee.id, employeeName: employee.name, date: day })}
+                                            className="text-[10px] leading-none text-gray-300 text-center py-0.5 cursor-pointer hover:bg-gray-100 hover:text-gray-500 rounded transition-colors"
+                                            title="Label hinzufügen"
+                                          >
+                                            +
                                           </div>
                                         )}
                                       </>
