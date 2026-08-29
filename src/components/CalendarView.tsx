@@ -4,7 +4,8 @@ import { ShiftType, ShiftAssignment, Employee, SHIFT_LABELS, SHIFT_REQUIREMENTS,
 import { getMonthName, getBerlinHolidays } from '../utils/helpers';
 import { ChevronLeft, ChevronRight, Filter, Edit2, X, Download, AlertTriangle, CheckCircle2, Clock, Circle, UserX, Lock, Unlock } from 'lucide-react';
 import ViolationPipeline from './ViolationPipeline';
-import { isBlockedFromFruehschichtDueToAdjacency, isBlockedFromNachtAfterVerschieben, isBlockedFromConsecutiveNacht, isBlockedFromConsecutiveFruehschicht, isBlockedFromVerschiebenDueToAdjacentFruehschicht, isBlockedFromVerschiebenAfterNacht, isBlockedFromConsecutiveVerschieben, hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG, canWorkOnDate } from '../utils/scheduler';
+import { hasAvoidancePreference, getAvailableEmployeesSorted, DEFAULT_SCHEDULER_CONFIG } from '../utils/scheduler';
+import { blockingCustomRules } from '../utils/customRuleEngine';
 import { LabelModal } from './LabelModal';
 import * as XLSX from 'xlsx-js-style';
 
@@ -313,45 +314,15 @@ export function CalendarView() {
       const assignmentDays = eachDayOfInterval({ start: startOfDay(assignmentStart), end: assignmentEnd });
       const reasons: string[] = [];
 
-      // Adjacency checks — gated by rule toggles
-      if (rules.noFruehschichtAdjacentToVerschieben) {
-        if (shiftType === 'fruehschicht' && isBlockedFromFruehschichtDueToAdjacency(empObj, editingShift.date, allAssignments)) {
-          reasons.push('Keine Wochenend‑Frühschicht — angrenzende verschobene Schicht');
-        }
-        if (shiftType === 'verschieben' && isBlockedFromVerschiebenDueToAdjacentFruehschicht(empObj, assignmentStart, assignmentEnd, allAssignments)) {
-          reasons.push('Konflikt: Frühschicht am angrenzenden Wochenende');
-        }
-      }
-      if (rules.noNachtAfterVerschieben && shiftType === 'nachtbereitschaft'
-          && isBlockedFromNachtAfterVerschieben(empObj, assignmentStart, allAssignments)) {
-        reasons.push('Keine Nachtwoche direkt nach Verschieben-Woche');
-      }
-      if (rules.noVerschiebenAfterNacht && shiftType === 'verschieben'
-          && isBlockedFromVerschiebenAfterNacht(empObj, assignmentStart, allAssignments)) {
-        reasons.push('Kein Verschieben direkt nach Nacht-Woche');
-      }
-      if (rules.noConsecutiveVerschieben && shiftType === 'verschieben'
-          && isBlockedFromConsecutiveVerschieben(empObj, assignmentStart, allAssignments)) {
-        reasons.push('Keine zwei aufeinanderfolgenden Verschieben-Wochen');
-      }
-      if (rules.noConsecutiveNacht && shiftType === 'nachtbereitschaft'
-          && isBlockedFromConsecutiveNacht(empObj, assignmentStart, allAssignments)) {
-        reasons.push('Keine zwei aufeinanderfolgenden Nachtwochen');
-      }
-      if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht'
-          && isBlockedFromConsecutiveFruehschicht(empObj, assignmentStart, allAssignments)) {
-        reasons.push('Keine zwei aufeinanderfolgenden Frühschichten');
+      // Planning rules (builtin + custom) — see customRuleEngine.ts
+      for (const rule of blockingCustomRules(config, shiftType as ShiftType, { employee: empObj, startDate: assignmentStart, endDate: assignmentEnd, assignments: allAssignments })) {
+        reasons.push(rule.name);
       }
 
       // Qualification — per-employee allowed shift types
       if (rules.respectEmployeeShiftTypes && empObj.allowedShiftTypes
           && !empObj.allowedShiftTypes.includes(shiftType as ShiftType)) {
         reasons.push(`Schichttyp ${shiftType} nicht erlaubt für diesen MA`);
-      }
-
-      // Vacation boundary
-      if (rules.noWeekendAroundVacation && assignmentDays.some(d => !canWorkOnDate(empObj, d, true))) {
-        reasons.push('Kein Wochenenddienst um Urlaub herum');
       }
 
       // Avoidance
@@ -1284,53 +1255,25 @@ export function CalendarView() {
                     });
 
                     // Individual blocking checks — only for display badges, NOT for isEligible
-                    const blockedFruehVerschAdj = rules.noFruehschichtAdjacentToVerschieben && (
-                      shiftType === 'fruehschicht'
-                        ? isBlockedFromFruehschichtDueToAdjacency(emp, editingShift.date, allAssignments)
-                        : shiftType === 'verschieben'
-                          ? isBlockedFromVerschiebenDueToAdjacentFruehschicht(emp, assignmentStart, new Date(editingShift.assignment.endDate), allAssignments)
-                          : false
-                    );
-                    const blockedNachtAfterVerschieben = rules.noNachtAfterVerschieben
-                      && shiftType === 'nachtbereitschaft'
-                      && isBlockedFromNachtAfterVerschieben(emp, assignmentStart, allAssignments);
-                    const blockedVerschiebenAfterNacht = rules.noVerschiebenAfterNacht
-                      && shiftType === 'verschieben'
-                      && isBlockedFromVerschiebenAfterNacht(emp, assignmentStart, allAssignments);
-                    const blockedConsecVerschieben = rules.noConsecutiveVerschieben
-                      && shiftType === 'verschieben'
-                      && isBlockedFromConsecutiveVerschieben(emp, assignmentStart, allAssignments);
-                    const blockedConsecNacht = rules.noConsecutiveNacht
-                      && shiftType === 'nachtbereitschaft'
-                      && isBlockedFromConsecutiveNacht(emp, assignmentStart, allAssignments);
-                    const blockedConsecFrueh = rules.noConsecutiveFruehschicht
-                      && shiftType === 'fruehschicht'
-                      && isBlockedFromConsecutiveFruehschicht(emp, assignmentStart, allAssignments);
+                    const matchedRules = blockingCustomRules(config, shiftType as ShiftType, {
+                      employee: emp, startDate: assignmentStart, endDate: new Date(editingShift.assignment.endDate), assignments: allAssignments,
+                    });
+                    const vacationBoundaryRule = matchedRules.find(r => r.builtinKey === 'noWeekendAroundVacation');
+                    const adjacencyRules = matchedRules.filter(r => r.builtinKey !== 'noWeekendAroundVacation' && r.builtinKey !== 'noNachtBeforeVacation');
 
-                    const blockedByAdjacency = blockedFruehVerschAdj || blockedNachtAfterVerschieben
-                      || blockedVerschiebenAfterNacht || blockedConsecVerschieben
-                      || blockedConsecNacht || blockedConsecFrueh;
+                    const blockedByAdjacency = adjacencyRules.length > 0;
 
                     const blockedByQualification = rules.respectEmployeeShiftTypes
                       && emp.allowedShiftTypes
                       && !emp.allowedShiftTypes.includes(shiftType as ShiftType);
 
                     const assignmentDaysList = eachDayOfInterval({ start: assignmentStart, end: new Date(editingShift.assignment.endDate) });
-                    const blockedByVacationBoundary = !isOnVacation
-                      && rules.noWeekendAroundVacation
-                      && assignmentDaysList.some(d => !canWorkOnDate(emp, d, true));
+                    const blockedByVacationBoundary = !isOnVacation && !!vacationBoundaryRule;
 
                     const blockedByAvoidance = rules.respectAvoidancePreferences
                       && assignmentDaysList.some(d => hasAvoidancePreference(emp, shiftType as ShiftType, d));
 
-                    const adjacencyLabel = blockedFruehVerschAdj
-                      ? (shiftType === 'fruehschicht' ? 'Gesperrt: angrenz. Schicht' : 'Gesperrt: angrenz. Frühschicht')
-                      : blockedNachtAfterVerschieben ? 'Keine Nacht nach Verschieben'
-                      : blockedVerschiebenAfterNacht ? 'Kein Verschieben nach Nacht'
-                      : blockedConsecVerschieben    ? 'Aufeinandf. Verschieben'
-                      : blockedConsecNacht          ? 'Aufeinandf. Nacht'
-                      : blockedConsecFrueh          ? 'Aufeinandf. Frühschicht'
-                      : '';
+                    const adjacencyLabel = adjacencyRules[0]?.name ?? '';
 
                     const hasOtherOverlapping = otherAssignments.some(a => {
                       if (!a.employees.includes(emp.id)) return false;

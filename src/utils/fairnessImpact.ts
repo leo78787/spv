@@ -46,7 +46,9 @@ export function computeFairnessScores(
   periodRange?: { start: Date; end: Date }
 ): FairnessScores {
   const weightOf = (e: Employee) => periodRange ? getEmployeeActiveWeight(e, periodRange.start, periodRange.end) : 1;
-  const judgeable = periodRange ? employees.filter(e => weightOf(e) > 0) : employees;
+  const judgeable = employees
+    .filter(e => !e.excludeFromPlanning)
+    .filter(e => !periodRange || weightOf(e) > 0);
 
   const allIds = judgeable.map(e => e.id);
   const nachtFruehIds = judgeable
@@ -104,8 +106,8 @@ function delta(baseline: FairnessScores, changed: FairnessScores): ImpactDelta {
 
 export interface ImpactFactors {
   baseline: FairnessScores;
-  /** Delta per rule when that rule is toggled from its current state */
-  rules: Partial<Record<keyof SchedulerConfig['rules'], ImpactDelta>>;
+  /** Delta per rule when that rule is toggled from its current state — keyed by SchedulerRules key for system rules, or CustomRule.id for custom rules. */
+  rules: Record<string, ImpactDelta>;
   /** Delta per count input for +1 and -1 change */
   counts: {
     verschieben:       CountImpact;
@@ -164,6 +166,13 @@ export function computeImpactFactors(
   for (const key of Object.keys(config.rules) as Array<keyof SchedulerConfig['rules']>) {
     const cfg: SchedulerConfig = { ...config, rules: { ...config.rules, [key]: !config.rules[key] } };
     rules[key] = delta(baseline, run(employees, cfg, year, startMonth));
+  }
+  for (const customRule of config.customRules || []) {
+    const cfg: SchedulerConfig = {
+      ...config,
+      customRules: config.customRules.map(r => r.id === customRule.id ? { ...r, enabled: !r.enabled } : r),
+    };
+    rules[customRule.id] = delta(baseline, run(employees, cfg, year, startMonth));
   }
 
   // ── shift counts (+1 / -1) ──

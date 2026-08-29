@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
+import { Calendar, Users, AlertCircle, Sparkles, Download, Settings, ChevronDown, ChevronUp, AlertTriangle, Loader2, Zap, Scale, Pencil, Plus } from 'lucide-react';
 import { useStore, getAuthToken } from '../store';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerConfig } from '../utils/scheduler';
-import { SHIFT_LABELS } from '../types';
+
+const RuleEditPopup = lazy(() => import('./RuleEditPopup').then(m => ({ default: m.RuleEditPopup })));
+import { SHIFT_LABELS, CustomRule } from '../types';
 import { getMonthName, generateId, reviveImportedPlan } from '../utils/helpers';
 import ViolationPipeline from './ViolationPipeline';
 import { PlanningPeriodManager } from './PlanningPeriodManager';
@@ -94,7 +96,7 @@ const badgeCls = (v: number) =>
   'text-gray-500 bg-gray-50 border-gray-200';
 
 /** One row of 4 fairness delta badges, each showing “delta → result%” */
-function ImpactBadges({
+export function ImpactBadges({
   d, baseline, loading,
 }: {
   d: ImpactDelta | undefined;
@@ -133,7 +135,7 @@ function ImpactBadges({
 }
 
 /** +1 / -1 rows for count inputs */
-function CountImpactBadges({
+export function CountImpactBadges({
   ci, baseline, loading, unit = 'Person',
 }: {
   ci: CountImpact | undefined;
@@ -164,7 +166,7 @@ export function ShiftPlanning() {
     employees, departments, planningPeriods,
     addEmployee, addDepartment, addLabel, addCalendarLabel, acknowledgeViolation,
     applyGeneratedPeriod, importPeriodContent, clearPeriodAssignments, setPeriodReleased,
-    adminRole, permissions,
+    adminRole, permissions, setDefaultSchedulerConfig,
   } = useStore();
   const canEdit = adminRole === 'admin' || (adminRole === 'leitung' && permissions.includes('planning'));
 
@@ -347,12 +349,26 @@ export function ShiftPlanning() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showConfig, employees, schedulerConfig, selectedYear, selectedMonth, impactFactors]);
 
-  // Helpers for updating config
-  const setShiftCount = (type: keyof SchedulerConfig['shiftCounts'], val: number) =>
-    setSchedulerConfig(c => ({ ...c, shiftCounts: { ...c.shiftCounts, [type]: val } }));
+  // Rule list editing: null = popup closed, { rule: null } = adding a new
+  // rule, { rule } = editing an existing one (system or custom — both are
+  // just CustomRule entries in schedulerConfig.customRules now).
+  const [editingRule, setEditingRule] = useState<{ rule: CustomRule | null } | null>(null);
 
-  const setRule = (rule: keyof SchedulerConfig['rules'], val: boolean) =>
-    setSchedulerConfig(c => ({ ...c, rules: { ...c.rules, [rule]: val } }));
+  const saveRule = (rule: CustomRule) => {
+    setSchedulerConfig(c => {
+      const existingIdx = (c.customRules || []).findIndex(r => r.id === rule.id);
+      const customRules = existingIdx >= 0
+        ? c.customRules.map(r => r.id === rule.id ? rule : r)
+        : [...(c.customRules || []), rule];
+      return { ...c, customRules };
+    });
+    setEditingRule(null);
+  };
+
+  const deleteRule = (ruleId: string) => {
+    setSchedulerConfig(c => ({ ...c, customRules: (c.customRules || []).filter(r => r.id !== ruleId) }));
+    setEditingRule(null);
+  };
 
   // Persist current schedulerConfig to module cache so edits survive unmounts
   useEffect(() => {
@@ -785,75 +801,52 @@ export function ShiftPlanning() {
 
         {showConfig && (
           <div className="px-4 sm:px-6 pb-6 border-t border-gray-100 space-y-6">
-
             {/* Shift Counts */}
             <div>
               <h4 className="font-semibold text-gray-800 mt-4 mb-3">Gleichzeitige Schichtbesetzung
                 {isComputingImpact && <span className="ml-2 text-xs font-normal text-gray-400 inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" />Fairness-Vorschau…</span>}
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-
-                {/* Versetzte Schicht */}
                 <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-sm font-medium text-gray-700">Versetzte Schicht (Mo–Fr)</span>
-                    <input
-                      type="number" min={1} max={20}
-                      value={schedulerConfig.shiftCounts.verschieben}
-                      onChange={e => setShiftCount('verschieben', Math.max(1, Number(e.target.value)))}
+                    <input type="number" min={1} max={20} value={schedulerConfig.shiftCounts.verschieben}
+                      onChange={e => setSchedulerConfig(c => ({ ...c, shiftCounts: { ...c.shiftCounts, verschieben: Math.max(1, Number(e.target.value)) } }))}
                       disabled={!canEdit}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
-                    />
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500" />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
                   <CountImpactBadges ci={impactFactors?.counts.verschieben} baseline={impactFactors?.baseline} loading={isComputingImpact} />
                 </div>
-
-                {/* Nachtbereitschaft */}
                 <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-sm font-medium text-gray-700">Nachtbereitschaft (Sa–Sa)</span>
-                    <input
-                      type="number" min={1} max={20}
-                      value={schedulerConfig.shiftCounts.nachtbereitschaft}
-                      onChange={e => setShiftCount('nachtbereitschaft', Math.max(1, Number(e.target.value)))}
+                    <input type="number" min={1} max={20} value={schedulerConfig.shiftCounts.nachtbereitschaft}
+                      onChange={e => setSchedulerConfig(c => ({ ...c, shiftCounts: { ...c.shiftCounts, nachtbereitschaft: Math.max(1, Number(e.target.value)) } }))}
                       disabled={!canEdit}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
-                    />
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500" />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
                   <CountImpactBadges ci={impactFactors?.counts.nachtbereitschaft} baseline={impactFactors?.baseline} loading={isComputingImpact} />
                 </div>
-
-                {/* Frühschicht */}
                 <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-sm font-medium text-gray-700">Frühschicht WE (Sa–So)</span>
-                    <input
-                      type="number" min={1} max={20}
-                      value={schedulerConfig.shiftCounts.fruehschicht}
-                      onChange={e => setShiftCount('fruehschicht', Math.max(1, Number(e.target.value)))}
+                    <input type="number" min={1} max={20} value={schedulerConfig.shiftCounts.fruehschicht}
+                      onChange={e => setSchedulerConfig(c => ({ ...c, shiftCounts: { ...c.shiftCounts, fruehschicht: Math.max(1, Number(e.target.value)) } }))}
                       disabled={!canEdit}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
-                    />
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500" />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
                   <CountImpactBadges ci={impactFactors?.counts.fruehschicht} baseline={impactFactors?.baseline} loading={isComputingImpact} />
                 </div>
-
-                {/* Shift count inputs end here */}
-
-                {/* Ü55 Verschieben-Slots */}
                 <div className="bg-amber-50 rounded-lg p-3 border border-amber-200 space-y-2">
                   <label className="flex flex-col gap-1">
                     <span className="text-sm font-medium text-amber-800">Ü55 Verschieben-Plätze</span>
-                    <input
-                      type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
-                      value={schedulerConfig.over55VerschiebenSlots}
+                    <input type="number" min={0} max={schedulerConfig.shiftCounts.verschieben} value={schedulerConfig.over55VerschiebenSlots}
                       onChange={e => setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: Math.max(0, Math.min(c.shiftCounts.verschieben, Number(e.target.value))) }))}
                       disabled={!canEdit}
-                      className="w-24 px-3 py-2 border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100 disabled:text-gray-500"
-                    />
+                      className="w-24 px-3 py-2 border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100 disabled:text-gray-500" />
                   </label>
                   <p className="text-xs text-amber-600">Mindestanzahl Ü55-Mitarbeiter pro Versetzt-Woche</p>
                   <CountImpactBadges ci={impactFactors?.counts.over55VerschiebenSlots} baseline={impactFactors?.baseline} loading={isComputingImpact} unit="Platz" />
@@ -861,42 +854,22 @@ export function ShiftPlanning() {
               </div>
             </div>
 
-            {/* Rule Toggles */}
+            {/* Behavior toggles (not block-based — selection strategies, not conditions) */}
             <div>
-              <h4 className="font-semibold text-gray-800 mb-3">Aktive Regeln</h4>
+              <h4 className="font-semibold text-gray-800 mb-3">Verhaltensoptionen</h4>
               <div className="space-y-2">
                 {([
-                  { key: 'noWeekendAroundVacation',             label: 'Kein Wochenenddienst direkt vor/nach Urlaub' },
-                  { key: 'noFruehschichtAdjacentToVerschieben', label: 'Keine Frühschicht am Wochenende angrenzend an Versetzt-Woche' },
-                  { key: 'noNachtAfterVerschieben',             label: 'Keine Nacht in der Folgewoche nach Versetzt-Woche (7-Tage-Sperre)' },
-                  { key: 'noVerschiebenAfterNacht',             label: 'Kein Versetzt-Dienst in der Woche nach Nachtbereitschaft (7-Tage-Sperre)' },
-                  { key: 'noConsecutiveVerschieben',            label: 'Keine zwei Versetzt-Wochen hintereinander (für dieselbe Person)' },
-                  { key: 'noConsecutiveNacht',                  label: 'Keine zwei Nachtschichten hintereinander (für dieselbe Person)' },
-                  { key: 'noConsecutiveFruehschicht',            label: 'Keine zwei Frühschichten (Wochenende) hintereinander (für dieselbe Person)' },
-                  { key: 'noNachtBeforeVacation',                label: 'Keine Nachtbereitschaft in der Woche vor Urlaub' },
-                  { key: 'respectEmployeeShiftTypes',          label: 'Erlaubte Schichttypen pro Mitarbeiter berücksichtigen' },
-                  { key: 'respectAvoidancePreferences',         label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen', soft: true },
-                  { key: 'departmentDiversity',                 label: 'Abteilungsvielfalt bei der Auswahl bevorzugen', soft: true },
-                ] as { key: keyof SchedulerConfig['rules']; label: string; soft?: boolean }[]).map(({ key, label, soft }) => (
-                  <div key={key} className={`rounded-lg px-3 py-2 border ${
-                    soft ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'
-                  }`}>
+                  { key: 'respectEmployeeShiftTypes', label: 'Erlaubte Schichttypen pro Mitarbeiter berücksichtigen' },
+                  { key: 'respectAvoidancePreferences', label: 'Vermeidungspräferenzen der Mitarbeiter berücksichtigen' },
+                  { key: 'departmentDiversity', label: 'Abteilungsvielfalt bei der Auswahl bevorzugen' },
+                ] as { key: keyof SchedulerConfig['rules']; label: string }[]).map(({ key, label }) => (
+                  <div key={key} className="rounded-lg px-3 py-2 border bg-amber-50 border-amber-200">
                     <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={schedulerConfig.rules[key]}
-                        onClick={() => canEdit && setRule(key, !schedulerConfig.rules[key])}
+                      <button type="button" role="switch" aria-checked={schedulerConfig.rules[key]}
+                        onClick={() => canEdit && setSchedulerConfig(c => ({ ...c, rules: { ...c.rules, [key]: !c.rules[key] } }))}
                         disabled={!canEdit}
-                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                          schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'
-                        }`}
-                      >
-                        <span
-                          className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                            schedulerConfig.rules[key] ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
+                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'}`}>
+                        <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${schedulerConfig.rules[key] ? 'translate-x-5' : 'translate-x-0'}`} />
                       </button>
                       <span className="text-sm text-gray-700 leading-tight">{label}</span>
                     </div>
@@ -909,17 +882,77 @@ export function ShiftPlanning() {
               </div>
             </div>
 
-            {canEdit && (
-            <button
-              onClick={() => setSchedulerConfig(DEFAULT_SCHEDULER_CONFIG)}
-              className="text-sm text-gray-500 underline hover:text-gray-700"
-            >
-              Auf Standardwerte zurücksetzen
-            </button>
-            )}
+            {/* Rules list */}
+            <div>
+              <h4 className="font-semibold text-gray-800 mb-3">Regeln</h4>
+              <div className="space-y-2">
+                {(schedulerConfig.customRules || []).map(rule => (
+                  <div key={rule.id} className={`rounded-lg px-3 py-2 border ${rule.enabled ? 'bg-gray-50 border-gray-200' : 'bg-gray-100 border-gray-200 opacity-60'}`}>
+                    <div className="flex items-center gap-3">
+                      <button type="button" role="switch" aria-checked={rule.enabled}
+                        onClick={() => canEdit && setSchedulerConfig(c => ({ ...c, customRules: c.customRules.map(r => r.id === rule.id ? { ...r, enabled: !r.enabled } : r) }))}
+                        disabled={!canEdit}
+                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${rule.enabled ? 'bg-primary-600' : 'bg-gray-300'}`}>
+                        <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${rule.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-gray-700 leading-tight truncate">
+                          {rule.name}
+                          {rule.builtinKey && <span className="ml-2 text-[10px] font-normal px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded-full align-middle">System</span>}
+                        </div>
+                        <div className="text-xs text-gray-500 truncate">{rule.targetShiftTypes.map(t => SHIFT_LABELS[t]).join(', ')}</div>
+                      </div>
+                      <button onClick={() => setEditingRule({ rule })} title="Regel bearbeiten" className="p-1.5 text-gray-500 hover:bg-gray-200 rounded flex-shrink-0">
+                        <Pencil size={15} />
+                      </button>
+                    </div>
+                    <div className="ml-13 pl-[52px] space-y-1">
+                      <p className="text-xs text-gray-400">Fairness bei {rule.enabled ? 'Deaktivierung' : 'Aktivierung'}:</p>
+                      <ImpactBadges d={impactFactors?.rules[rule.id]} baseline={impactFactors?.baseline} loading={isComputingImpact} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {canEdit && (
+                <div className="flex flex-wrap items-center gap-3 mt-3">
+                  <button
+                    onClick={() => setEditingRule({ rule: null })}
+                    className="px-3 py-1.5 bg-primary-600 text-white rounded text-sm font-medium hover:bg-primary-700 flex items-center gap-1.5"
+                  >
+                    <Plus size={15} /> Neue Regel hinzufügen
+                  </button>
+                  <button
+                    onClick={() => setSchedulerConfig(DEFAULT_SCHEDULER_CONFIG)}
+                    className="text-sm text-gray-500 underline hover:text-gray-700"
+                  >
+                    Auf Standardwerte zurücksetzen
+                  </button>
+                  <button
+                    onClick={() => setDefaultSchedulerConfig(schedulerConfig)}
+                    className="text-sm px-3 py-1.5 border border-primary-300 text-primary-700 rounded hover:bg-primary-50"
+                  >
+                    Als Standard für neue Perioden speichern
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
+
+      {editingRule && (
+        <Suspense fallback={<div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"><div className="bg-white rounded-lg p-6 text-gray-500">Lädt…</div></div>}>
+          <RuleEditPopup
+            rule={editingRule.rule}
+            departments={departments}
+            canEdit={canEdit}
+            onSave={saveRule}
+            onDelete={editingRule.rule ? () => deleteRule(editingRule.rule!.id) : undefined}
+            onClose={() => setEditingRule(null)}
+          />
+        </Suspense>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════
            4-Step Pipeline: Grundplan → Gleichheit → Gesamt-Balance → Fairness

@@ -99,6 +99,8 @@ export function EmployeeManagement() {
         preferences: formData.preferences || [],
         hireDate: formData.hireDate,
         terminationDate: formData.terminationDate,
+        isOver55: formData.isOver55,
+        excludeFromPlanning: formData.excludeFromPlanning,
       };
       addEmployee(newEmployee);
     }
@@ -663,11 +665,17 @@ export function EmployeeManagement() {
       )}
 
       {showAddForm && (
-        <form ref={formRef} onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md mb-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {editingId ? 'Mitarbeiter bearbeiten' : 'Neuer Mitarbeiter'}
-          </h3>
-          
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/40 p-2 sm:p-4 overflow-y-auto">
+        <form ref={formRef} onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-xl mb-6 w-full max-w-3xl my-4 sm:my-0 max-h-[95vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">
+              {editingId ? 'Mitarbeiter bearbeiten' : 'Neuer Mitarbeiter'}
+            </h3>
+            <button type="button" onClick={resetForm} className="p-2 hover:bg-gray-100 rounded" aria-label="Schließen">
+              <X size={18} />
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
@@ -706,8 +714,8 @@ export function EmployeeManagement() {
             </div>
           </div>
           
-          <div className="mb-4">
-            <label className="flex items-center gap-2 mb-3">
+          <div className="mb-4 space-y-3">
+            <label className="flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={!!formData.isOver55}
@@ -715,6 +723,18 @@ export function EmployeeManagement() {
                 className="w-4 h-4 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
               />
               <span className="text-sm font-medium text-gray-700">Ü55 Mitarbeiter</span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                checked={!!formData.excludeFromPlanning}
+                onChange={e => setFormData({ ...formData, excludeFromPlanning: e.target.checked })}
+                className="w-4 h-4 mt-0.5 text-rose-600 border-gray-300 rounded focus:ring-rose-500"
+              />
+              <span>
+                <span className="text-sm font-medium text-gray-700 block">Nicht in Planung &amp; Fairness KPIs berücksichtigen</span>
+                <span className="text-xs text-gray-500">Wird von der automatischen Planung und den Fairness-KPIs ausgeschlossen, im Kalender aber weiterhin angezeigt.</span>
+              </span>
             </label>
           </div>
 
@@ -1070,6 +1090,7 @@ export function EmployeeManagement() {
             </button>
           </div>
         </form>
+        </div>
       )}
 
       {/* Toast notification */}
@@ -1154,6 +1175,9 @@ export function EmployeeManagement() {
                 <div className="flex flex-wrap gap-2">
                   {employee.isOver55 && (
                     <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs font-semibold">Ü55</span>
+                  )}
+                  {employee.excludeFromPlanning && (
+                    <span className="px-2 py-1 bg-rose-100 text-rose-800 rounded-md text-xs font-semibold">Nicht in Planung</span>
                   )}
                   {(employee.allowedShiftTypes && employee.allowedShiftTypes.length < 3) && (
                     <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded-md text-xs">

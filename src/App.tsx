@@ -5,11 +5,12 @@ import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
 import { ViewTab, DEFAULT_TAB_VISIBILITY } from './types';
-import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight, Palmtree } from 'lucide-react';
+import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight, Palmtree, Trello } from 'lucide-react';
 
 const SwapManagement = lazy(() => import('./components/SwapManagement').then(m => ({ default: m.SwapManagement })));
 import { HolidaySettings } from './components/HolidaySettings';
 import { AdminVacationCalendar } from './components/AdminVacationCalendar';
+const BoardsModal = lazy(() => import('./components/boards/BoardsModal').then(m => ({ default: m.BoardsModal })));
 import { Login } from './components/Login';
 import { getAuthToken, clearAuthToken, loadFromServer, useStore } from './store';
 
@@ -20,6 +21,7 @@ function App() {
   });
   const [showHolidaySettings, setShowHolidaySettings] = useState(false);
   const [showVacationCalendar, setShowVacationCalendar] = useState(false);
+  const [showBoards, setShowBoards] = useState(false);
   const [stateLoaded, setStateLoaded] = useState(false);
 
   // Persist last visited tab
@@ -123,6 +125,12 @@ function App() {
       <Palmtree size={16} />
     </button>
   );
+
+  const BoardsButton = () => (
+    <button onClick={() => setShowBoards(true)} title="Boards" className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600">
+      <Trello size={16} />
+    </button>
+  );
   
   // if not authenticated show login screen only
   if (!authenticated) {
@@ -154,6 +162,7 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-2">
+              <BoardsButton />
               <VacationCalendarButton />
               <SettingsButton />
               <button
@@ -230,6 +239,13 @@ function App() {
       {/* Vacation calendar modal */}
       {showVacationCalendar && (
         <AdminVacationCalendar onClose={() => setShowVacationCalendar(false)} />
+      )}
+
+      {/* Boards modal */}
+      {showBoards && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"><div className="bg-white rounded-lg p-6 text-gray-500">Lädt…</div></div>}>
+          <BoardsModal onClose={() => setShowBoards(false)} />
+        </Suspense>
       )}
 
       {/* Footer */}

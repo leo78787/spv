@@ -2,6 +2,89 @@
 import { workerData, parentPort } from "worker_threads";
 
 // src/types.ts
+var BUILTIN_RULES = [
+  {
+    id: "builtin-noWeekendAroundVacation",
+    builtinKey: "noWeekendAroundVacation",
+    name: "Kein Wochenenddienst direkt vor/nach Urlaub",
+    description: "Blockiert jede Wochenend-Schicht (Sa/So), wenn 1\u20132 Tage davor oder danach Urlaub liegt.",
+    enabled: true,
+    targetShiftTypes: ["fruehschicht", "verschieben", "nachtbereitschaft"],
+    condition: { type: "weekendNearVacation", minDays: 1, maxDays: 2 }
+  },
+  {
+    id: "builtin-noFruehschichtAdjacentToVerschieben-1",
+    builtinKey: "noFruehschichtAdjacentToVerschieben",
+    name: "Keine Fr\xFChschicht am Wochenende angrenzend an Versetzt-Woche",
+    description: "Blockiert Fr\xFChschicht, wenn 1\u20132 Tage davor oder danach eine Versetzt-Woche liegt.",
+    enabled: true,
+    targetShiftTypes: ["fruehschicht"],
+    condition: { type: "assignmentGap", shiftType: "verschieben", direction: "either", minDays: 1, maxDays: 2 }
+  },
+  {
+    id: "builtin-noFruehschichtAdjacentToVerschieben-2",
+    builtinKey: "noFruehschichtAdjacentToVerschieben",
+    name: "Keine Fr\xFChschicht direkt nach Nachtbereitschaft",
+    description: "Blockiert Fr\xFChschicht, wenn innerhalb der letzten 8 Tage eine Nachtbereitschaft endete.",
+    enabled: true,
+    targetShiftTypes: ["fruehschicht"],
+    condition: { type: "assignmentGap", shiftType: "nachtbereitschaft", direction: "before", minDays: 0, maxDays: 8 }
+  },
+  {
+    id: "builtin-noNachtAfterVerschieben",
+    builtinKey: "noNachtAfterVerschieben",
+    name: "Keine Nacht in der Folgewoche nach Versetzt-Woche",
+    description: "Blockiert Nachtbereitschaft, wenn innerhalb der letzten 8 Tage eine Versetzt-Woche endete (7-Tage-Sperre).",
+    enabled: true,
+    targetShiftTypes: ["nachtbereitschaft"],
+    condition: { type: "assignmentGap", shiftType: "verschieben", direction: "before", minDays: 1, maxDays: 8 }
+  },
+  {
+    id: "builtin-noVerschiebenAfterNacht",
+    builtinKey: "noVerschiebenAfterNacht",
+    name: "Kein Versetzt-Dienst in der Woche nach Nachtbereitschaft",
+    description: "Blockiert Versetzt-Dienst, wenn innerhalb der letzten 8 Tage eine Nachtbereitschaft endete (7-Tage-Sperre).",
+    enabled: true,
+    targetShiftTypes: ["verschieben"],
+    condition: { type: "assignmentGap", shiftType: "nachtbereitschaft", direction: "before", minDays: 1, maxDays: 8 }
+  },
+  {
+    id: "builtin-noConsecutiveVerschieben",
+    builtinKey: "noConsecutiveVerschieben",
+    name: "Keine zwei Versetzt-Wochen hintereinander",
+    description: "Blockiert eine Versetzt-Woche, wenn 1\u20137 Tage davor oder danach bereits eine Versetzt-Woche f\xFCr dieselbe Person liegt.",
+    enabled: true,
+    targetShiftTypes: ["verschieben"],
+    condition: { type: "assignmentGap", shiftType: "verschieben", direction: "either", minDays: 1, maxDays: 7 }
+  },
+  {
+    id: "builtin-noConsecutiveNacht",
+    builtinKey: "noConsecutiveNacht",
+    name: "Keine zwei Nachtschichten hintereinander",
+    description: "Blockiert eine Nachtbereitschaft, wenn 1\u20138 Tage davor oder danach bereits eine Nachtbereitschaft f\xFCr dieselbe Person liegt.",
+    enabled: true,
+    targetShiftTypes: ["nachtbereitschaft"],
+    condition: { type: "assignmentGap", shiftType: "nachtbereitschaft", direction: "either", minDays: 1, maxDays: 8 }
+  },
+  {
+    id: "builtin-noConsecutiveFruehschicht",
+    builtinKey: "noConsecutiveFruehschicht",
+    name: "Keine zwei Fr\xFChschichten (Wochenende) hintereinander",
+    description: "Blockiert eine Fr\xFChschicht, wenn 1\u20137 Tage davor oder danach bereits eine Fr\xFChschicht f\xFCr dieselbe Person liegt.",
+    enabled: true,
+    targetShiftTypes: ["fruehschicht"],
+    condition: { type: "assignmentGap", shiftType: "fruehschicht", direction: "either", minDays: 1, maxDays: 7 }
+  },
+  {
+    id: "builtin-noNachtBeforeVacation",
+    builtinKey: "noNachtBeforeVacation",
+    name: "Keine Nachtbereitschaft in der Woche vor Urlaub",
+    description: "Blockiert Nachtbereitschaft, wenn 1\u20137 Tage danach Urlaub beginnt.",
+    enabled: true,
+    targetShiftTypes: ["nachtbereitschaft"],
+    condition: { type: "nearVacation", direction: "after", minDays: 1, maxDays: 7 }
+  }
+];
 var DEFAULT_SCHEDULER_CONFIG = {
   shiftCounts: {
     verschieben: 5,
@@ -10,18 +93,11 @@ var DEFAULT_SCHEDULER_CONFIG = {
   },
   over55VerschiebenSlots: 2,
   rules: {
-    noWeekendAroundVacation: true,
-    noFruehschichtAdjacentToVerschieben: true,
-    noNachtAfterVerschieben: true,
-    noVerschiebenAfterNacht: true,
-    noConsecutiveVerschieben: true,
-    noConsecutiveNacht: true,
-    noConsecutiveFruehschicht: true,
-    noNachtBeforeVacation: true,
     respectEmployeeShiftTypes: true,
     respectAvoidancePreferences: true,
     departmentDiversity: true
-  }
+  },
+  customRules: BUILTIN_RULES.map((r) => ({ ...r }))
 };
 
 // node_modules/date-fns/toDate.mjs
@@ -93,13 +169,6 @@ function addWeeks(date, amount) {
   return addDays(date, days);
 }
 
-// node_modules/date-fns/isSameDay.mjs
-function isSameDay(dateLeft, dateRight) {
-  const dateLeftStartOfDay = startOfDay(dateLeft);
-  const dateRightStartOfDay = startOfDay(dateRight);
-  return +dateLeftStartOfDay === +dateRightStartOfDay;
-}
-
 // node_modules/date-fns/endOfDay.mjs
 function endOfDay(date) {
   const _date = toDate(date);
@@ -120,6 +189,82 @@ function isWithinInterval(date, interval) {
 // node_modules/date-fns/subDays.mjs
 function subDays(date, amount) {
   return addDays(date, -amount);
+}
+
+// src/utils/customRuleEngine.ts
+function dayDiff(a, b) {
+  return Math.round((startOfDay(a).getTime() - startOfDay(b).getTime()) / (1e3 * 60 * 60 * 24));
+}
+function inRange(gap, minDays, maxDays) {
+  return gap >= minDays && gap <= maxDays;
+}
+function matchesGapDirection(direction, minDays, maxDays, otherStart, otherEnd, shiftStart, shiftEnd) {
+  const gapBefore = dayDiff(shiftStart, otherEnd);
+  const gapAfter = dayDiff(otherStart, shiftEnd);
+  if (direction === "before") return inRange(gapBefore, minDays, maxDays);
+  if (direction === "after") return inRange(gapAfter, minDays, maxDays);
+  return inRange(gapBefore, minDays, maxDays) || inRange(gapAfter, minDays, maxDays);
+}
+function vacationRangesOf(employee) {
+  const singleDay = (employee.vacationDays || []).map((d) => ({ start: new Date(d), end: new Date(d) }));
+  const multiDay = (employee.vacationRanges || []).map((r) => ({ start: new Date(r.startDate), end: new Date(r.endDate) }));
+  return [...singleDay, ...multiDay];
+}
+function rangesOverlap(a, windowStart, windowEnd) {
+  return startOfDay(a.start).getTime() <= startOfDay(windowEnd).getTime() && startOfDay(a.end).getTime() >= startOfDay(windowStart).getTime();
+}
+function nearVacationMatch(employee, direction, minDays, maxDays, shiftStart, shiftEnd) {
+  const ranges = vacationRangesOf(employee);
+  if (ranges.length === 0) return false;
+  const beforeWindow = { start: addDays(shiftStart, -maxDays), end: addDays(shiftStart, -minDays) };
+  const afterWindow = { start: addDays(shiftEnd, minDays), end: addDays(shiftEnd, maxDays) };
+  return ranges.some((r) => {
+    if (direction === "before") return rangesOverlap(r, beforeWindow.start, beforeWindow.end);
+    if (direction === "after") return rangesOverlap(r, afterWindow.start, afterWindow.end);
+    return rangesOverlap(r, beforeWindow.start, beforeWindow.end) || rangesOverlap(r, afterWindow.start, afterWindow.end);
+  });
+}
+function evaluateConditionNode(node, ctx) {
+  switch (node.type) {
+    case "and":
+      return node.children.every((c) => evaluateConditionNode(c, ctx));
+    case "or":
+      return node.children.some((c) => evaluateConditionNode(c, ctx));
+    case "not":
+      return !evaluateConditionNode(node.child, ctx);
+    case "isWeekend": {
+      const day = ctx.startDate.getDay();
+      return day === 0 || day === 6;
+    }
+    case "employeeAttribute":
+      if (node.attribute === "isOver55") return !!ctx.employee.isOver55 === node.equals;
+      return ctx.employee.department === node.equals;
+    case "assignmentGap":
+      return ctx.assignments.some((a) => {
+        if (a.shiftType !== node.shiftType || !a.employees.includes(ctx.employee.id)) return false;
+        return matchesGapDirection(
+          node.direction,
+          node.minDays,
+          node.maxDays,
+          new Date(a.startDate),
+          new Date(a.endDate),
+          ctx.startDate,
+          ctx.endDate
+        );
+      });
+    case "nearVacation":
+      return nearVacationMatch(ctx.employee, node.direction, node.minDays, node.maxDays, ctx.startDate, ctx.endDate);
+    case "weekendNearVacation": {
+      for (let d = new Date(ctx.startDate); d <= ctx.endDate; d = addDays(d, 1)) {
+        const day = d.getDay();
+        if (day !== 0 && day !== 6) continue;
+        if (nearVacationMatch(ctx.employee, "either", node.minDays, node.maxDays, d, d)) return true;
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
 }
 
 // src/utils/scheduler.ts
@@ -179,119 +324,10 @@ function countShiftTypeForEmployee(employeeId, shiftType, assignments) {
     (a) => a.shiftType === shiftType && a.employees.includes(employeeId)
   ).length;
 }
-function isBlockedFromFruehschichtDueToAdjacency(employee, date, assignments) {
-  const day = date.getDay();
-  const isWeekendDay = day === 6 || day === 0;
-  if (!isWeekendDay) return false;
-  const hasAdjacentVerschieben = assignments.some((a) => {
-    if (!a.employees.includes(employee.id) || a.shiftType !== "verschieben") return false;
-    const start = new Date(a.startDate);
-    const end = new Date(a.endDate);
-    const beforeSat = subDays(start, 2);
-    const beforeSun = subDays(start, 1);
-    const afterSat = addDays(end, 1);
-    const afterSun = addDays(end, 2);
-    return isSameDay(date, beforeSat) || isSameDay(date, beforeSun) || isSameDay(date, afterSat) || isSameDay(date, afterSun);
-  });
-  if (hasAdjacentVerschieben) return true;
-  const hasRecentNightWeek = assignments.some((a) => {
-    if (!a.employees.includes(employee.id) || a.shiftType !== "nachtbereitschaft") return false;
-    const end = new Date(a.endDate);
-    const daysDiff = Math.round((date.getTime() - end.getTime()) / (1e3 * 60 * 60 * 24));
-    return daysDiff >= 0 && daysDiff <= 8;
-  });
-  if (hasRecentNightWeek) return true;
-  return false;
-}
-function isBlockedFromVerschiebenDueToAdjacentFruehschicht(employee, verschiebenStartDate, verschiebenEndDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "fruehschicht") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const fStart = new Date(a.startDate);
-    const fEnd = new Date(a.endDate);
-    const beforeSat = subDays(verschiebenStartDate, 2);
-    const beforeSun = subDays(verschiebenStartDate, 1);
-    const afterSat = addDays(verschiebenEndDate, 1);
-    const afterSun = addDays(verschiebenEndDate, 2);
-    return isSameDay(fStart, beforeSat) || isSameDay(fStart, beforeSun) || isSameDay(fStart, afterSat) || isSameDay(fStart, afterSun) || isSameDay(fEnd, beforeSat) || isSameDay(fEnd, beforeSun) || isSameDay(fEnd, afterSat) || isSameDay(fEnd, afterSun);
-  });
-}
-function isBlockedFromConsecutiveVerschieben(employee, verschiebenStartDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "verschieben") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const vEnd = new Date(a.endDate);
-    const daysDiff = Math.round(
-      (verschiebenStartDate.getTime() - vEnd.getTime()) / (1e3 * 60 * 60 * 24)
-    );
-    return daysDiff >= 1 && daysDiff <= 7;
-  });
-}
-function isBlockedFromConsecutiveNacht(employee, nachtStartDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "nachtbereitschaft") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const nEnd = new Date(a.endDate);
-    const daysDiff = Math.round(
-      (nachtStartDate.getTime() - nEnd.getTime()) / (1e3 * 60 * 60 * 24)
-    );
-    return daysDiff >= 1 && daysDiff <= 8;
-  });
-}
-function isBlockedFromConsecutiveFruehschicht(employee, fruehStartDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "fruehschicht") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const fEnd = new Date(a.endDate);
-    const daysDiff = Math.round(
-      (fruehStartDate.getTime() - fEnd.getTime()) / (1e3 * 60 * 60 * 24)
-    );
-    return daysDiff >= 1 && daysDiff <= 7;
-  });
-}
-function isBlockedFromVerschiebenAfterNacht(employee, verschiebenStartDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "nachtbereitschaft") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const nEnd = new Date(a.endDate);
-    const daysDiff = Math.round(
-      (verschiebenStartDate.getTime() - nEnd.getTime()) / (1e3 * 60 * 60 * 24)
-    );
-    return daysDiff >= 1 && daysDiff <= 7;
-  });
-}
-function isBlockedFromNachtAfterVerschieben(employee, nachtStartDate, assignments) {
-  return assignments.some((a) => {
-    if (a.shiftType !== "verschieben") return false;
-    if (!a.employees.includes(employee.id)) return false;
-    const vEnd = new Date(a.endDate);
-    const daysDiff = Math.round(
-      (nachtStartDate.getTime() - vEnd.getTime()) / (1e3 * 60 * 60 * 24)
-    );
-    return daysDiff >= 1 && daysDiff <= 7;
-  });
-}
-function isBlockedFromNachtBeforeVacation(employee, nachtEndDate) {
-  const checkDay = (day) => {
-    const dayStart = startOfDay(day);
-    const single = (employee.vacationDays || []).some(
-      (vacDay) => startOfDay(new Date(vacDay)).getTime() === dayStart.getTime()
-    );
-    if (single) return true;
-    return (employee.vacationRanges || []).some((r) => {
-      const s = startOfDay(new Date(r.startDate));
-      const e = endOfDay(new Date(r.endDate));
-      return isWithinInterval(dayStart, { start: s, end: e });
-    });
-  };
-  for (let d = 1; d <= 7; d++) {
-    if (checkDay(addDays(nachtEndDate, d))) return true;
-  }
-  return false;
-}
 function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, existingAssignments, config2 = DEFAULT_SCHEDULER_CONFIG, _departments, planRange) {
   const { rules } = config2;
   const available = employees2.filter((emp) => {
+    if (emp.excludeFromPlanning) return false;
     if (!isEmployeeActiveDuring(emp, startDate, endDate)) return false;
     if (rules.respectEmployeeShiftTypes) {
       const allowed = emp.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
@@ -301,7 +337,7 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
     for (let d = new Date(startDate); d <= endDate; d = addDays(d, 1)) {
       days.push(new Date(d));
     }
-    const canWorkAllDays = days.every((day) => canWorkOnDate(emp, day, rules.noWeekendAroundVacation));
+    const canWorkAllDays = days.every((day) => canWorkOnDate(emp, day, false));
     if (!canWorkAllDays) return false;
     if (rules.respectAvoidancePreferences) {
       const wantsToAvoid = days.some((day) => hasAvoidancePreference(emp, shiftType, day));
@@ -314,81 +350,20 @@ function getAvailableEmployeesSorted(employees2, shiftType, startDate, endDate, 
       return days.some((day) => day >= assignStart && day <= assignEnd);
     });
     if (hasConflictingShift) return false;
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === "fruehschicht") {
-      const blockedByAdjacency = days.some((day) => isBlockedFromFruehschichtDueToAdjacency(emp, day, existingAssignments));
-      if (blockedByAdjacency) return false;
-    }
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === "verschieben") {
-      if (isBlockedFromVerschiebenDueToAdjacentFruehschicht(emp, startDate, endDate, existingAssignments)) return false;
-    }
-    if (rules.noNachtAfterVerschieben && shiftType === "nachtbereitschaft") {
-      const blockedByVerschieben = isBlockedFromNachtAfterVerschieben(emp, startDate, existingAssignments);
-      if (blockedByVerschieben) return false;
-    }
-    if (rules.noVerschiebenAfterNacht && shiftType === "verschieben") {
-      const blockedByNacht = isBlockedFromVerschiebenAfterNacht(emp, startDate, existingAssignments);
-      if (blockedByNacht) return false;
-    }
-    if (rules.noConsecutiveVerschieben && shiftType === "verschieben") {
-      if (isBlockedFromConsecutiveVerschieben(emp, startDate, existingAssignments)) return false;
-    }
-    if (rules.noConsecutiveNacht && shiftType === "nachtbereitschaft") {
-      if (isBlockedFromConsecutiveNacht(emp, startDate, existingAssignments)) return false;
-    }
-    if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
-      if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
-    }
-    if (rules.noNachtBeforeVacation && shiftType === "nachtbereitschaft") {
-      if (isBlockedFromNachtBeforeVacation(emp, endDate)) return false;
-    }
-    const daysDiffFromEnd = (a) => Math.round((new Date(a.startDate).getTime() - endDate.getTime()) / (1e3 * 60 * 60 * 24));
-    if (rules.noVerschiebenAfterNacht && shiftType === "nachtbereitschaft") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "verschieben" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-    if (rules.noNachtAfterVerschieben && shiftType === "verschieben") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "nachtbereitschaft" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === "nachtbereitschaft") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "fruehschicht" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 0 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-    if (rules.noConsecutiveNacht && shiftType === "nachtbereitschaft") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "nachtbereitschaft" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-    if (rules.noConsecutiveVerschieben && shiftType === "verschieben") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "verschieben" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 1 && d <= 7;
-      });
-      if (blocked) return false;
-    }
-    if (rules.noConsecutiveFruehschicht && shiftType === "fruehschicht") {
-      const blocked = existingAssignments.some((a) => {
-        if (a.shiftType !== "fruehschicht" || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a);
-        return d >= 1 && d <= 7;
-      });
-      if (blocked) return false;
+    const customRules = config2.customRules || [];
+    if (customRules.length > 0) {
+      const selfViolation = customRules.some(
+        (rule) => rule.enabled && rule.targetShiftTypes.includes(shiftType) && evaluateConditionNode(rule.condition, { employee: emp, startDate, endDate, assignments: existingAssignments })
+      );
+      if (selfViolation) return false;
+      const candidateAssignment = { id: "__candidate__", shiftType, startDate, endDate, employees: [emp.id], confirmed: true };
+      const hypotheticalAssignments = [...existingAssignments, candidateAssignment];
+      const retroactiveViolation = customRules.some(
+        (rule) => rule.enabled && existingAssignments.some(
+          (a) => rule.targetShiftTypes.includes(a.shiftType) && a.employees.includes(emp.id) && evaluateConditionNode(rule.condition, { employee: emp, startDate: new Date(a.startDate), endDate: new Date(a.endDate), assignments: hypotheticalAssignments })
+        )
+      );
+      if (retroactiveViolation) return false;
     }
     return true;
   });
@@ -487,15 +462,7 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
     return typeOrder[a.shiftType] - typeOrder[b.shiftType];
   });
   const ruleLabels = {
-    noNachtAfterVerschieben: "Keine Nacht nach Versetzt-Woche",
-    noVerschiebenAfterNacht: "Kein Versetzt nach Nacht-Woche",
-    noConsecutiveVerschieben: "Keine zwei Versetzt-Wochen hintereinander",
-    noConsecutiveNacht: "Keine zwei Nachtschichten hintereinander",
-    noConsecutiveFruehschicht: "Keine zwei Fr\xFChschichten hintereinander",
-    noNachtBeforeVacation: "Keine Nacht in der Woche vor Urlaub",
     respectEmployeeShiftTypes: "Erlaubte Schichttypen pro MA",
-    noWeekendAroundVacation: "Kein WE um Urlaub",
-    noFruehschichtAdjacentToVerschieben: "Keine Fr\xFChschicht angrenzend an Versetzt",
     respectAvoidancePreferences: "Vermeidungspr\xE4ferenzen",
     departmentDiversity: "Abteilungsvielfalt"
   };
@@ -542,6 +509,9 @@ function generateAutomaticShiftPlan(employees2, startYear, startMonth2 = 0, mont
         const label = ruleLabels[ruleKey];
         if (label) blockedRules.push(label);
       }
+      for (const rule of config2.customRules || []) {
+        if (rule.enabled && rule.targetShiftTypes.includes(shiftType)) blockedRules.push(rule.name);
+      }
       violations.push({
         id: `violation-${shiftType}-${period.startDate.toISOString()}`,
         shiftType,
@@ -578,7 +548,7 @@ function cvFairness(counts) {
 }
 function computeFairnessScores(employees2, assignments, periodRange) {
   const weightOf = (e) => periodRange ? getEmployeeActiveWeight(e, periodRange.start, periodRange.end) : 1;
-  const judgeable = periodRange ? employees2.filter((e) => weightOf(e) > 0) : employees2;
+  const judgeable = employees2.filter((e) => !e.excludeFromPlanning).filter((e) => !periodRange || weightOf(e) > 0);
   const allIds = judgeable.map((e) => e.id);
   const nachtFruehIds = judgeable.filter((e) => {
     const allowed = e.allowedShiftTypes ?? ["fruehschicht", "verschieben", "nachtbereitschaft"];
@@ -631,6 +601,13 @@ function computeImpactFactors(employees2, config2, year2, startMonth2) {
   for (const key of Object.keys(config2.rules)) {
     const cfg = { ...config2, rules: { ...config2.rules, [key]: !config2.rules[key] } };
     rules[key] = delta(baseline, run(employees2, cfg, year2, startMonth2));
+  }
+  for (const customRule of config2.customRules || []) {
+    const cfg = {
+      ...config2,
+      customRules: config2.customRules.map((r) => r.id === customRule.id ? { ...r, enabled: !r.enabled } : r)
+    };
+    rules[customRule.id] = delta(baseline, run(employees2, cfg, year2, startMonth2));
   }
   const countImpact = (patchPlus, patchMinus) => {
     const cfgP = { ...config2, shiftCounts: { ...config2.shiftCounts, ...patchPlus } };

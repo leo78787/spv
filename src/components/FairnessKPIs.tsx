@@ -65,6 +65,7 @@ export function FairnessKPIs() {
     if (!periodRange) return [];
 
     return employees
+      .filter(employee => !employee.excludeFromPlanning)
       .map(employee => {
         const activeWeight = getEmployeeActiveWeight(employee, periodRange.start, periodRange.end);
         const assignments = combinedAssignments.filter(a =>

@@ -168,6 +168,9 @@ export function diffState(before: any, after: any): DiffResult {
   if (!safeEqual(before?.betrachterTabVisibility, after?.betrachterTabVisibility)) {
     items.push({ area: 'settings_tabs', summary: 'Reiter-Sichtbarkeit (Betrachter) geändert' });
   }
+  if (!safeEqual(before?.defaultSchedulerConfig, after?.defaultSchedulerConfig)) {
+    items.push({ area: 'planning', summary: 'Standard-Planungsregeln geändert' });
+  }
 
   const touchedAreas = new Set(items.map(i => i.area));
   return { items, touchedAreas };

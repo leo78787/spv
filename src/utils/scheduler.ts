@@ -1,12 +1,13 @@
-import { 
-  Employee, 
-  ShiftType, 
+import {
+  Employee,
+  ShiftType,
   ShiftAssignment,
   SchedulerConfig,
   DEFAULT_SCHEDULER_CONFIG,
   SchedulerViolation,
   Department,
 } from '../types';
+import { evaluateConditionNode } from './customRuleEngine';
 
 // Re-export so existing callers (ShiftPlanning, tests) only need one import
 export type { SchedulerConfig, SchedulerRules } from '../types';
@@ -373,6 +374,9 @@ export function getAvailableEmployeesSorted(
 
   // Filter available employees
   const available = employees.filter(emp => {
+    // Opted out of automatic planning entirely (still shown in the calendar roster elsewhere)
+    if (emp.excludeFromPlanning) return false;
+
     // Employment window: exclude employees not yet hired / already left for this shift's dates
     if (!isEmployeeActiveDuring(emp, startDate, endDate)) return false;
 
@@ -387,133 +391,63 @@ export function getAvailableEmployeesSorted(
       days.push(new Date(d));
     }
     
-    // Must be available on all days (vacation check; weekend-around-vacation toggleable)
-    const canWorkAllDays = days.every(day => canWorkOnDate(emp, day, rules.noWeekendAroundVacation));
+    // Hard vacation-day-off check (unconditional, not a toggleable rule) —
+    // weekend-around-vacation is handled separately below, generically, via
+    // the 'weekendNearVacation' builtin rule.
+    const canWorkAllDays = days.every(day => canWorkOnDate(emp, day, false));
     if (!canWorkAllDays) return false;
-    
+
     // Must not have avoidance preference (toggleable)
     if (rules.respectAvoidancePreferences) {
       const wantsToAvoid = days.some(day => hasAvoidancePreference(emp, shiftType, day));
       if (wantsToAvoid) return false;
     }
-    
+
     // CRITICAL: Must not already have a shift on any of these days (always enforced)
     const hasConflictingShift = existingAssignments.some(assignment => {
       if (!assignment.employees.includes(emp.id)) return false;
-      
+
       const assignStart = new Date(assignment.startDate);
       const assignEnd = new Date(assignment.endDate);
-      
+
       // Check if any day in this shift overlaps with existing assignment
       return days.some(day => day >= assignStart && day <= assignEnd);
     });
-    
+
     if (hasConflictingShift) return false;
 
-    // Use shared adjacency checker for Frühschicht (weekend early shift) (toggleable)
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === 'fruehschicht') {
-      const blockedByAdjacency = days.some(day => isBlockedFromFruehschichtDueToAdjacency(emp, day, existingAssignments));
-      if (blockedByAdjacency) return false;
-    }
+    // Planning rules — the 8 formerly-hardcoded temporal rules are now
+    // pre-built block-based CustomRule entries (see BUILTIN_RULES in
+    // types.ts), enforced by the exact same generic mechanism as any
+    // user-added rule. See customRuleEngine.ts.
+    //
+    // Two checks are needed since generation is a single chronological
+    // forward pass and a rule can only "see" assignments already committed,
+    // never ones not yet decided: a candidate is rejected if EITHER (a) it
+    // violates a rule looking backward at what's already committed, OR (b)
+    // committing it would retroactively make an *already committed*
+    // assignment violate a rule that targets that assignment's shift type
+    // (the reverse-direction half of the same constraint).
+    const customRules = config.customRules || [];
+    if (customRules.length > 0) {
+      const selfViolation = customRules.some(rule =>
+        rule.enabled &&
+        rule.targetShiftTypes.includes(shiftType) &&
+        evaluateConditionNode(rule.condition, { employee: emp, startDate, endDate, assignments: existingAssignments })
+      );
+      if (selfViolation) return false;
 
-    // Verschieben: forbid if adjacent weekend already has a Frühschicht for this employee (toggleable)
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === 'verschieben') {
-      if (isBlockedFromVerschiebenDueToAdjacentFruehschicht(emp, startDate, endDate, existingAssignments)) return false;
-    }
-
-    // Nachtbereitschaft: forbid if employee had a verschobene Woche that ends the day before nacht start (toggleable)
-    if (rules.noNachtAfterVerschieben && shiftType === 'nachtbereitschaft') {
-      const blockedByVerschieben = isBlockedFromNachtAfterVerschieben(emp, startDate, existingAssignments);
-      if (blockedByVerschieben) return false;
-    }
-
-    // Verschieben: forbid if employee just finished a Nacht week (toggleable)
-    if (rules.noVerschiebenAfterNacht && shiftType === 'verschieben') {
-      const blockedByNacht = isBlockedFromVerschiebenAfterNacht(emp, startDate, existingAssignments);
-      if (blockedByNacht) return false;
-    }
-
-    // Verschieben: forbid two consecutive verschieben weeks for the same employee (toggleable)
-    if (rules.noConsecutiveVerschieben && shiftType === 'verschieben') {
-      if (isBlockedFromConsecutiveVerschieben(emp, startDate, existingAssignments)) return false;
-    }
-
-    // Nachtbereitschaft: forbid two consecutive nacht weeks for the same employee (toggleable)
-    if (rules.noConsecutiveNacht && shiftType === 'nachtbereitschaft') {
-      if (isBlockedFromConsecutiveNacht(emp, startDate, existingAssignments)) return false;
-    }
-
-    // Frühschicht: forbid two consecutive weekend early shifts for the same employee (toggleable)
-    if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht') {
-      if (isBlockedFromConsecutiveFruehschicht(emp, startDate, existingAssignments)) return false;
-    }
-
-    // Nachtbereitschaft: forbid if employee has vacation starting within 7 days after nacht ends (toggleable)
-    if (rules.noNachtBeforeVacation && shiftType === 'nachtbereitschaft') {
-      if (isBlockedFromNachtBeforeVacation(emp, endDate)) return false;
-    }
-
-    // ── FORWARD-LOOKING CHECKS ───────────────────────────────────────────────
-    // All rules above only check: "does an existing past shift block this new one?"
-    // We also need to check: "if we assign this shift, does it violate a rule
-    // relative to an already-scheduled FUTURE shift for this employee?"
-    // (Same rule, symmetric direction.)
-
-    const daysDiffFromEnd = (a: ShiftAssignment) =>
-      Math.round((new Date(a.startDate).getTime() - endDate.getTime()) / (1000 * 60 * 60 * 24));
-
-    // noVerschiebenAfterNacht → forward: scheduling Nacht, emp has Verschieben starting ≤8d after nacht ends
-    if (rules.noVerschiebenAfterNacht && shiftType === 'nachtbereitschaft') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'verschieben' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-
-    // noNachtAfterVerschieben → forward: scheduling Verschieben, emp has Nacht starting ≤8d after verschieben ends
-    if (rules.noNachtAfterVerschieben && shiftType === 'verschieben') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'nachtbereitschaft' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-
-    // noFruehschichtAdjacentToVerschieben (Nacht→Früh) → forward: scheduling Nacht, emp has Früh ≤8d after nacht ends
-    if (rules.noFruehschichtAdjacentToVerschieben && shiftType === 'nachtbereitschaft') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'fruehschicht' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 0 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-
-    // noConsecutiveNacht → forward: scheduling Nacht, emp has another Nacht starting ≤8d after this nacht ends
-    if (rules.noConsecutiveNacht && shiftType === 'nachtbereitschaft') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'nachtbereitschaft' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 1 && d <= 8;
-      });
-      if (blocked) return false;
-    }
-
-    // noConsecutiveVerschieben → forward: scheduling Verschieben, emp has another Verschieben starting ≤7d after this one ends
-    if (rules.noConsecutiveVerschieben && shiftType === 'verschieben') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'verschieben' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 1 && d <= 7;
-      });
-      if (blocked) return false;
-    }
-
-    // noConsecutiveFruehschicht → forward: scheduling Früh, emp has another Früh starting ≤7d after this one ends
-    if (rules.noConsecutiveFruehschicht && shiftType === 'fruehschicht') {
-      const blocked = existingAssignments.some(a => {
-        if (a.shiftType !== 'fruehschicht' || !a.employees.includes(emp.id)) return false;
-        const d = daysDiffFromEnd(a); return d >= 1 && d <= 7;
-      });
-      if (blocked) return false;
+      const candidateAssignment: ShiftAssignment = { id: '__candidate__', shiftType, startDate, endDate, employees: [emp.id], confirmed: true };
+      const hypotheticalAssignments = [...existingAssignments, candidateAssignment];
+      const retroactiveViolation = customRules.some(rule =>
+        rule.enabled &&
+        existingAssignments.some(a =>
+          rule.targetShiftTypes.includes(a.shiftType) &&
+          a.employees.includes(emp.id) &&
+          evaluateConditionNode(rule.condition, { employee: emp, startDate: new Date(a.startDate), endDate: new Date(a.endDate), assignments: hypotheticalAssignments })
+        )
+      );
+      if (retroactiveViolation) return false;
     }
 
     return true;
@@ -701,15 +635,7 @@ export function detectViolations(
   };
 
   const ruleLabels: Partial<Record<keyof typeof rules, string>> = {
-    noNachtAfterVerschieben: 'Keine Nacht nach Versetzt-Woche',
-    noVerschiebenAfterNacht: 'Kein Versetzt nach Nacht-Woche',
-    noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
-    noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
-    noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
-    noNachtBeforeVacation: 'Keine Nacht in der Woche vor Urlaub',
     respectEmployeeShiftTypes: 'Erlaubte Schichttypen pro MA',
-    noWeekendAroundVacation: 'Kein WE um Urlaub',
-    noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',
     respectAvoidancePreferences: 'Vermeidungspräferenzen',
     departmentDiversity: 'Abteilungsvielfalt',
   };
@@ -739,6 +665,9 @@ export function detectViolations(
         for (const ruleKey of activatedRuleKeys) {
           const label = ruleLabels[ruleKey];
           if (label) blockedRules.push(label);
+        }
+        for (const rule of config.customRules || []) {
+          if (rule.enabled && rule.targetShiftTypes.includes(shiftType)) blockedRules.push(rule.name);
         }
 
         violations.push({
@@ -806,19 +735,11 @@ export function generateAutomaticShiftPlan(
 
   // Human-readable rule labels (for violation messages)
   const ruleLabels: Partial<Record<keyof typeof rules, string>> = {
-    noNachtAfterVerschieben: 'Keine Nacht nach Versetzt-Woche',
-    noVerschiebenAfterNacht: 'Kein Versetzt nach Nacht-Woche',
-    noConsecutiveVerschieben: 'Keine zwei Versetzt-Wochen hintereinander',
-    noConsecutiveNacht: 'Keine zwei Nachtschichten hintereinander',
-    noConsecutiveFruehschicht: 'Keine zwei Frühschichten hintereinander',
-    noNachtBeforeVacation: 'Keine Nacht in der Woche vor Urlaub',
     respectEmployeeShiftTypes: 'Erlaubte Schichttypen pro MA',
-    noWeekendAroundVacation: 'Kein WE um Urlaub',
-    noFruehschichtAdjacentToVerschieben: 'Keine Frühschicht angrenzend an Versetzt',
     respectAvoidancePreferences: 'Vermeidungspräferenzen',
     departmentDiversity: 'Abteilungsvielfalt',
   };
-  
+
   for (const period of allPeriods) {
     const { shiftType } = period;
     const requiredCount = requiredCounts[shiftType];
@@ -873,6 +794,9 @@ export function generateAutomaticShiftPlan(
           // Count how many candidates are blocked by this specific rule
           const label = ruleLabels[ruleKey];
           if (label) blockedRules.push(label);
+        }
+        for (const rule of config.customRules || []) {
+          if (rule.enabled && rule.targetShiftTypes.includes(shiftType)) blockedRules.push(rule.name);
         }
         violations.push({
           id: `violation-${shiftType}-${period.startDate.toISOString()}`,

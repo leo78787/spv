@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Employee, Department, ShiftAssignment, PlanningPeriod, Holiday, Label, CalendarLabel, SchedulerConfig, SwapSettings, DEFAULT_SWAP_SETTINGS, TabVisibility, DEFAULT_TAB_VISIBILITY } from './types';
+import { Employee, Department, ShiftAssignment, PlanningPeriod, Holiday, Label, CalendarLabel, SchedulerConfig, DEFAULT_SCHEDULER_CONFIG, SwapSettings, DEFAULT_SWAP_SETTINGS, TabVisibility, DEFAULT_TAB_VISIBILITY } from './types';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Auth token helpers (stored in localStorage — only the token, not data)
@@ -79,6 +79,7 @@ const saveToServer = async (state: any) => {
         swapSettings: state.swapSettings,
         tabVisibility: state.tabVisibility,
         betrachterTabVisibility: state.betrachterTabVisibility,
+        defaultSchedulerConfig: state.defaultSchedulerConfig,
       }, dateNoonReplacer),
     });
   } catch (err) {
@@ -139,6 +140,7 @@ export async function loadFromServer(): Promise<void> {
       swapSettings: revived.swapSettings ?? DEFAULT_SWAP_SETTINGS,
       tabVisibility: revived.tabVisibility ?? DEFAULT_TAB_VISIBILITY,
       betrachterTabVisibility: revived.betrachterTabVisibility ?? DEFAULT_TAB_VISIBILITY,
+      defaultSchedulerConfig: revived.defaultSchedulerConfig ?? DEFAULT_SCHEDULER_CONFIG,
     });
   } catch (err) {
     console.error('Error loading from server:', err);
@@ -157,6 +159,8 @@ interface AppState {
   tabVisibility: TabVisibility;
   /** Separate, independently configurable tab visibility for the read-only Betrachter role. */
   betrachterTabVisibility: TabVisibility;
+  /** Organization-wide standard planning rules — new planning periods default to a copy of this (see server POST /api/periods). Edited/saved via PlanningRulesEditor's "Als Standard speichern" action. */
+  defaultSchedulerConfig: SchedulerConfig;
 
   // Current admin session info (role-based UI, e.g. default department filter for Leitung)
   adminRole: 'admin' | 'leitung' | 'betrachter' | null;
@@ -214,6 +218,9 @@ interface AppState {
   setTabVisibility: (vis: TabVisibility) => void;
   setBetrachterTabVisibility: (vis: TabVisibility) => void;
 
+  /** Save the given config as the organization's standard planning rules — new periods will default to it. */
+  setDefaultSchedulerConfig: (config: SchedulerConfig) => void;
+
   // Calendar month-navigation cursor (independent of planning periods)
   setCurrentYear: (year: number) => void;
 
@@ -258,6 +265,7 @@ export const useStore = create<AppState>((set) => {
     swapSettings: DEFAULT_SWAP_SETTINGS,
     tabVisibility: DEFAULT_TAB_VISIBILITY,
     betrachterTabVisibility: DEFAULT_TAB_VISIBILITY,
+    defaultSchedulerConfig: DEFAULT_SCHEDULER_CONFIG,
 
     adminRole: null as 'admin' | 'leitung' | 'betrachter' | null,
     organizationName: null as string | null,
@@ -403,7 +411,13 @@ export const useStore = create<AppState>((set) => {
       saveToServer(newState);
       return newState;
     }),
-    
+
+    setDefaultSchedulerConfig: (config: SchedulerConfig) => set((state) => {
+      const newState = { ...state, defaultSchedulerConfig: config };
+      saveToServer(newState);
+      return newState;
+    }),
+
     updateEmployee: (id: string, updates: Partial<Employee>) => set((state) => {
       const newState = {
         ...state,

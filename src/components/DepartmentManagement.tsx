@@ -16,7 +16,7 @@ export function DepartmentManagement() {
   const canEdit = adminRole !== 'betrachter';
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [formData, setFormData] = useState<{ name: string }>({ name: '' });
+  const [formData, setFormData] = useState<{ name: string; managerId: string }>({ name: '', managerId: '' });
   const [orgUsers, setOrgUsers] = useState<OrgAdminUser[]>([]);
 
   useEffect(() => {
@@ -32,31 +32,33 @@ export function DepartmentManagement() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.name.trim()) return;
-    
+    const managerId = formData.managerId || undefined;
+
     if (editingId) {
-      updateDepartment(editingId, { name: formData.name });
+      updateDepartment(editingId, { name: formData.name, managerId });
       setEditingId(null);
     } else {
       const newDepartment: Department = {
         id: generateId(),
         name: formData.name,
+        managerId,
       };
       addDepartment(newDepartment);
     }
-    
+
     resetForm();
   };
-  
+
   const resetForm = () => {
-    setFormData({ name: '' });
+    setFormData({ name: '', managerId: '' });
     setShowAddForm(false);
     setEditingId(null);
   };
-  
+
   const handleEdit = (dept: Department) => {
-    setFormData({ name: dept.name });
+    setFormData({ name: dept.name, managerId: dept.managerId || '' });
     setEditingId(dept.id);
     setShowAddForm(true);
   };
@@ -94,11 +96,17 @@ export function DepartmentManagement() {
       </div>
       
       {showAddForm && (
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md mb-6">
-          <h3 className="text-lg font-semibold mb-4">
-            {editingId ? 'Abteilung bearbeiten' : 'Neue Abteilung'}
-          </h3>
-          
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">
+              {editingId ? 'Abteilung bearbeiten' : 'Neue Abteilung'}
+            </h3>
+            <button type="button" onClick={resetForm} className="p-2 hover:bg-gray-100 rounded" aria-label="Schließen">
+              <X size={18} />
+            </button>
+          </div>
+
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Abteilungsname *
@@ -112,7 +120,24 @@ export function DepartmentManagement() {
               placeholder="z.B. Abteilung A"
             />
           </div>
-          
+
+          <div className="mb-4">
+            <label className="text-sm font-medium text-gray-700 flex items-center gap-1 mb-1">
+              <UserCog size={14} /> Manager
+            </label>
+            <select
+              value={formData.managerId}
+              onChange={e => setFormData({ ...formData, managerId: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              <option value="">Kein Manager zugeordnet</option>
+              {managers.map(m => (
+                <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">Wird dem Manager standardmäßig bei Mitarbeiter/Kalender als Filter vorausgewählt.</p>
+          </div>
+
           <div className="flex gap-3">
             <button
               type="submit"
@@ -130,6 +155,7 @@ export function DepartmentManagement() {
             </button>
           </div>
         </form>
+        </div>
       )}
       
       {/* Department List */}
@@ -172,21 +198,14 @@ export function DepartmentManagement() {
               </div>
 
               <div className="mt-3 pt-3 border-t border-gray-200">
-                <label className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                <div className="text-xs text-gray-500 flex items-center gap-1 mb-1">
                   <UserCog size={12} /> Manager
-                </label>
-                <select
-                  value={dept.managerId || ''}
-                  onChange={e => updateDepartment(dept.id, { managerId: e.target.value || undefined })}
-                  disabled={!canEdit}
-                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
-                >
-                  <option value="">Kein Manager zugeordnet</option>
-                  {managers.map(m => (
-                    <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-gray-400 mt-1">Wird dem Manager standardmäßig bei Mitarbeiter/Kalender als Filter vorausgewählt.</p>
+                </div>
+                <p className="text-sm text-gray-700">
+                  {orgUsers.find(u => u.id === dept.managerId)
+                    ? `${orgUsers.find(u => u.id === dept.managerId)!.name} (${orgUsers.find(u => u.id === dept.managerId)!.email})`
+                    : <span className="text-gray-400">Kein Manager zugeordnet</span>}
+                </p>
               </div>
 
               {employeeCount > 0 && (

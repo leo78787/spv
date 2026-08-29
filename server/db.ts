@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { currentOrgId, runWithOrg } from './orgContext.js';
+import { BUILTIN_RULES } from '../src/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -208,6 +209,56 @@ function migrateToPlanningPeriods(state: any): { state: any; migrated: boolean }
   return { state, migrated: true };
 }
 
+/** The 8 rule flags that used to live directly on SchedulerConfig.rules, before they became pre-built block-based CustomRule entries (see BUILTIN_RULES in src/types.ts). */
+const LEGACY_RULE_KEYS = [
+  'noWeekendAroundVacation', 'noFruehschichtAdjacentToVerschieben', 'noNachtAfterVerschieben',
+  'noVerschiebenAfterNacht', 'noConsecutiveVerschieben', 'noConsecutiveNacht',
+  'noConsecutiveFruehschicht', 'noNachtBeforeVacation',
+];
+
+/** Migrate one SchedulerConfig object in place from the old flat-boolean rule shape to the new block-based customRules shape, preserving each legacy flag's on/off choice. No-op if the config has no legacy keys (already migrated, or genuinely absent). */
+function migrateOneSchedulerConfig(config: any): void {
+  if (!config || !config.rules) return;
+  const hasLegacyKeys = LEGACY_RULE_KEYS.some(k => k in config.rules);
+  if (!hasLegacyKeys) return;
+
+  const seeded = BUILTIN_RULES.map(r => ({
+    ...r,
+    enabled: r.builtinKey && r.builtinKey in config.rules ? !!config.rules[r.builtinKey] : true,
+  }));
+  // Preserve any already-added custom (non-builtin) rules from a partially-migrated state.
+  const existingCustom = Array.isArray(config.customRules) ? config.customRules.filter((r: any) => !r.builtinKey) : [];
+  config.customRules = [...seeded, ...existingCustom];
+
+  const { respectEmployeeShiftTypes, respectAvoidancePreferences, departmentDiversity } = config.rules;
+  config.rules = {
+    respectEmployeeShiftTypes: respectEmployeeShiftTypes ?? true,
+    respectAvoidancePreferences: respectAvoidancePreferences ?? true,
+    departmentDiversity: departmentDiversity ?? true,
+  };
+}
+
+/**
+ * One-time migration: the 8 formerly-hardcoded temporal scheduling rules
+ * (noWeekendAroundVacation, noNachtAfterVerschieben, etc.) became pre-built,
+ * editable block-based rules (see BUILTIN_RULES in src/types.ts and the
+ * visual rule builder). Existing organizations' on/off choices for these
+ * flags are carried over verbatim into the new shape — an org that had e.g.
+ * noConsecutiveNacht turned off keeps it turned off, just now represented as
+ * a disabled block rule instead of a boolean. Idempotent via the
+ * `schedulerRulesMigrated` flag, so a rule a user later deletes on purpose
+ * is never silently re-added.
+ */
+export function migrateSchedulerRules(state: any): { state: any; migrated: boolean } {
+  if (state.schedulerRulesMigrated) return { state, migrated: false };
+  for (const period of state.planningPeriods || []) {
+    migrateOneSchedulerConfig(period.schedulerConfig);
+  }
+  migrateOneSchedulerConfig(state.defaultSchedulerConfig);
+  state.schedulerRulesMigrated = true;
+  return { state, migrated: true };
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Per-organization state — orgId is resolved implicitly from the current
 // request's AsyncLocalStorage context (see orgContext.ts).
@@ -223,12 +274,13 @@ export function loadState(): any {
   try {
     const raw = fs.readFileSync(file, 'utf-8');
     const parsed = JSON.parse(raw);
-    const { state, migrated } = migrateToPlanningPeriods(parsed);
+    const { state: state1, migrated: migrated1 } = migrateToPlanningPeriods(parsed);
+    const { state: state2, migrated: migrated2 } = migrateSchedulerRules(state1);
     // Persist immediately so the generated period id (and dropped legacy
     // fields) are stable across subsequent loads — otherwise every
     // read-only GET would mint a fresh id, breaking period selection.
-    if (migrated) saveState(state);
-    return state;
+    if (migrated1 || migrated2) saveState(state2);
+    return state2;
   } catch (err) {
     console.error(`Error loading state for organization ${orgId}:`, err);
     return structuredClone(DEFAULT_STATE);

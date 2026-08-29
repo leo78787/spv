@@ -12,6 +12,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
 import crypto from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +53,7 @@ import {
   updateVacation,
   deleteVacation,
 } from './adminVacations.js';
+import * as boards from './boards.js';
 import {
   initPlatformOwner,
   authenticatePlatform,
@@ -66,7 +68,7 @@ import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sen
 import { initBackupSchedule, updateBackupSettings, disableBackupSettings, restoreFromBackup } from './backup.js';
 import { diffState } from './stateDiff.js';
 import { logChange, logChanges, queryChangeLog } from './auditLog.js';
-import { DEFAULT_TAB_VISIBILITY, type TabVisibility } from '../src/types.js';
+import { DEFAULT_TAB_VISIBILITY, type TabVisibility, DEFAULT_SCHEDULER_CONFIG } from '../src/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
@@ -822,7 +824,10 @@ app.post('/api/periods', authMiddleware, requirePermission('planning'), (req, re
       year,
       startMonth,
       months,
-      schedulerConfig,
+      // A brand-new period defaults to the organization's current standard
+      // rule set (see PUT /api/state's defaultSchedulerConfig field), falling
+      // back to the hardcoded defaults if the org has never saved one.
+      schedulerConfig: schedulerConfig ?? state.defaultSchedulerConfig ?? DEFAULT_SCHEDULER_CONFIG,
       violations: [],
       assignments: [],
       algorithm: undefined,
@@ -3147,6 +3152,204 @@ app.post('/api/backup/restore', authMiddleware, requirePermission('settings_back
   } catch (err) {
     res.status(400).json({ error: String(err) });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// BOARDS — Trello-style task boards (server/boards.ts). Any authenticated
+// admin-dashboard account can create/use boards; visibility is enforced
+// per-board (see boards.ts's canSeeBoard), independent of the shift-
+// planning permission system.
+// ═══════════════════════════════════════════════════════════════════════
+
+const boardsUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: boards.MAX_ATTACHMENT_SIZE, files: boards.MAX_ATTACHMENTS_PER_COMMENT },
+});
+
+function boardSessionFrom(req: express.Request): boards.BoardSession | null {
+  const session: AdminSession = (req as any).adminSession;
+  if (!session.adminUserId) return null;
+  return { organizationId: session.organizationId, adminUserId: session.adminUserId };
+}
+
+app.get('/api/boards', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  res.json(boards.listBoards(bs));
+});
+
+app.get('/api/boards/:id', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const board = boards.getBoard(String(req.params.id), bs);
+  if (!board) { res.status(404).json({ error: 'Board nicht gefunden.' }); return; }
+  res.json(board);
+});
+
+app.post('/api/boards', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const user = getAdminUser(session.adminUserId!);
+  const { name, visibility, visibleToUserIds } = req.body ?? {};
+  if (!name || !['private', 'organization', 'selected'].includes(visibility)) {
+    res.status(400).json({ error: 'Name und Sichtbarkeit erforderlich.' });
+    return;
+  }
+  const board = boards.createBoard(bs, user?.name || 'Unbekannt', {
+    name: String(name),
+    visibility,
+    visibleToUserIds: Array.isArray(visibleToUserIds) ? visibleToUserIds : undefined,
+  });
+  res.json(board);
+});
+
+app.put('/api/boards/:id', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const { name, visibility, visibleToUserIds } = req.body ?? {};
+  const result = boards.updateBoard(String(req.params.id), bs, { name, visibility, visibleToUserIds });
+  if ('error' in result) { res.status(403).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/boards/:id', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.deleteBoard(String(req.params.id), bs);
+  if (!ok) { res.status(403).json({ error: 'Nur der Ersteller kann das Board löschen.' }); return; }
+  res.json({ success: true });
+});
+
+// ── Sections ──────────────────────────────────────────────────────────────
+
+app.post('/api/boards/:id/sections', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const result = boards.addSection(String(req.params.id), bs, String(req.body?.name ?? ''));
+  if ('error' in result) { res.status(404).json(result); return; }
+  res.json(result);
+});
+
+app.put('/api/boards/:id/sections/:sectionId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.renameSection(String(req.params.id), String(req.params.sectionId), bs, String(req.body?.name ?? ''));
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+app.delete('/api/boards/:id/sections/:sectionId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.deleteSection(String(req.params.id), String(req.params.sectionId), bs);
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+// ── Tasks ─────────────────────────────────────────────────────────────────
+
+app.post('/api/boards/:id/sections/:sectionId/tasks', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const { title, description, deadline, assigneeIds } = req.body ?? {};
+  if (!title) { res.status(400).json({ error: 'Titel erforderlich.' }); return; }
+  const result = boards.addTask(String(req.params.id), String(req.params.sectionId), bs, {
+    title: String(title), description, deadline, assigneeIds: Array.isArray(assigneeIds) ? assigneeIds : undefined,
+  });
+  if ('error' in result) { res.status(404).json(result); return; }
+  res.json(result);
+});
+
+/** Field edits, done-toggle, and move-between-sections (targetSectionId/order) all go through here — this is what the drag-and-drop drop handler calls. */
+app.put('/api/boards/:id/tasks/:taskId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const { title, description, done, deadline, assigneeIds, targetSectionId, order } = req.body ?? {};
+  const result = boards.updateTask(String(req.params.id), String(req.params.taskId), bs, {
+    title, description, done, deadline, assigneeIds, targetSectionId, order,
+  });
+  if ('error' in result) { res.status(404).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/boards/:id/tasks/:taskId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.deleteTask(String(req.params.id), String(req.params.taskId), bs);
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+// ── Subtasks ──────────────────────────────────────────────────────────────
+
+app.post('/api/boards/:id/tasks/:taskId/subtasks', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const result = boards.addSubtask(String(req.params.id), String(req.params.taskId), bs, String(req.body?.title ?? ''));
+  if ('error' in result) { res.status(404).json(result); return; }
+  res.json(result);
+});
+
+app.put('/api/boards/:id/tasks/:taskId/subtasks/:subtaskId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.toggleSubtask(String(req.params.id), String(req.params.taskId), String(req.params.subtaskId), bs, !!req.body?.done);
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+app.delete('/api/boards/:id/tasks/:taskId/subtasks/:subtaskId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.deleteSubtask(String(req.params.id), String(req.params.taskId), String(req.params.subtaskId), bs);
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+// ── Comments & attachments ───────────────────────────────────────────────
+
+app.post('/api/boards/:id/tasks/:taskId/comments', authMiddleware, (req, res, next) => {
+  boardsUpload.array('files', boards.MAX_ATTACHMENTS_PER_COMMENT)(req, res, (err: unknown) => {
+    if (err) {
+      const message = err instanceof multer.MulterError ? `Upload-Fehler: ${err.message}` : String(err);
+      res.status(400).json({ error: message });
+      return;
+    }
+    next();
+  });
+}, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const user = getAdminUser(session.adminUserId!);
+  const files = ((req.files as Express.Multer.File[]) || []).map(f => ({
+    originalname: f.originalname, mimetype: f.mimetype, size: f.size, buffer: f.buffer,
+  }));
+  const result = boards.addComment(String(req.params.id), String(req.params.taskId), bs, user?.name || 'Unbekannt', String(req.body?.text ?? ''), files);
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/boards/:id/tasks/:taskId/comments/:commentId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const ok = boards.deleteComment(String(req.params.id), String(req.params.taskId), String(req.params.commentId), bs);
+  if (!ok) { res.status(403).json({ error: 'Nur der Autor kann den Kommentar löschen.' }); return; }
+  res.json({ success: true });
+});
+
+/** Attachment download — authenticated, re-checks board visibility (not a static file, since access must follow the owning board's sharing rules). */
+app.get('/api/boards/attachments/:attachmentId', authMiddleware, (req, res) => {
+  const bs = boardSessionFrom(req);
+  if (!bs) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const resolved = boards.resolveAttachmentBoard(String(req.params.attachmentId), bs);
+  if (!resolved) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const filePath = boards.attachmentFilePath(bs.organizationId, String(req.params.attachmentId), resolved.meta);
+  if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'Datei nicht gefunden.' }); return; }
+  res.setHeader('Content-Type', resolved.meta.mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(resolved.meta.filename)}"`);
+  fs.createReadStream(filePath).pipe(res);
 });
 
 // ═══════════════════════════════════════════════════════════════════════

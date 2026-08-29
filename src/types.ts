@@ -6,29 +6,56 @@ export type ShiftType = 'fruehschicht' | 'verschieben' | 'nachtbereitschaft';
 // Scheduler configuration (also stored in ShiftPlan for calendar warnings)
 // ---------------------------------------------------------------------------
 
+/**
+ * Behavior toggles that aren't expressible as block/condition rules (they're
+ * selection strategies, not "block shift type X when Y" constraints) — kept
+ * as simple on/off settings, not part of the rule builder. Every other
+ * scheduling rule (the former 8 temporal SchedulerRules flags) now lives in
+ * `SchedulerConfig.customRules` as an editable block-built CustomRule — see
+ * BUILTIN_RULES below.
+ */
 export interface SchedulerRules {
-  /** No weekend work adjacent to vacation days */
-  noWeekendAroundVacation: boolean;
-  /** Frühschicht blocked on weekends directly adjacent to a verschieben week */
-  noFruehschichtAdjacentToVerschieben: boolean;
-  /** No Nacht in the 7 days following a verschieben week */
-  noNachtAfterVerschieben: boolean;
-  /** No Verschieben in the 7 days following a Nacht week (symmetric rule) */
-  noVerschiebenAfterNacht: boolean;
-  /** No two consecutive Verschieben weeks for the same employee */
-  noConsecutiveVerschieben: boolean;
-  /** No two consecutive Nachtbereitschaft weeks for the same employee */
-  noConsecutiveNacht: boolean;
-  /** No two consecutive weekend Frühschicht shifts for the same employee */
-  noConsecutiveFruehschicht: boolean;
-  /** No Nachtbereitschaft in the week before a vacation starts */
-  noNachtBeforeVacation: boolean;
   /** Respect per-employee allowedShiftTypes (filter by qualification) */
   respectEmployeeShiftTypes: boolean;
   /** Respect avoidance preferences */
   respectAvoidancePreferences: boolean;
   /** Prefer department diversity when selecting employees */
   departmentDiversity: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Planning rules — a small condition-tree DSL, evaluated generically by
+// src/utils/customRuleEngine.ts and enforced by the scheduler. Built (and,
+// for the built-in rules below, pre-built) via the visual node editor in
+// PlanningRulesEditor.tsx.
+// ---------------------------------------------------------------------------
+
+export type ConditionNode =
+  | { type: 'and'; children: ConditionNode[] }
+  | { type: 'or'; children: ConditionNode[] }
+  | { type: 'not'; child: ConditionNode }
+  /** True if the employee has another assignment of `shiftType` whose gap (in days) to the shift being considered falls within [minDays, maxDays] on the given side(s). */
+  | { type: 'assignmentGap'; shiftType: ShiftType; direction: 'before' | 'after' | 'either'; minDays: number; maxDays: number }
+  /** True if the employee has a vacation range overlapping the window [minDays, maxDays] before/after/either side of the shift being considered. */
+  | { type: 'nearVacation'; direction: 'before' | 'after' | 'either'; minDays: number; maxDays: number }
+  /** True if the shift being considered falls on a Saturday/Sunday. */
+  | { type: 'isWeekend' }
+  /** True if any day within the shift being considered is a Sat/Sun that falls within [minDays, maxDays] of a vacation range (start or end). Mirrors the classic "no weekend work around vacation" rule, which needs per-day (not just shift start/end) evaluation. */
+  | { type: 'weekendNearVacation'; minDays: number; maxDays: number }
+  /** True if the employee's attribute matches `equals` (boolean for isOver55, department id string for department). */
+  | { type: 'employeeAttribute'; attribute: 'isOver55' | 'department'; equals: boolean | string };
+
+export interface CustomRule {
+  id: string;
+  name: string;
+  /** Free-text explanation shown in the rule's edit popup. */
+  description?: string;
+  enabled: boolean;
+  /** Which shift type(s) this rule can block an employee from when its condition evaluates true. */
+  targetShiftTypes: ShiftType[];
+  condition: ConditionNode;
+  /** Set on the 8 pre-built default rules (see BUILTIN_RULES) — lets "Auf Standardwerte zurücksetzen" and the one-time data migration recognize them. Absent on user-added rules. */
+  builtinKey?: string;
 }
 
 export interface SchedulerConfig {
@@ -40,7 +67,83 @@ export interface SchedulerConfig {
   /** How many of the verschieben slots per week are reserved for Ü55 employees */
   over55VerschiebenSlots: number;
   rules: SchedulerRules;
+  /** All block-built rules — the 8 pre-built defaults (builtinKey set) plus any user-added ones, in display order. */
+  customRules: CustomRule[];
 }
+
+/**
+ * The 8 rules that used to be hardcoded SchedulerRules booleans, now
+ * pre-built as editable block trees — this is what "Standardwerte
+ * zurücksetzen" restores and what a brand-new organization starts with.
+ * Each `builtinKey` matches the old boolean's name so the one-time server
+ * migration (see server/db.ts) can carry over an existing org's on/off
+ * choices for periods created before this rule builder existed.
+ */
+export const BUILTIN_RULES: CustomRule[] = [
+  {
+    id: 'builtin-noWeekendAroundVacation', builtinKey: 'noWeekendAroundVacation',
+    name: 'Kein Wochenenddienst direkt vor/nach Urlaub',
+    description: 'Blockiert jede Wochenend-Schicht (Sa/So), wenn 1–2 Tage davor oder danach Urlaub liegt.',
+    enabled: true, targetShiftTypes: ['fruehschicht', 'verschieben', 'nachtbereitschaft'],
+    condition: { type: 'weekendNearVacation', minDays: 1, maxDays: 2 },
+  },
+  {
+    id: 'builtin-noFruehschichtAdjacentToVerschieben-1', builtinKey: 'noFruehschichtAdjacentToVerschieben',
+    name: 'Keine Frühschicht am Wochenende angrenzend an Versetzt-Woche',
+    description: 'Blockiert Frühschicht, wenn 1–2 Tage davor oder danach eine Versetzt-Woche liegt.',
+    enabled: true, targetShiftTypes: ['fruehschicht'],
+    condition: { type: 'assignmentGap', shiftType: 'verschieben', direction: 'either', minDays: 1, maxDays: 2 },
+  },
+  {
+    id: 'builtin-noFruehschichtAdjacentToVerschieben-2', builtinKey: 'noFruehschichtAdjacentToVerschieben',
+    name: 'Keine Frühschicht direkt nach Nachtbereitschaft',
+    description: 'Blockiert Frühschicht, wenn innerhalb der letzten 8 Tage eine Nachtbereitschaft endete.',
+    enabled: true, targetShiftTypes: ['fruehschicht'],
+    condition: { type: 'assignmentGap', shiftType: 'nachtbereitschaft', direction: 'before', minDays: 0, maxDays: 8 },
+  },
+  {
+    id: 'builtin-noNachtAfterVerschieben', builtinKey: 'noNachtAfterVerschieben',
+    name: 'Keine Nacht in der Folgewoche nach Versetzt-Woche',
+    description: 'Blockiert Nachtbereitschaft, wenn innerhalb der letzten 8 Tage eine Versetzt-Woche endete (7-Tage-Sperre).',
+    enabled: true, targetShiftTypes: ['nachtbereitschaft'],
+    condition: { type: 'assignmentGap', shiftType: 'verschieben', direction: 'before', minDays: 1, maxDays: 8 },
+  },
+  {
+    id: 'builtin-noVerschiebenAfterNacht', builtinKey: 'noVerschiebenAfterNacht',
+    name: 'Kein Versetzt-Dienst in der Woche nach Nachtbereitschaft',
+    description: 'Blockiert Versetzt-Dienst, wenn innerhalb der letzten 8 Tage eine Nachtbereitschaft endete (7-Tage-Sperre).',
+    enabled: true, targetShiftTypes: ['verschieben'],
+    condition: { type: 'assignmentGap', shiftType: 'nachtbereitschaft', direction: 'before', minDays: 1, maxDays: 8 },
+  },
+  {
+    id: 'builtin-noConsecutiveVerschieben', builtinKey: 'noConsecutiveVerschieben',
+    name: 'Keine zwei Versetzt-Wochen hintereinander',
+    description: 'Blockiert eine Versetzt-Woche, wenn 1–7 Tage davor oder danach bereits eine Versetzt-Woche für dieselbe Person liegt.',
+    enabled: true, targetShiftTypes: ['verschieben'],
+    condition: { type: 'assignmentGap', shiftType: 'verschieben', direction: 'either', minDays: 1, maxDays: 7 },
+  },
+  {
+    id: 'builtin-noConsecutiveNacht', builtinKey: 'noConsecutiveNacht',
+    name: 'Keine zwei Nachtschichten hintereinander',
+    description: 'Blockiert eine Nachtbereitschaft, wenn 1–8 Tage davor oder danach bereits eine Nachtbereitschaft für dieselbe Person liegt.',
+    enabled: true, targetShiftTypes: ['nachtbereitschaft'],
+    condition: { type: 'assignmentGap', shiftType: 'nachtbereitschaft', direction: 'either', minDays: 1, maxDays: 8 },
+  },
+  {
+    id: 'builtin-noConsecutiveFruehschicht', builtinKey: 'noConsecutiveFruehschicht',
+    name: 'Keine zwei Frühschichten (Wochenende) hintereinander',
+    description: 'Blockiert eine Frühschicht, wenn 1–7 Tage davor oder danach bereits eine Frühschicht für dieselbe Person liegt.',
+    enabled: true, targetShiftTypes: ['fruehschicht'],
+    condition: { type: 'assignmentGap', shiftType: 'fruehschicht', direction: 'either', minDays: 1, maxDays: 7 },
+  },
+  {
+    id: 'builtin-noNachtBeforeVacation', builtinKey: 'noNachtBeforeVacation',
+    name: 'Keine Nachtbereitschaft in der Woche vor Urlaub',
+    description: 'Blockiert Nachtbereitschaft, wenn 1–7 Tage danach Urlaub beginnt.',
+    enabled: true, targetShiftTypes: ['nachtbereitschaft'],
+    condition: { type: 'nearVacation', direction: 'after', minDays: 1, maxDays: 7 },
+  },
+];
 
 export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
   shiftCounts: {
@@ -50,18 +153,11 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
   },
   over55VerschiebenSlots: 2,
   rules: {
-    noWeekendAroundVacation: true,
-    noFruehschichtAdjacentToVerschieben: true,
-    noNachtAfterVerschieben: true,
-    noVerschiebenAfterNacht: true,
-    noConsecutiveVerschieben: true,
-    noConsecutiveNacht: true,
-    noConsecutiveFruehschicht: true,
-    noNachtBeforeVacation: true,
     respectEmployeeShiftTypes: true,
     respectAvoidancePreferences: true,
     departmentDiversity: true,
   },
+  customRules: BUILTIN_RULES.map(r => ({ ...r })),
 };
 
 export interface VacationRange {
@@ -92,6 +188,8 @@ export interface Employee {
   terminationDate?: Date;
   /** Which planning period the employee last selected in their portal (Einstellungen). Server-resolved default when unset. */
   portalSelectedPeriodId?: string;
+  /** When true, this employee is skipped by the automatic scheduling algorithm (and any manual-assignment eligibility checks that share the same logic) and by Fairness KPI calculations — but still shown in the Kalender roster while employed. */
+  excludeFromPlanning?: boolean;
 }
 
 // ── Employee portal notification preferences ────────────────────────
@@ -322,3 +420,65 @@ export const SHIFT_LABELS: Record<ShiftType, string> = {
   verschieben: 'Verschobene Schicht',
   nachtbereitschaft: 'Nachtbereitschaft'
 };
+
+// ---------------------------------------------------------------------------
+// Boards — Trello-style task boards, independent of the shift-scheduling
+// domain above. See server/boards.ts for persistence/visibility logic.
+// ---------------------------------------------------------------------------
+
+export type BoardVisibility = 'private' | 'organization' | 'selected';
+
+export interface BoardComment {
+  id: string;
+  authorId: string;
+  /** Denormalized so the comment still reads correctly if the author account is later deleted. */
+  authorName: string;
+  text: string;
+  attachmentIds: string[];
+  createdAt: string;
+}
+
+export interface BoardSubtask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface BoardTask {
+  id: string;
+  title: string;
+  description?: string;
+  done: boolean;
+  /** ISO date (YYYY-MM-DD) */
+  deadline?: string;
+  /** AdminUser ids — must be a subset of who the board is shared with. */
+  assigneeIds: string[];
+  subtasks: BoardSubtask[];
+  comments: BoardComment[];
+  order: number;
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface BoardSection {
+  id: string;
+  name: string;
+  order: number;
+  tasks: BoardTask[];
+}
+
+export interface Board {
+  id: string;
+  organizationId: string;
+  name: string;
+  /** Only 'kanban' for now — kept as a field for future board types. */
+  type: 'kanban';
+  visibility: BoardVisibility;
+  /** Only meaningful when visibility === 'selected'. */
+  visibleToUserIds?: string[];
+  /** AdminUser id — always implicitly able to see/edit their own board regardless of visibility. */
+  ownerId: string;
+  ownerName: string;
+  createdAt: string;
+  sections: BoardSection[];
+}

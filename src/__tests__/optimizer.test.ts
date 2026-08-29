@@ -188,15 +188,10 @@ describe('Fairness Optimizer', () => {
   });
 
   it('respects adjacency rules after optimisation (bidirectional)', () => {
-    const cfg: SchedulerConfig = {
-      ...DEFAULT_SCHEDULER_CONFIG,
-      rules: {
-        ...DEFAULT_SCHEDULER_CONFIG.rules,
-        noNachtAfterVerschieben: true,
-        noVerschiebenAfterNacht: true,
-        noConsecutiveVerschieben: true,
-      },
-    };
+    // noNachtAfterVerschieben / noVerschiebenAfterNacht / noConsecutiveVerschieben
+    // are builtin block-based rules now (see BUILTIN_RULES in types.ts),
+    // enabled by default — no override needed here.
+    const cfg: SchedulerConfig = { ...DEFAULT_SCHEDULER_CONFIG };
 
     const result = runOptimiser(
       employees,
