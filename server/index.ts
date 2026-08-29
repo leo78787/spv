@@ -17,7 +17,8 @@ import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { loadState, saveState } from './db.js';
+import { loadState, saveState, listOrganizations, getOrganization, createOrganization, renameOrganization, orgDataDir } from './db.js';
+import { runWithOrg } from './orgContext.js';
 import { generateAutomaticShiftPlan, runEqualityOptimiser, runTotalBalanceOptimiser, detectViolations, getAvailableEmployeesSorted, getEmployeeActiveWeight, MIN_ACTIVE_WEIGHT } from '../src/utils/scheduler.js';
 import { computeFairnessScores } from '../src/utils/fairnessImpact.js';
 import { runOptimiser } from '../src/utils/optimizer.js';
@@ -29,8 +30,36 @@ import {
   getAllCredentialInfo,
   clearAllCredentials,
 } from './portalAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail } from './mailer.js';
+import {
+  listAdminUsers,
+  getAdminUser,
+  inviteAdminUser,
+  resetAdminPassword,
+  updateAdminUserRole,
+  updatePersonalTabVisibility,
+  deleteAdminUser,
+  authenticateAdmin,
+  changeAdminPassword,
+  verifyAdminPassword,
+  ADMIN_PERMISSION_AREAS,
+  type AdminRole,
+  type AdminPermissionArea,
+} from './adminAuth.js';
+import {
+  initPlatformOwner,
+  authenticatePlatform,
+  listPlatformUsers,
+  getPlatformUser,
+  invitePlatformUser,
+  resetPlatformUserPassword,
+  deletePlatformUser,
+  changePlatformUserPassword,
+} from './platformAuth.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail } from './mailer.js';
 import { initBackupSchedule, updateBackupSettings, disableBackupSettings, restoreFromBackup } from './backup.js';
+import { diffState } from './stateDiff.js';
+import { logChange, logChanges, queryChangeLog } from './auditLog.js';
+import { DEFAULT_TAB_VISIBILITY, type TabVisibility } from '../src/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
@@ -82,7 +111,35 @@ function broadcastOptimSSE(payload: any) {
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════
 
-const validTokens = new Set<string>();
+/**
+ * Admin session: which organization the caller operates in, their role, and
+ * (for real invited accounts) their admin-user id. The legacy shared login
+ * (spm2026) maps to a synthetic full-access "admin" session on the first
+ * organization with no adminUserId — kept working indefinitely as an
+ * explicit fallback. Sessions are in-memory only (as they already were),
+ * lost on restart — unchanged behavior from before this change.
+ */
+interface AdminSession {
+  organizationId: string;
+  role: AdminRole;
+  adminUserId?: string;
+}
+const adminTokens = new Map<string, AdminSession>();
+
+/** Human-readable actor description for the audit log, derived from an admin session. */
+function actorFromAdminSession(session: AdminSession): { actorType: 'admin' | 'legacy'; actorName: string; actorEmail?: string } {
+  if (!session.adminUserId) return { actorType: 'legacy', actorName: 'Gemeinsamer Admin-Zugang' };
+  const user = getAdminUser(session.adminUserId);
+  return { actorType: 'admin', actorName: user?.name ?? 'Unbekannt', actorEmail: user?.email };
+}
+
+/** Convenience: log a changelog entry attributed to the current admin request's session/org. */
+function logAdminChange(req: express.Request, area: string, summary: string): void {
+  const session: AdminSession | undefined = (req as any).adminSession;
+  if (!session) return;
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area, summary });
+}
 
 function authMiddleware(
   req: express.Request,
@@ -91,25 +148,481 @@ function authMiddleware(
 ) {
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token || !validTokens.has(token)) {
+  const session = token ? adminTokens.get(token) : undefined;
+  if (!session) {
     res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  // Re-derive the role live from the current account record on every
+  // request (rather than trusting the role cached in the token at login
+  // time) so a role/permission change made elsewhere (Team tab, orga
+  // portal) takes effect on the very next request — no logout/login needed.
+  let effectiveSession: AdminSession = session;
+  if (session.adminUserId) {
+    const user = getAdminUser(session.adminUserId);
+    if (!user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    effectiveSession = { ...session, role: user.role };
+  }
+  // Betrachter is read-only everywhere — blocked generically here so every
+  // existing and future mutating endpoint is covered without individual checks.
+  if (effectiveSession.role === 'betrachter' && req.method !== 'GET') {
+    res.status(403).json({ error: 'Betrachter können keine Änderungen vornehmen.' });
+    return;
+  }
+  (req as any).adminSession = effectiveSession;
+  runWithOrg(effectiveSession.organizationId, next);
+}
+
+/** Requires the caller to be Admin (full access) — use after authMiddleware. Team management and full data reset are always admin-only, never delegatable. */
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const session: AdminSession | undefined = (req as any).adminSession;
+  if (session?.role !== 'admin') {
+    res.status(403).json({ error: 'Nur Admins können diese Aktion ausführen.' });
     return;
   }
   next();
 }
 
+/** Requires the caller to be Admin, or a Leitung with the given permission area granted — use after authMiddleware. */
+function requirePermission(area: AdminPermissionArea) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const session: AdminSession | undefined = (req as any).adminSession;
+    if (session?.role === 'admin') { next(); return; }
+    if (session?.role === 'leitung' && session.adminUserId) {
+      const user = getAdminUser(session.adminUserId);
+      if (user?.permissions?.includes(area)) { next(); return; }
+    }
+    res.status(403).json({ error: 'Dafür haben Sie keine Berechtigung.' });
+  };
+}
+
+/**
+ * Legacy shared admin login by username. Authenticates against the same
+ * adminUsers.json records as the personal email login below — the
+ * "spm2026" account is seeded once as a real, ordinary AdminUser (see
+ * migrateLegacyAccount() in adminAuth.ts), so it's editable/deletable
+ * through the normal Team UI just like any invited account, and this
+ * route just resolves it by its username instead of an email address.
+ */
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body ?? {};
-  if (username === 'spm2026' && password === 'schichtplan2026!') {
-    const token = crypto.randomUUID();
-    validTokens.add(token);
-    res.json({ success: true, token });
-  } else {
+  const result = authenticateAdmin(String(username ?? ''), String(password ?? ''));
+  if (!result) {
     res.status(401).json({
       success: false,
       message: 'Ungültiger Benutzername oder Passwort.',
     });
+    return;
   }
+  const token = crypto.randomUUID();
+  adminTokens.set(token, { organizationId: result.user.organizationId, role: result.user.role, adminUserId: result.user.id });
+  res.json({ success: true, token, role: result.user.role, mustChangePassword: result.mustChangePassword });
+});
+
+/** Personal admin login (Admin/Leitung/Betrachter accounts invited within an organization). */
+app.post('/api/admin/login', (req, res) => {
+  const { email, password } = req.body ?? {};
+  const result = authenticateAdmin(String(email ?? ''), String(password ?? ''));
+  if (!result) {
+    res.status(401).json({ error: 'Ungültige Anmeldedaten.' });
+    return;
+  }
+  const token = crypto.randomUUID();
+  adminTokens.set(token, { organizationId: result.user.organizationId, role: result.user.role, adminUserId: result.user.id });
+  res.json({
+    success: true,
+    token,
+    role: result.user.role,
+    mustChangePassword: result.mustChangePassword,
+    name: result.user.name,
+  });
+});
+
+/** Admin: change own password (invited accounts only — the legacy shared login has no changeable password here). */
+app.post('/api/admin/change-password', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  if (!session.adminUserId) {
+    res.status(400).json({ error: 'Für den gemeinsamen Admin-Zugang kann hier kein Passwort geändert werden.' });
+    return;
+  }
+  const { newPassword } = req.body ?? {};
+  if (!newPassword || String(newPassword).length < 6) {
+    res.status(400).json({ error: 'Passwort muss mindestens 6 Zeichen haben.' });
+    return;
+  }
+  changeAdminPassword(session.adminUserId, String(newPassword));
+  res.json({ success: true });
+});
+
+/**
+ * Re-check the password of whoever is currently logged in — used to replace
+ * the old hardcoded "2026" confirmation on sensitive actions (release/lock/
+ * delete planning periods, settings-tab unlocks). Works the same for an
+ * Admin or a permitted Leitung session; each confirms with their own
+ * password. The legacy shared session confirms with its own fixed password.
+ */
+app.post('/api/admin/verify-password', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const { password } = req.body ?? {};
+  const ok = session.adminUserId
+    ? verifyAdminPassword(session.adminUserId, String(password ?? ''))
+    : String(password ?? '') === 'schichtplan2026!';
+  res.json({ valid: ok });
+});
+
+/** Admin: who am I — role, organization, permissions (for Leitung), and (if assigned) the department to pre-select in Mitarbeiter/Kalender. */
+app.get('/api/admin/me', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const org = getOrganization(session.organizationId);
+  const state = loadState();
+  const departments: any[] = state.departments || [];
+  const myDepartment = session.adminUserId
+    ? departments.find((d: any) => d.managerId === session.adminUserId)
+    : undefined;
+  const user = session.adminUserId ? getAdminUser(session.adminUserId) : null;
+  const permissions = session.role === 'admin'
+    ? [...ADMIN_PERMISSION_AREAS]
+    : session.role === 'leitung'
+      ? (user?.permissions ?? [])
+      : [];
+
+  // Org-wide max (Admin-controlled): which tabs exist at all for this role.
+  const orgTabVisibility: TabVisibility = (session.role === 'betrachter'
+    ? state.betrachterTabVisibility
+    : state.tabVisibility) ?? DEFAULT_TAB_VISIBILITY;
+  // Personal preference (Leitung/Betrachter self-service): further hide tabs
+  // within what the Admin allows. Always intersected — a personal "true"
+  // can never re-show a tab the Admin has org-wide disabled.
+  const personalRaw: Record<string, boolean> = user?.personalTabVisibility ?? {};
+  const effectiveTabVisibility: TabVisibility = { ...orgTabVisibility };
+  (Object.keys(orgTabVisibility) as (keyof TabVisibility)[]).forEach(key => {
+    effectiveTabVisibility[key] = orgTabVisibility[key] !== false && personalRaw[key] !== false;
+  });
+
+  res.json({
+    role: session.role,
+    organizationId: session.organizationId,
+    organizationName: org?.name ?? null,
+    defaultDepartmentId: myDepartment?.id ?? null,
+    permissions,
+    tabVisibility: state.tabVisibility ?? null,
+    betrachterTabVisibility: state.betrachterTabVisibility ?? null,
+    orgTabVisibility,
+    personalTabVisibility: personalRaw,
+    effectiveTabVisibility,
+  });
+});
+
+/** Self-service: a Leitung/Betrachter shows/hides tabs for themselves, within whatever the Admin has org-wide allowed. Always clamped server-side so a tab the Admin disallowed can never be re-enabled this way. */
+app.put('/api/admin/my-tab-visibility', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  if (!session.adminUserId) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const state = loadState();
+  const orgTabVisibility: TabVisibility = (session.role === 'betrachter'
+    ? state.betrachterTabVisibility
+    : state.tabVisibility) ?? DEFAULT_TAB_VISIBILITY;
+  const incoming: Record<string, boolean> = req.body?.personalTabVisibility ?? {};
+  const clamped: Record<string, boolean> = {};
+  (Object.keys(orgTabVisibility) as (keyof TabVisibility)[]).forEach(key => {
+    clamped[key] = orgTabVisibility[key] !== false && incoming[key] !== false;
+  });
+  const updated = updatePersonalTabVisibility(session.adminUserId, clamped);
+  if (!updated) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true, personalTabVisibility: clamped });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN ORG USERS — Admin invites/manages Admin/Leitung/Betrachter accounts
+// within their own organization.
+// ═══════════════════════════════════════════════════════════════════════
+
+app.get('/api/admin/org/users', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  res.json(listAdminUsers(session.organizationId));
+});
+
+app.post('/api/admin/org/users', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const session: AdminSession = (req as any).adminSession;
+    const { name, email, role, permissions } = req.body ?? {};
+    if (!name || !email || (role !== 'admin' && role !== 'leitung' && role !== 'betrachter')) {
+      res.status(400).json({ error: 'Name, E-Mail und Rolle (admin/leitung/betrachter) erforderlich.' });
+      return;
+    }
+    const result = inviteAdminUser(session.organizationId, String(name), String(email), role, Array.isArray(permissions) ? permissions : undefined);
+    if ('error' in result) { res.status(400).json({ error: result.error }); return; }
+
+    const org = getOrganization(session.organizationId);
+    try {
+      await sendAdminInviteEmail(result.user.email, result.user.name, org?.name ?? 'Schichtplan Manager', result.user.role, result.oneTimePassword);
+    } catch (mailErr) {
+      console.error('[admin/org/users] invite email failed:', mailErr);
+    }
+    logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'team', summary: `Zugang eingeladen: ${result.user.name} (${result.user.email}), Rolle: ${result.user.role}` });
+    res.json({ success: true, user: result.user });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/admin/org/users/:id/resend', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const session: AdminSession = (req as any).adminSession;
+    const user = getAdminUser(String(req.params.id));
+    if (!user || user.organizationId !== session.organizationId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    const result = resetAdminPassword(user.id);
+    if (!result) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    const org = getOrganization(session.organizationId);
+    await sendAdminInviteEmail(user.email, user.name, org?.name ?? 'Schichtplan Manager', user.role, result.oneTimePassword);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put('/api/admin/org/users/:id', authMiddleware, requireAdmin, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const user = getAdminUser(String(req.params.id));
+  if (!user || user.organizationId !== session.organizationId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const { role, permissions } = req.body ?? {};
+  if (role !== 'admin' && role !== 'leitung' && role !== 'betrachter') { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
+  const updated = updateAdminUserRole(user.id, role, Array.isArray(permissions) ? permissions : undefined);
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'team', summary: `Rolle geändert: ${user.name} (${user.email}) → ${role}${role === 'leitung' ? ` [${(permissions || []).join(', ')}]` : ''}` });
+  res.json({ success: true, user: updated });
+});
+
+app.delete('/api/admin/org/users/:id', authMiddleware, requireAdmin, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const user = getAdminUser(String(req.params.id));
+  if (!user || user.organizationId !== session.organizationId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  deleteAdminUser(user.id);
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'team', summary: `Zugang entfernt: ${user.name} (${user.email})` });
+  res.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// PLATFORM (orga.schichtapp.de) — organization registry + platform users
+// ═══════════════════════════════════════════════════════════════════════
+
+type PlatformSession = { userId: string; name: string; email: string };
+const platformTokens = new Map<string, PlatformSession>();
+
+function platformAuthMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const header = req.headers.authorization;
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  const session = token ? platformTokens.get(token) : undefined;
+  if (!session) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  (req as any).platformSession = session;
+  next();
+}
+
+function actorFromPlatformSession(session: PlatformSession): { actorType: 'platform'; actorName: string; actorEmail?: string } {
+  return { actorType: 'platform', actorName: session.name, actorEmail: session.email };
+}
+
+app.post('/api/platform/login', (req, res) => {
+  const { username, email, password } = req.body ?? {};
+  const identifier = String(email ?? username ?? '');
+  const result = authenticatePlatform(identifier, String(password ?? ''));
+  if (!result) {
+    res.status(401).json({ error: 'Ungültige Anmeldedaten.' });
+    return;
+  }
+  const token = crypto.randomUUID();
+  platformTokens.set(token, { userId: result.user.id, name: result.user.name, email: result.user.email });
+  res.json({ success: true, token, mustChangePassword: result.mustChangePassword, name: result.user.name });
+});
+
+/**
+ * Set a new password for the current platform session — only ever reachable
+ * right after logging in with a one-time password (mustChangePassword was
+ * true), not a general "change my password whenever" action. There is no
+ * self-service change-anytime endpoint; the only way to get a new password
+ * is "Passwort zurücksetzen" in Einstellungen, which emails a fresh one-time
+ * password and forces this same first-use flow again.
+ */
+app.post('/api/platform/change-password', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const { newPassword } = req.body ?? {};
+  if (!newPassword || String(newPassword).length < 6) {
+    res.status(400).json({ error: 'Neues Passwort muss mindestens 6 Zeichen haben.' });
+    return;
+  }
+  changePlatformUserPassword(session.userId, String(newPassword));
+  res.json({ success: true });
+});
+
+app.get('/api/platform/organizations', platformAuthMiddleware, (_req, res) => {
+  res.json(listOrganizations());
+});
+
+app.post('/api/platform/organizations', platformAuthMiddleware, async (req, res) => {
+  try {
+    const session: PlatformSession = (req as any).platformSession;
+    const { name, leitungName, leitungEmail } = req.body ?? {};
+    if (!name || !String(name).trim()) { res.status(400).json({ error: 'Name der Organisation erforderlich.' }); return; }
+    const org = createOrganization(String(name).trim());
+    logChange({ organizationId: org.id, organizationName: org.name, ...actorFromPlatformSession(session), area: 'organization', summary: `Organisation angelegt: ${org.name}` });
+
+    let invitedAdmin: any = null;
+    if (leitungName && leitungEmail) {
+      const result = inviteAdminUser(org.id, String(leitungName), String(leitungEmail), 'admin');
+      if ('error' in result) {
+        res.json({ success: true, organization: org, leitungError: result.error });
+        return;
+      }
+      try {
+        await sendAdminInviteEmail(result.user.email, result.user.name, org.name, 'admin', result.oneTimePassword);
+      } catch (mailErr) {
+        console.error('[platform/organizations] invite email failed:', mailErr);
+      }
+      logChange({ organizationId: org.id, organizationName: org.name, ...actorFromPlatformSession(session), area: 'team', summary: `Erster Admin eingeladen: ${result.user.name} (${result.user.email})` });
+      invitedAdmin = result.user;
+    }
+    res.json({ success: true, organization: org, leitung: invitedAdmin });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put('/api/platform/organizations/:id', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const { name } = req.body ?? {};
+  if (!name || !String(name).trim()) { res.status(400).json({ error: 'Name erforderlich.' }); return; }
+  const before = getOrganization(String(req.params.id));
+  const org = renameOrganization(String(req.params.id), String(name).trim());
+  if (!org) { res.status(404).json({ error: 'Organisation nicht gefunden.' }); return; }
+  logChange({ organizationId: org.id, organizationName: org.name, ...actorFromPlatformSession(session), area: 'organization', summary: `Organisation umbenannt: ${before?.name ?? ''} → ${org.name}` });
+  res.json({ success: true, organization: org });
+});
+
+app.get('/api/platform/organizations/:id/users', platformAuthMiddleware, (req, res) => {
+  res.json(listAdminUsers(String(req.params.id)));
+});
+
+app.post('/api/platform/organizations/:id/invite-leitung', platformAuthMiddleware, async (req, res) => {
+  try {
+    const session: PlatformSession = (req as any).platformSession;
+    const orgId = String(req.params.id);
+    const org = getOrganization(orgId);
+    if (!org) { res.status(404).json({ error: 'Organisation nicht gefunden.' }); return; }
+    const { name, email, role, permissions } = req.body ?? {};
+    if (!name || !email) { res.status(400).json({ error: 'Name und E-Mail erforderlich.' }); return; }
+    const resolvedRole: AdminRole = role === 'leitung' || role === 'betrachter' ? role : 'admin';
+    const result = inviteAdminUser(orgId, String(name), String(email), resolvedRole, Array.isArray(permissions) ? permissions : undefined);
+    if ('error' in result) { res.status(400).json({ error: result.error }); return; }
+    await sendAdminInviteEmail(result.user.email, result.user.name, org.name, resolvedRole, result.oneTimePassword);
+    logChange({ organizationId: org.id, organizationName: org.name, ...actorFromPlatformSession(session), area: 'team', summary: `Zugang eingeladen: ${result.user.name} (${result.user.email}), Rolle: ${resolvedRole}` });
+    res.json({ success: true, user: result.user });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.put('/api/platform/organizations/:id/users/:userId', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const orgId = String(req.params.id);
+  const user = getAdminUser(String(req.params.userId));
+  if (!user || user.organizationId !== orgId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const { role, permissions } = req.body ?? {};
+  if (role !== 'admin' && role !== 'leitung' && role !== 'betrachter') { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
+  const updated = updateAdminUserRole(user.id, role, Array.isArray(permissions) ? permissions : undefined);
+  const org = getOrganization(orgId);
+  logChange({ organizationId: orgId, organizationName: org?.name ?? null, ...actorFromPlatformSession(session), area: 'team', summary: `Rolle geändert: ${user.name} (${user.email}) → ${role}${role === 'leitung' ? ` [${(permissions || []).join(', ')}]` : ''}` });
+  res.json({ success: true, user: updated });
+});
+
+app.delete('/api/platform/organizations/:id/users/:userId', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const orgId = String(req.params.id);
+  const user = getAdminUser(String(req.params.userId));
+  if (!user || user.organizationId !== orgId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  deleteAdminUser(user.id);
+  const org = getOrganization(orgId);
+  logChange({ organizationId: orgId, organizationName: org?.name ?? null, ...actorFromPlatformSession(session), area: 'team', summary: `Zugang entfernt: ${user.name} (${user.email})` });
+  res.json({ success: true });
+});
+
+app.post('/api/platform/organizations/:id/users/:userId/resend', platformAuthMiddleware, async (req, res) => {
+  try {
+    const orgId = String(req.params.id);
+    const user = getAdminUser(String(req.params.userId));
+    if (!user || user.organizationId !== orgId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    const result = resetAdminPassword(user.id);
+    if (!result) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    const org = getOrganization(orgId);
+    await sendAdminInviteEmail(user.email, user.name, org?.name ?? 'Schichtplan Manager', user.role, result.oneTimePassword);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Platform users (who can access orga.schichtapp.de) ──────────────────
+
+app.get('/api/platform/users', platformAuthMiddleware, (_req, res) => {
+  res.json(listPlatformUsers());
+});
+
+app.post('/api/platform/users', platformAuthMiddleware, async (req, res) => {
+  try {
+    const session: PlatformSession = (req as any).platformSession;
+    const { name, email } = req.body ?? {};
+    if (!name || !email) { res.status(400).json({ error: 'Name und E-Mail erforderlich.' }); return; }
+    const result = invitePlatformUser(String(name), String(email));
+    if ('error' in result) { res.status(400).json({ error: result.error }); return; }
+    try {
+      await sendAdminInviteEmail(result.user.email, result.user.name, 'Schichtplan Manager – Organisationsverwaltung', 'admin', result.oneTimePassword);
+    } catch (mailErr) {
+      console.error('[platform/users] invite email failed:', mailErr);
+    }
+    logChange({ organizationId: null, organizationName: null, ...actorFromPlatformSession(session), area: 'platform', summary: `Plattform-Zugang eingeladen: ${result.user.name} (${result.user.email})` });
+    res.json({ success: true, user: result.user });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/platform/users/:id/reset-password', platformAuthMiddleware, async (req, res) => {
+  try {
+    const session: PlatformSession = (req as any).platformSession;
+    const user = getPlatformUser(String(req.params.id));
+    if (!user) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    const result = resetPlatformUserPassword(user.id);
+    if (!result) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+    await sendAdminInviteEmail(user.email, user.name, 'Schichtplan Manager – Organisationsverwaltung', 'admin', result.oneTimePassword);
+    logChange({ organizationId: null, organizationName: null, ...actorFromPlatformSession(session), area: 'platform', summary: `Passwort zurückgesetzt für: ${user.name} (${user.email})` });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.delete('/api/platform/users/:id', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const user = getPlatformUser(String(req.params.id));
+  if (!user) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const result = deletePlatformUser(user.id);
+  if ('error' in result) { res.status(400).json({ error: result.error }); return; }
+  logChange({ organizationId: null, organizationName: null, ...actorFromPlatformSession(session), area: 'platform', summary: `Plattform-Zugang entfernt: ${user.name} (${user.email})` });
+  res.json({ success: true });
+});
+
+// ─── Changelog ────────────────────────────────────────────────────────
+
+app.get('/api/platform/changelog', platformAuthMiddleware, (req, res) => {
+  const { organizationId, from, to } = req.query;
+  const entries = queryChangeLog({
+    organizationId: typeof organizationId === 'string' && organizationId ? organizationId : undefined,
+    from: typeof from === 'string' && from ? from : undefined,
+    to: typeof to === 'string' && to ? to : undefined,
+  });
+  res.json(entries);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -125,6 +638,7 @@ app.put('/api/state', authMiddleware, (req, res) => {
   // planningPeriods.released / .employeesLocked / .createdAt are exclusively
   // managed by the dedicated /api/periods/:id/release and /api/periods/:id/lock
   // endpoints below — never trust client-supplied values for those here.
+  const session: AdminSession = (req as any).adminSession;
   const existing = loadState();
   const existingPeriodsById = new Map<string, any>((existing.planningPeriods || []).map((p: any) => [p.id, p]));
   const incomingPeriods: any[] = Array.isArray(req.body.planningPeriods) ? req.body.planningPeriods : [];
@@ -151,7 +665,36 @@ app.put('/api/state', authMiddleware, (req, res) => {
   delete merged.shiftPlan;
   delete merged.planReleased;
   delete merged.employeesLocked;
+
+  // Diff before saving: this single generic endpoint is where almost every
+  // admin mutation ultimately lands (employees, departments, holidays,
+  // labels, calendar labels, swap/tab settings, manual calendar edits), so
+  // one diff serves both permission enforcement (Leitung must hold every
+  // touched area) and the changelog (one entry per changed item).
+  const diff = diffState(existing, merged);
+  if (session.role === 'leitung') {
+    const user = session.adminUserId ? getAdminUser(session.adminUserId) : null;
+    const granted = new Set<string>(user?.permissions ?? []);
+    const missing = [...diff.touchedAreas].filter(a => !granted.has(a));
+    if (missing.length > 0) {
+      res.status(403).json({ error: `Dafür haben Sie keine Berechtigung (${missing.join(', ')}).` });
+      return;
+    }
+  }
+
   saveState(merged);
+
+  if (diff.items.length > 0) {
+    const org = getOrganization(session.organizationId);
+    const actor = actorFromAdminSession(session);
+    logChanges(diff.items.map(item => ({
+      organizationId: session.organizationId,
+      organizationName: org?.name ?? null,
+      ...actor,
+      area: item.area,
+      summary: item.summary,
+    })));
+  }
 
   // For each released period, detect per-employee schedule changes (shift
   // assignments or visible calendar labels) and debounce a notification.
@@ -174,7 +717,7 @@ app.put('/api/state', authMiddleware, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 
 /** Admin: create a new planning period. Warns (does not block) on date-range overlap with existing periods. */
-app.post('/api/periods', authMiddleware, (req, res) => {
+app.post('/api/periods', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const { name, year, startMonth, months, schedulerConfig } = req.body ?? {};
     if (typeof year !== 'number' || typeof startMonth !== 'number' || typeof months !== 'number' || months < 1) {
@@ -201,6 +744,7 @@ app.post('/api/periods', authMiddleware, (req, res) => {
     };
     state.planningPeriods = [...(state.planningPeriods || []), period];
     saveState(state);
+    logAdminChange(req, 'planning', `Planungsperiode angelegt: ${periodLabel(period)}`);
     res.json({
       success: true,
       period,
@@ -214,7 +758,7 @@ app.post('/api/periods', authMiddleware, (req, res) => {
 });
 
 /** Admin: update a planning period's date range / name / scheduler config. Warns on overlap. */
-app.put('/api/periods/:id', authMiddleware, (req, res) => {
+app.put('/api/periods/:id', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const id = String(req.params.id);
     const state = loadState();
@@ -233,6 +777,7 @@ app.put('/api/periods/:id', authMiddleware, (req, res) => {
     const overlapping = findOverlappingPeriods(state, period, id);
     state.planningPeriods = periods;
     saveState(state);
+    logAdminChange(req, 'planning', `Planungsperiode bearbeitet: ${periodLabel(period)}`);
     res.json({
       success: true,
       period,
@@ -246,13 +791,14 @@ app.put('/api/periods/:id', authMiddleware, (req, res) => {
 });
 
 /** Admin: delete a planning period entirely (including its generated assignments). */
-app.delete('/api/periods/:id', authMiddleware, (req, res) => {
+app.delete('/api/periods/:id', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const id = String(req.params.id);
     const state = loadState();
     const periods: any[] = state.planningPeriods || [];
     const period = periods.find(p => p.id === id);
     if (!period) { res.status(404).json({ error: 'Planungsperiode nicht gefunden.' }); return; }
+    const deletedLabel = periodLabel(period);
 
     const assignmentIds = new Set((period.assignments || []).map((a: any) => a.id));
     state.planningPeriods = periods.filter(p => p.id !== id);
@@ -268,6 +814,7 @@ app.delete('/api/periods/:id', authMiddleware, (req, res) => {
     state.swapMatches = matches;
 
     saveState(state);
+    logAdminChange(req, 'planning', `Planungsperiode gelöscht: ${deletedLabel}`);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -275,7 +822,7 @@ app.delete('/api/periods/:id', authMiddleware, (req, res) => {
 });
 
 /** Admin: release or unrelease a specific planning period. */
-app.post('/api/periods/:id/release', authMiddleware, async (req, res) => {
+app.post('/api/periods/:id/release', authMiddleware, requirePermission('planning'), async (req, res) => {
   try {
     const id = String(req.params.id);
     const { released } = req.body ?? {};
@@ -291,6 +838,7 @@ app.post('/api/periods/:id/release', authMiddleware, async (req, res) => {
       period.employeesLocked = true;
     }
     saveState(state);
+    logAdminChange(req, 'planning', `Planungsperiode ${period.released ? 'freigegeben' : 'Freigabe zurückgezogen'}: ${periodLabel(period)}`);
 
     // If newly releasing (was not released before), notify eligible employees who have assignments in THIS period.
     if (period.released && !wasReleased) {
@@ -321,7 +869,7 @@ app.post('/api/periods/:id/release', authMiddleware, async (req, res) => {
 });
 
 /** Admin: lock or unlock employee self-service (vacation/preferences) for a specific planning period. */
-app.post('/api/periods/:id/lock', authMiddleware, (req, res) => {
+app.post('/api/periods/:id/lock', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const id = String(req.params.id);
     const { locked } = req.body ?? {};
@@ -336,6 +884,7 @@ app.post('/api/periods/:id/lock', authMiddleware, (req, res) => {
     }
     period.employeesLocked = !!locked;
     saveState(state);
+    logAdminChange(req, 'planning', `Planungsperiode ${period.employeesLocked ? 'gesperrt' : 'entsperrt'}: ${periodLabel(period)}`);
     res.json({ success: true, period });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -558,7 +1107,7 @@ function scheduleChangeNotification(employeeId: string): void {
 
 // ── Generate shift plan ─────────────────────────────────────────────
 
-app.post('/api/generate', authMiddleware, (req, res) => {
+app.post('/api/generate', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const { employees, periodId, schedulerConfig } = reviveDates(req.body);
     const state = loadState();
@@ -597,6 +1146,7 @@ app.post('/api/generate', authMiddleware, (req, res) => {
     period.algorithm = 'automatisch generiert';
     period.updatedAt = new Date().toISOString();
     saveState(state);
+    logAdminChange(req, 'planning', `Schichtplan generiert: ${periodLabel(period)} (${result.assignments.length} Zuweisungen)`);
 
     res.json({ ...result, period });
   } catch (err) {
@@ -606,7 +1156,7 @@ app.post('/api/generate', authMiddleware, (req, res) => {
 
 // ── Equality optimiser (synchronous — fast) ─────────────────────────
 
-app.post('/api/optimize-equality', authMiddleware, (req, res) => {
+app.post('/api/optimize-equality', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const data = reviveDates(req.body);
     const { employees, schedulerConfig, baselineAssignments, periodId } = data;
@@ -644,6 +1194,7 @@ app.post('/api/optimize-equality', authMiddleware, (req, res) => {
     period.algorithm = 'gleichheits-optimiert';
     period.updatedAt = new Date().toISOString();
     saveState(state);
+    logAdminChange(req, 'planning', `Gleichheits-Optimierung angewendet: ${periodLabel(period)}`);
 
     res.json({ ...result, violations, period });
   } catch (err) {
@@ -653,7 +1204,7 @@ app.post('/api/optimize-equality', authMiddleware, (req, res) => {
 
 // ── Total-balance optimiser (Step 2b) ───────────────────────────────────
 
-app.post('/api/optimize-total-balance', authMiddleware, (req, res) => {
+app.post('/api/optimize-total-balance', authMiddleware, requirePermission('planning'), (req, res) => {
   try {
     const data = reviveDates(req.body);
     const { employees, schedulerConfig, baselineAssignments, periodId } = data;
@@ -689,6 +1240,7 @@ app.post('/api/optimize-total-balance', authMiddleware, (req, res) => {
     period.algorithm = 'gesamt-balanciert';
     period.updatedAt = new Date().toISOString();
     saveState(state);
+    logAdminChange(req, 'planning', `Gesamt-Balance-Optimierung angewendet: ${periodLabel(period)}`);
 
     res.json({ ...result, violations, period });
   } catch (err) {
@@ -698,7 +1250,7 @@ app.post('/api/optimize-total-balance', authMiddleware, (req, res) => {
 
 // ── Optimise — starts/joins a persistent background job ─────────────────
 
-app.post('/api/optimize', authMiddleware, (req, res) => {
+app.post('/api/optimize', authMiddleware, requirePermission('planning'), (req, res) => {
   // If a job is already running, reject (client should subscribe instead)
   if (currentJob?.status === 'running') {
     res.status(409).json({ error: 'Optimierung läuft bereits', jobId: currentJob.id });
@@ -904,6 +1456,7 @@ app.post('/api/optimize', authMiddleware, (req, res) => {
             period.algorithm = 'fairness-optimiert';
             period.updatedAt = new Date().toISOString();
             saveState(st);
+            logAdminChange(req, 'planning', `Fairness-Optimierung angewendet: ${periodLabel(period)}`);
           } else {
             console.error('[optimize] auto-save skipped: period no longer exists', job.periodId);
           }
@@ -1009,7 +1562,7 @@ app.get('/api/optimize/subscribe', authMiddleware, (req, res) => {
 
 // ── Cancel running optimisation ──────────────────────────────────────────────
 
-app.post('/api/optimize/cancel', authMiddleware, (_req, res) => {
+app.post('/api/optimize/cancel', authMiddleware, requirePermission('planning'), (_req, res) => {
   if (currentJob?.status === 'running') {
     currentJob.status = 'cancelled';
     broadcastOptimSSE({ type: 'cancelled' });
@@ -1023,7 +1576,7 @@ app.post('/api/optimize/cancel', authMiddleware, (_req, res) => {
 
 // ── Clear finished job record ────────────────────────────────────────────────
 
-app.delete('/api/optimize', authMiddleware, (_req, res) => {
+app.delete('/api/optimize', authMiddleware, requirePermission('planning'), (_req, res) => {
   if (currentJob?.status !== 'running') {
     currentJob = null;
   }
@@ -1165,10 +1718,10 @@ function portalAuthMiddleware(
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
-  const employeeId = validatePortalToken(token);
-  if (!employeeId) { res.status(401).json({ error: 'Unauthorized' }); return; }
-  (req as any).employeeId = employeeId;
-  next();
+  const session = validatePortalToken(token);
+  if (!session) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  (req as any).employeeId = session.employeeId;
+  runWithOrg(session.organizationId, next);
 }
 
 /** Portal: change password */
@@ -1363,9 +1916,28 @@ app.put('/api/portal/notification-preferences', portalAuthMiddleware, (req, res)
 // ═══════════════════════════════════════════════════════════════════════
 
 /** Returns a hash/timestamp of current state for change detection */
-app.get('/api/state/version', (_req, res) => {
+/**
+ * Lightweight polling endpoint (admin app + employee portal both call this
+ * every few seconds to detect changes without refetching the full state).
+ * Multi-tenant: accepts either an admin token or a portal token, resolves
+ * the caller's organization from it, and reports that org's state.json
+ * mtime. A 401 here (bad/expired token — e.g. the in-memory admin/portal
+ * session was lost on a server restart) is the signal the frontend uses to
+ * automatically drop back to the login screen instead of silently getting
+ * stuck on stale data.
+ */
+app.get('/api/state/version', (req, res) => {
+  const header = req.headers.authorization;
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+  const adminSession = adminTokens.get(token);
+  const portalSession = adminSession ? null : validatePortalToken(token);
+  const organizationId = adminSession?.organizationId ?? portalSession?.organizationId;
+  if (!organizationId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
   try {
-    const statPath = path.join(__dirname, '..', 'data', 'state.json');
+    const statPath = path.join(orgDataDir(organizationId), 'state.json');
     const stat = fs.statSync(statPath);
     res.json({ version: stat.mtimeMs.toString() });
   } catch {
@@ -1883,7 +2455,7 @@ app.post('/api/swaps/check-violations', authMiddleware, (req, res) => {
 });
 
 /** Admin: approve or reject a swap match */
-app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
+app.post('/api/swaps/resolve', authMiddleware, requirePermission('swaps'), async (req, res) => {
   try {
     const { matchId, action } = req.body; // action = 'approve' | 'reject'
     const state = loadState();
@@ -1897,6 +2469,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
       match.resolvedAt = new Date().toISOString();
       state.swapMatches = matches;
       saveState(state);
+      logAdminChange(req, 'swaps', 'Tauschangebot abgelehnt');
       res.json({ success: true, match });
       return;
     }
@@ -1967,6 +2540,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
         }
       }
 
+      logAdminChange(req, 'swaps', 'Ringtausch genehmigt');
       res.json({ success: true, match });
     } else if (match.takeoverEmployeeId) {
       // ── Direct takeover: giver loses the shift, requester takes it over (no counter-offer) ──
@@ -2012,6 +2586,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
         } catch (e) { console.error('[takeover] mail to taker failed:', e); }
       }
 
+      logAdminChange(req, 'swaps', 'Schichtübernahme genehmigt');
       res.json({ success: true, match });
     } else {
       // ── Direct swap ──
@@ -2059,6 +2634,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
         } catch (e) { console.error('[swap] mail to B failed:', e); }
       }
 
+      logAdminChange(req, 'swaps', 'Tausch genehmigt');
       res.json({ success: true, match });
     }
   } catch (err) {
@@ -2067,7 +2643,7 @@ app.post('/api/swaps/resolve', authMiddleware, async (req, res) => {
 });
 
 /** Admin: undo a resolved swap match */
-app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
+app.post('/api/swaps/undo', authMiddleware, requirePermission('swaps'), async (req, res) => {
   try {
     const { matchId } = req.body;
     const state = loadState();
@@ -2166,6 +2742,7 @@ app.post('/api/swaps/undo', authMiddleware, async (req, res) => {
     state.swapOffers = offers;
     state.swapMatches = matches;
     saveState(state);
+    logAdminChange(req, 'swaps', 'Tausch rückgängig gemacht');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -2208,9 +2785,11 @@ function findAndCreateMatches(state: any) {
       // Don't match the same employee with themselves
       if (a.employeeId === b.employeeId) continue;
 
-      // Check if already matched
+      // Check if already matched — a rejected match for this exact pair must
+      // also block re-creation, otherwise re-scanning resurrects the same
+      // offer combination as a "new" match right after it was declined.
       const alreadyMatched = matches.some((m: any) =>
-        m.status === 'pending' &&
+        (m.status === 'pending' || m.status === 'rejected') &&
         ((m.offerA === a.id && m.offerB === b.id) || (m.offerA === b.id && m.offerB === a.id))
       );
       if (alreadyMatched) continue;
@@ -2324,6 +2903,17 @@ function findRingMatches(
     }
   }
 
+  // A rejected ring must not be resurrected as a "new" match on re-scan —
+  // track the exact offer combinations that were already rejected so an
+  // identical cycle found again is skipped (unlike the pending/approved set
+  // above, individual offers from a rejected ring stay free to appear in
+  // other, different rings).
+  const rejectedRingKeys = new Set<string>();
+  for (const m of matches) {
+    if (m.status !== 'rejected' || !m.ringOffers || m.ringOffers.length === 0) continue;
+    rejectedRingKeys.add(([...m.ringOffers] as string[]).sort().join(','));
+  }
+
   const newRingMatches: any[] = [];
 
   for (let startIdx = 0; startIdx < n; startIdx++) {
@@ -2349,6 +2939,9 @@ function findRingMatches(
           // Check that none of the offers in this ring are already matched
           const ringOfferIds = cycle.map(idx => openOffers[idx].id);
           if (ringOfferIds.some(id => alreadyInMatch.has(id))) continue;
+
+          // Skip if this exact combination was already rejected
+          if (rejectedRingKeys.has([...ringOfferIds].sort().join(','))) continue;
 
           // All employees in the ring must be distinct
           const empIds = cycle.map(idx => openOffers[idx].employeeId);
@@ -2432,7 +3025,7 @@ app.get('/api/backup/settings', authMiddleware, (_req, res) => {
 });
 
 /** Admin: configure (or update) the backup email/interval. Sends the first backup immediately, then on the given interval. */
-app.post('/api/backup/settings', authMiddleware, async (req, res) => {
+app.post('/api/backup/settings', authMiddleware, requirePermission('settings_backup'), async (req, res) => {
   try {
     const { email, intervalHours } = req.body ?? {};
     if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -2444,6 +3037,7 @@ app.post('/api/backup/settings', authMiddleware, async (req, res) => {
       return;
     }
     await updateBackupSettings(email, intervalHours);
+    logAdminChange(req, 'settings_backup', `Backup-Einstellungen geändert: ${email}, alle ${intervalHours}h`);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -2451,15 +3045,16 @@ app.post('/api/backup/settings', authMiddleware, async (req, res) => {
 });
 
 /** Admin: disable the backup schedule. */
-app.post('/api/backup/disable', authMiddleware, (_req, res) => {
+app.post('/api/backup/disable', authMiddleware, requirePermission('settings_backup'), (_req, res) => {
   disableBackupSettings();
   res.json({ success: true });
 });
 
 /** Admin: restore the entire application (state + portal credentials) from a previously exported backup JSON. */
-app.post('/api/backup/restore', authMiddleware, (req, res) => {
+app.post('/api/backup/restore', authMiddleware, requirePermission('settings_backup'), (req, res) => {
   try {
     restoreFromBackup(req.body);
+    logAdminChange(req, 'settings_backup', 'Backup eingespielt — Organisation wurde aus Sicherungsdatei wiederhergestellt');
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: String(err) });
@@ -2476,5 +3071,6 @@ app.post('/api/backup/restore', authMiddleware, (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✔ Schichtplan server running on http://localhost:${PORT}`);
+  initPlatformOwner();
   initBackupSchedule();
 });

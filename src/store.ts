@@ -19,6 +19,24 @@ export function clearAuthToken() {
   localStorage.removeItem('spm-auth-token');
 }
 
+/** Re-confirm a destructive/administrative action with the currently logged-in admin's or Leitung's own password. */
+export async function verifyAdminPassword(password: string): Promise<boolean> {
+  const token = getAuthToken();
+  if (!token) return false;
+  try {
+    const resp = await fetch('/api/admin/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ password }),
+    });
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    return !!data.valid;
+  } catch {
+    return false;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Server persistence helpers (replace the old localStorage approach)
 // ═══════════════════════════════════════════════════════════════════════
@@ -60,6 +78,7 @@ const saveToServer = async (state: any) => {
         calendarLabels: state.calendarLabels,
         swapSettings: state.swapSettings,
         tabVisibility: state.tabVisibility,
+        betrachterTabVisibility: state.betrachterTabVisibility,
       }, dateNoonReplacer),
     });
   } catch (err) {
@@ -94,6 +113,14 @@ export async function loadFromServer(): Promise<void> {
     const resp = await fetch('/api/state', {
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (resp.status === 401) {
+      // Session token no longer valid (e.g. the server was restarted and
+      // in-memory sessions were lost) — drop back to the login screen
+      // instead of silently getting stuck on stale/empty data.
+      clearAuthToken();
+      useStore.setState({ sessionExpired: true });
+      return;
+    }
     if (!resp.ok) return;
     const raw = await resp.json();
     const revived = reviveDatesInState(raw);
@@ -111,6 +138,7 @@ export async function loadFromServer(): Promise<void> {
       calendarLabels: revived.calendarLabels ?? [],
       swapSettings: revived.swapSettings ?? DEFAULT_SWAP_SETTINGS,
       tabVisibility: revived.tabVisibility ?? DEFAULT_TAB_VISIBILITY,
+      betrachterTabVisibility: revived.betrachterTabVisibility ?? DEFAULT_TAB_VISIBILITY,
     });
   } catch (err) {
     console.error('Error loading from server:', err);
@@ -127,7 +155,28 @@ interface AppState {
   calendarLabels: CalendarLabel[];
   swapSettings: SwapSettings;
   tabVisibility: TabVisibility;
-  
+  /** Separate, independently configurable tab visibility for the read-only Betrachter role. */
+  betrachterTabVisibility: TabVisibility;
+
+  // Current admin session info (role-based UI, e.g. default department filter for Leitung)
+  adminRole: 'admin' | 'leitung' | 'betrachter' | null;
+  organizationName: string | null;
+  defaultDepartmentId: string | null;
+  /** Permission areas the current session may mutate. Full list for admin, granted subset for leitung, empty for betrachter. */
+  permissions: string[];
+  /** Org-wide max tab set for this session's role (Admin-controlled) — tabVisibility for admin/leitung, betrachterTabVisibility for betrachter. */
+  orgTabVisibility: TabVisibility;
+  /** This account's own personal show/hide preference (Leitung/Betrachter self-service), within orgTabVisibility. */
+  personalTabVisibility: Record<string, boolean>;
+  /** orgTabVisibility AND personalTabVisibility — what App.tsx actually renders. */
+  effectiveTabVisibility: TabVisibility;
+  loadAdminMe: () => Promise<void>;
+  /** Self-service: Leitung/Betrachter updates their own personal tab preference. */
+  saveMyTabVisibility: (vis: Record<string, boolean>) => Promise<void>;
+  // Set by loadFromServer()/loadAdminMe() when the server rejects the stored
+  // token (401) — App.tsx watches this to drop back to the login screen.
+  sessionExpired: boolean;
+
   // Employee actions
   addEmployee: (employee: Employee) => void;
   updateEmployee: (id: string, employee: Partial<Employee>) => void;
@@ -160,6 +209,7 @@ interface AppState {
 
   // Tab visibility
   setTabVisibility: (vis: TabVisibility) => void;
+  setBetrachterTabVisibility: (vis: TabVisibility) => void;
 
   // Calendar month-navigation cursor (independent of planning periods)
   setCurrentYear: (year: number) => void;
@@ -204,7 +254,61 @@ export const useStore = create<AppState>((set) => {
     calendarLabels: [] as CalendarLabel[],
     swapSettings: DEFAULT_SWAP_SETTINGS,
     tabVisibility: DEFAULT_TAB_VISIBILITY,
-    
+    betrachterTabVisibility: DEFAULT_TAB_VISIBILITY,
+
+    adminRole: null as 'admin' | 'leitung' | 'betrachter' | null,
+    organizationName: null as string | null,
+    defaultDepartmentId: null as string | null,
+    permissions: [] as string[],
+    orgTabVisibility: DEFAULT_TAB_VISIBILITY,
+    personalTabVisibility: {} as Record<string, boolean>,
+    effectiveTabVisibility: DEFAULT_TAB_VISIBILITY,
+    sessionExpired: false,
+    loadAdminMe: async () => {
+      const token = getAuthToken();
+      if (!token) return;
+      try {
+        const resp = await fetch('/api/admin/me', { headers: { Authorization: `Bearer ${token}` } });
+        if (resp.status === 401) {
+          clearAuthToken();
+          useStore.setState({ sessionExpired: true });
+          return;
+        }
+        if (!resp.ok) return;
+        const data = await resp.json();
+        set((state) => ({
+          ...state,
+          adminRole: data.role ?? null,
+          organizationName: data.organizationName ?? null,
+          defaultDepartmentId: data.defaultDepartmentId ?? null,
+          permissions: data.permissions ?? [],
+          tabVisibility: data.tabVisibility ?? state.tabVisibility,
+          betrachterTabVisibility: data.betrachterTabVisibility ?? state.betrachterTabVisibility,
+          orgTabVisibility: data.orgTabVisibility ?? state.orgTabVisibility,
+          personalTabVisibility: data.personalTabVisibility ?? state.personalTabVisibility,
+          effectiveTabVisibility: data.effectiveTabVisibility ?? state.effectiveTabVisibility,
+        }));
+      } catch (err) {
+        console.error('Error loading admin session info:', err);
+      }
+    },
+
+    saveMyTabVisibility: async (vis: Record<string, boolean>) => {
+      const token = getAuthToken();
+      if (!token) return;
+      try {
+        const resp = await fetch('/api/admin/my-tab-visibility', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ personalTabVisibility: vis }),
+        });
+        if (!resp.ok) return;
+        await useStore.getState().loadAdminMe();
+      } catch (err) {
+        console.error('Error saving personal tab visibility:', err);
+      }
+    },
+
     addEmployee: (employee: Employee) => set((state) => {
       const newState = {
         ...state,
@@ -283,6 +387,12 @@ export const useStore = create<AppState>((set) => {
     // Tab visibility
     setTabVisibility: (vis: TabVisibility) => set((state) => {
       const newState = { ...state, tabVisibility: vis };
+      saveToServer(newState);
+      return newState;
+    }),
+
+    setBetrachterTabVisibility: (vis: TabVisibility) => set((state) => {
+      const newState = { ...state, betrachterTabVisibility: vis };
       saveToServer(newState);
       return newState;
     }),

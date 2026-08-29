@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schichtplan Manager – Organisationen</title>
+<link rel="icon" type="image/svg+xml" href="/favicon-calendar.svg">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --primary: #4f46e5; --primary-dark: #4338ca; --primary-light: #eef2ff; --primary-ring: rgba(79,70,229,0.15);
+    --danger: #dc2626; --danger-dark: #b91c1c; --danger-light: #fef2f2;
+    --success: #059669; --success-light: #ecfdf5;
+    --amber: #d97706; --amber-light: #fffbeb;
+    --gray-50: #f8fafc; --gray-100: #f1f5f9; --gray-200: #e2e8f0; --gray-300: #cbd5e1;
+    --gray-400: #94a3b8; --gray-500: #64748b; --gray-600: #475569; --gray-700: #334155;
+    --gray-800: #1e293b; --gray-900: #0f172a;
+    --shadow-sm: 0 1px 2px rgba(15,23,42,0.06);
+    --shadow-md: 0 4px 16px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.05);
+    --shadow-lg: 0 12px 32px rgba(15,23,42,0.10), 0 2px 6px rgba(15,23,42,0.06);
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif;
+    background: var(--gray-50); color: var(--gray-800); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: 22px; font-weight: 800; color: var(--gray-900); letter-spacing: -0.02em; }
+  h2 { font-size: 15px; font-weight: 700; color: var(--gray-900); margin-bottom: 4px; letter-spacing: -0.01em; }
+  h3 { font-size: 14px; font-weight: 600; color: var(--gray-900); }
+  p.muted { color: var(--gray-500); font-size: 13px; }
+
+  .card {
+    background: white; border: 1px solid var(--gray-200); border-radius: var(--radius);
+    padding: 22px; margin-bottom: 18px; box-shadow: var(--shadow-sm);
+  }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 9px 16px; border-radius: var(--radius-sm); border: none; font-size: 13.5px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.06s ease, border-color 0.15s ease;
+    white-space: nowrap; font-family: inherit;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+  .btn-primary { background: var(--primary); color: white; box-shadow: 0 1px 2px rgba(79,70,229,0.3), 0 4px 10px rgba(79,70,229,0.18); }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+  .btn-outline { background: white; color: var(--gray-700); border: 1px solid var(--gray-300); }
+  .btn-outline:hover { background: var(--gray-50); border-color: var(--gray-400); }
+  .btn-danger-outline { background: white; color: var(--danger); border: 1px solid #fecaca; }
+  .btn-danger-outline:hover { background: var(--danger-light); border-color: var(--danger); }
+  .btn-sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
+
+  input, select {
+    width: 100%; padding: 9px 12px; border: 1px solid var(--gray-300); border-radius: var(--radius-sm);
+    font-size: 13.5px; background: white; color: var(--gray-800); font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3.5px var(--primary-ring); }
+  select { cursor: pointer; }
+  label { display: block; font-size: 11.5px; font-weight: 700; color: var(--gray-500); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .form-group { margin-bottom: 12px; }
+  .form-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 640px) { .form-row-4 { grid-template-columns: 1fr 1fr 1fr 1fr; } .form-row-3 { grid-template-columns: 1fr 1fr 1fr; } .form-row-2 { grid-template-columns: 1fr 1fr; } }
+
+  .msg { padding: 11px 15px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 14px; border: 1px solid transparent; font-weight: 500; }
+  .msg-error { background: var(--danger-light); color: #991b1b; border-color: #fecaca; }
+  .msg-success { background: var(--success-light); color: #065f46; border-color: #a7f3d0; }
+
+  .org-item { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; transition: box-shadow 0.15s ease; }
+  .org-item:hover { box-shadow: var(--shadow-sm); }
+  .org-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .org-name { font-weight: 700; color: var(--gray-900); font-size: 14.5px; }
+  .org-meta { font-size: 12px; color: var(--gray-500); margin-top: 1px; }
+  .org-users { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100); font-size: 13px; }
+  .user-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; gap: 8px; flex-wrap: wrap; }
+
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: 0.02em; }
+  .badge-admin { background: #ede9fe; color: #6d28d9; }
+  .badge-leitung { background: #dbeafe; color: #1d4ed8; }
+  .badge-betrachter { background: var(--gray-100); color: var(--gray-600); }
+
+  .perm-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 12px; }
+  @media (min-width: 480px) { .perm-grid { grid-template-columns: repeat(3, 1fr); } }
+  .perm-grid label { display: flex; align-items: center; gap: 6px; font-weight: 400; color: var(--gray-700); cursor: pointer; margin: 0; text-transform: none; letter-spacing: normal; font-size: 12.5px; }
+  .perm-grid input { width: auto; accent-color: var(--primary); }
+  .perm-box { border: 1px solid var(--gray-200); border-radius: var(--radius-sm); padding: 12px; background: var(--gray-50); margin: 10px 0; }
+  .perm-box label:not(.perm-grid label) { margin-bottom: 8px; }
+
+  #login-view {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(circle at 20% 20%, #eef2ff 0%, var(--gray-50) 55%);
+  }
+  .login-box { width: 100%; max-width: 380px; background: white; border: 1px solid var(--gray-200); border-radius: 18px; padding: 32px; box-shadow: var(--shadow-lg); }
+  .login-box h1 { margin-bottom: 6px; }
+  .toggle-link { background: none; border: none; color: var(--primary); font-size: 12px; cursor: pointer; text-decoration: underline; margin-top: 8px; }
+
+  #app-shell { display: flex; min-height: 100vh; }
+  #sidebar {
+    width: 232px; flex-shrink: 0; background: linear-gradient(180deg, #111827 0%, #0b1120 100%);
+    color: white; display: flex; flex-direction: column; padding: 22px 0; position: sticky; top: 0; height: 100vh;
+  }
+  #sidebar .brand { padding: 0 22px 20px; font-weight: 800; font-size: 15.5px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 14px; display: flex; align-items: center; gap: 10px; letter-spacing: -0.01em; }
+  #sidebar .brand .brand-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 4px rgba(79,70,229,0.25); flex-shrink: 0; }
+  #sidebar .nav-item {
+    display: flex; align-items: center; gap: 11px; padding: 10px 22px; margin: 2px 10px; border-radius: 10px;
+    color: #94a3b8; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+  }
+  #sidebar .nav-item svg { flex-shrink: 0; opacity: 0.85; }
+  #sidebar .nav-item:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+  #sidebar .nav-item.active { background: var(--primary); color: white; box-shadow: 0 2px 10px rgba(79,70,229,0.4); }
+  #sidebar .nav-item.active svg { opacity: 1; }
+  #sidebar .nav-spacer { flex: 1; }
+  #sidebar .nav-footer { padding: 14px 22px 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 8px 10px 0; font-size: 12px; color: #64748b; }
+  #sidebar .nav-footer #whoami { color: #cbd5e1; font-weight: 600; margin-bottom: 10px; font-size: 12.5px; word-break: break-word; }
+  #sidebar .nav-footer button { width: 100%; margin-top: 6px; }
+  #sidebar .nav-footer .btn-outline { background: rgba(255,255,255,0.04); color: #cbd5e1; border-color: rgba(255,255,255,0.14); }
+  #sidebar .nav-footer .btn-outline:hover { background: rgba(255,255,255,0.09); }
+
+  #main-content { flex: 1; min-width: 0; padding: 32px 36px; max-width: 1120px; }
+  .view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 10px; }
+
+  hr.sep { border: none; border-top: 1px solid var(--gray-100); margin: 16px 0; }
+</style>
+</head>
+<body>
+
+<div id="login-view">
+  <div class="login-box">
+    <h1>Organisationen</h1>
+    <p class="muted" style="margin-bottom:22px;">Plattform-Verwaltung – Schichtplan Manager</p>
+    <div id="login-error" class="msg msg-error hidden"></div>
+    <div class="form-group">
+      <label>Benutzername oder E-Mail</label>
+      <input id="login-username" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>Passwort</label>
+      <input id="login-password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:6px;" onclick="doLogin()">Anmelden</button>
+  </div>
+</div>
+
+<div id="force-password-view" class="hidden">
+  <div class="login-box">
+    <h1>Neues Passwort vergeben</h1>
+    <p class="muted" style="margin-bottom:22px;">Sie haben sich mit einem Einmalpasswort angemeldet. Bitte legen Sie jetzt ein eigenes Passwort fest, um fortzufahren.</p>
+    <div id="force-pw-error" class="msg msg-error hidden"></div>
+    <div class="form-group">
+      <label>Neues Passwort (min. 6 Zeichen)</label>
+      <input id="force-pw-new" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>Passwort bestätigen</label>
+      <input id="force-pw-confirm" type="password" autocomplete="new-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:6px;" onclick="submitForcedPasswordChange()">Passwort festlegen</button>
+  </div>
+</div>
+
+<div id="confirm-modal" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:60;">
+  <div class="login-box" style="max-width:400px;">
+    <h1 style="font-size:17px;">Änderung bestätigen</h1>
+    <p id="confirm-modal-text" class="muted" style="margin:12px 0 20px;"></p>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" style="flex:1;" onclick="closeConfirmModal(false)">Abbrechen</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="closeConfirmModal(true)">Bestätigen</button>
+    </div>
+  </div>
+</div>
+
+<div id="app-shell" class="hidden">
+  <div id="sidebar">
+    <div class="brand"><span class="brand-dot"></span> Schichtplan Manager</div>
+    <div class="nav-item" data-view="organisation" onclick="switchView('organisation')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h.01M9 12h.01M9 15h.01M9 18h.01"/></svg>
+      Organisation
+    </div>
+    <div class="nav-item" data-view="changelog" onclick="switchView('changelog')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      Changelog
+    </div>
+    <div class="nav-item" data-view="einstellungen" onclick="switchView('einstellungen')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Einstellungen
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-footer">
+      <div id="whoami"></div>
+      <button class="btn btn-outline btn-sm" style="width:100%;" onclick="doLogout()">Abmelden</button>
+      <p style="margin-top:10px;"><a href="https://schichtapp.de/impressum.html?from=orga" style="color:#64748b;font-size:11.5px;text-decoration:underline;">Impressum</a></p>
+    </div>
+  </div>
+
+  <div id="main-content">
+    <div id="main-message"></div>
+
+    <!-- ══════════════ ORGANISATION VIEW ══════════════ -->
+    <div id="view-organisation" class="view">
+      <div class="view-header"><h1>Organisation</h1></div>
+
+      <div class="card">
+        <h2>Neue Organisation anlegen</h2>
+        <p class="muted" style="margin-bottom:16px;">Optional kann direkt der erste Zugang eingeladen werden — er erhält eine E-Mail mit Einmalpasswort und Zugang zum Admin-Panel.</p>
+        <div class="form-group">
+          <label>Name der Organisation</label>
+          <input id="new-org-name" placeholder="z. B. Musterfirma GmbH">
+        </div>
+        <div class="form-row form-row-2">
+          <div class="form-group">
+            <label>Name des ersten Zugangs (optional)</label>
+            <input id="new-org-admin-name" placeholder="Max Mustermann">
+          </div>
+          <div class="form-group">
+            <label>E-Mail des ersten Zugangs (optional)</label>
+            <input id="new-org-admin-email" type="email" placeholder="max@firma.de">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="createOrganization()">Organisation anlegen</button>
+      </div>
+
+      <div class="card">
+        <h2>Bestehende Organisationen</h2>
+        <div id="org-list"></div>
+      </div>
+    </div>
+
+    <!-- ══════════════ CHANGELOG VIEW ══════════════ -->
+    <div id="view-changelog" class="view hidden">
+      <div class="view-header"><h1>Changelog</h1></div>
+      <div class="card">
+        <div class="form-row form-row-4">
+          <div class="form-group">
+            <label>Organisation</label>
+            <select id="cl-org"><option value="">Alle Organisationen</option></select>
+          </div>
+          <div class="form-group">
+            <label>Von</label>
+            <input id="cl-from" type="date">
+          </div>
+          <div class="form-group">
+            <label>Bis</label>
+            <input id="cl-to" type="date">
+          </div>
+          <div class="form-group" style="display:flex;align-items:flex-end;">
+            <button class="btn btn-primary" style="width:100%;" onclick="loadChangelog()">Filtern</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div id="changelog-list"><p class="muted">Lade Changelog…</p></div>
+      </div>
+    </div>
+
+    <!-- ══════════════ EINSTELLUNGEN VIEW ══════════════ -->
+    <div id="view-einstellungen" class="view hidden">
+      <div class="view-header"><h1>Einstellungen</h1></div>
+
+      <div class="card">
+        <h2>Plattform-Zugänge</h2>
+        <p class="muted" style="margin-bottom:16px;">Personen mit Zugriff auf diese Organisationsverwaltung (orga.schichtapp.de). Es gibt kein direktes Passwort-Ändern — nur „Passwort zurücksetzen“ sendet ein neues Einmalpasswort per E-Mail. Es muss immer mindestens ein Zugang bestehen bleiben.</p>
+        <div class="form-row form-row-3">
+          <div class="form-group">
+            <label>Name</label>
+            <input id="new-platform-name" placeholder="Name">
+          </div>
+          <div class="form-group">
+            <label>E-Mail</label>
+            <input id="new-platform-email" type="email" placeholder="name@firma.de">
+          </div>
+          <div class="form-group" style="display:flex;align-items:flex-end;">
+            <button class="btn btn-primary" style="width:100%;" onclick="invitePlatformUser()">Einladen</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Bestehende Zugänge</h2>
+        <div id="platform-users-list"><p class="muted">Lade…</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let token = localStorage.getItem('orga-token') || '';
+let whoamiName = localStorage.getItem('orga-name') || '';
+const PERMISSION_AREAS = [
+  { id: 'employees', label: 'Mitarbeiter' },
+  { id: 'departments', label: 'Abteilungen' },
+  { id: 'planning', label: 'Planung' },
+  { id: 'calendar', label: 'Kalender' },
+  { id: 'swaps', label: 'Tauschen' },
+  { id: 'settings_holidays', label: 'Einst.: Feiertage' },
+  { id: 'settings_swapconfig', label: 'Einst.: Tauschen' },
+  { id: 'settings_tabs', label: 'Einst.: Reiter' },
+  { id: 'settings_backup', label: 'Einst.: Backup' },
+];
+
+function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
+function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
+
+function showMessage(text, type) {
+  const c = document.getElementById('main-message');
+  c.innerHTML = `<div class="msg msg-${type}">${text}</div>`;
+  setTimeout(() => { c.innerHTML = ''; }, 5000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function roleLabel(role) {
+  return role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : 'Betrachter';
+}
+
+function permGridHtml(name, checkedList) {
+  const checked = new Set(checkedList || []);
+  return `<div class="perm-grid">${PERMISSION_AREAS.map(a => `
+    <label><input type="checkbox" class="${name}" value="${a.id}" ${checked.has(a.id) ? 'checked' : ''}> ${a.label}</label>
+  `).join('')}</div>`;
+}
+function collectChecked(className, root) {
+  return Array.from((root || document).querySelectorAll('.' + className + ':checked')).map(el => el.value);
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────
+
+async function doLogin() {
+  const identifier = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  hideEl('login-error');
+  if (!identifier || !password) return;
+  try {
+    const body = identifier.includes('@') ? { email: identifier, password } : { username: identifier, password };
+    const resp = await fetch('/api/platform/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      document.getElementById('login-error').textContent = data.error || 'Anmeldung fehlgeschlagen';
+      showEl('login-error');
+      return;
+    }
+    token = data.token;
+    whoamiName = data.name || identifier;
+    localStorage.setItem('orga-token', token);
+    localStorage.setItem('orga-name', whoamiName);
+    if (data.mustChangePassword) {
+      hideEl('login-view');
+      hideEl('app-shell');
+      document.getElementById('force-pw-new').value = '';
+      document.getElementById('force-pw-confirm').value = '';
+      hideEl('force-pw-error');
+      showEl('force-password-view');
+    } else {
+      boot();
+    }
+  } catch {
+    document.getElementById('login-error').textContent = 'Verbindungsfehler';
+    showEl('login-error');
+  }
+}
+
+function doLogout() {
+  token = '';
+  localStorage.removeItem('orga-token');
+  localStorage.removeItem('orga-name');
+  hideEl('app-shell');
+  hideEl('force-password-view');
+  showEl('login-view');
+}
+
+/** Only reachable right after logging in with a one-time password — there is no general "change my password anytime" flow, only "Passwort zurücksetzen" in Einstellungen, which sends a fresh one-time password and leads back here. */
+async function submitForcedPasswordChange() {
+  const newPassword = document.getElementById('force-pw-new').value;
+  const confirmPassword = document.getElementById('force-pw-confirm').value;
+  const errEl = document.getElementById('force-pw-error');
+  hideEl('force-pw-error');
+  if (!newPassword || newPassword.length < 6) { errEl.textContent = 'Passwort muss mindestens 6 Zeichen haben.'; showEl('force-pw-error'); return; }
+  if (newPassword !== confirmPassword) { errEl.textContent = 'Passwörter stimmen nicht überein.'; showEl('force-pw-error'); return; }
+  try {
+    const resp = await fetch('/api/platform/change-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ newPassword }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { errEl.textContent = data.error || 'Fehler'; showEl('force-pw-error'); return; }
+    hideEl('force-password-view');
+    boot();
+    showMessage('Passwort festgelegt.', 'success');
+  } catch {
+    errEl.textContent = 'Verbindungsfehler';
+    showEl('force-pw-error');
+  }
+}
+
+// ── In-page confirm modal (replaces native browser confirm()) ──────────
+
+let confirmModalResolve = null;
+function askConfirm(text) {
+  document.getElementById('confirm-modal-text').textContent = text;
+  showEl('confirm-modal');
+  return new Promise(resolve => { confirmModalResolve = resolve; });
+}
+function closeConfirmModal(result) {
+  hideEl('confirm-modal');
+  if (confirmModalResolve) { confirmModalResolve(result); confirmModalResolve = null; }
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────
+
+function switchView(view) {
+  document.querySelectorAll('.view').forEach(el => el.classList.add('hidden'));
+  document.getElementById(`view-${view}`).classList.remove('hidden');
+  document.querySelectorAll('#sidebar .nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+  localStorage.setItem('orga-view', view);
+  if (view === 'organisation') loadOrganizations();
+  if (view === 'changelog') { loadChangelogOrgOptions(); loadChangelog(); }
+  if (view === 'einstellungen') loadPlatformUsers();
+}
+
+// ── Organisation ───────────────────────────────────────────────────────
+
+async function createOrganization() {
+  const name = document.getElementById('new-org-name').value.trim();
+  const adminName = document.getElementById('new-org-admin-name').value.trim();
+  const adminEmail = document.getElementById('new-org-admin-email').value.trim();
+  if (!name) return;
+  try {
+    const resp = await fetch('/api/platform/organizations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, leitungName: adminName || undefined, leitungEmail: adminEmail || undefined }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showMessage(data.error || 'Fehler beim Anlegen', 'error'); return; }
+    document.getElementById('new-org-name').value = '';
+    document.getElementById('new-org-admin-name').value = '';
+    document.getElementById('new-org-admin-email').value = '';
+    showMessage(data.leitungError ? `Organisation angelegt, aber Einladung fehlgeschlagen: ${data.leitungError}` : 'Organisation angelegt.', data.leitungError ? 'error' : 'success');
+    loadOrganizations();
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function renameOrg(id, currentName) {
+  const name = prompt('Neuer Name der Organisation:', currentName);
+  if (!name || !name.trim() || name.trim() === currentName) return;
+  try {
+    const resp = await fetch(`/api/platform/organizations/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showMessage(d.error || 'Fehler', 'error'); return; }
+    loadOrganizations();
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+function toggleInviteForm(orgId) {
+  const el = document.getElementById(`invite-form-${orgId}`);
+  if (el) el.classList.toggle('hidden');
+}
+
+async function submitInvite(orgId) {
+  const name = document.getElementById(`invite-name-${orgId}`).value.trim();
+  const email = document.getElementById(`invite-email-${orgId}`).value.trim();
+  const role = document.getElementById(`invite-role-${orgId}`).value;
+  const permissions = role === 'leitung' ? collectChecked(`invite-perm-${orgId}`) : undefined;
+  if (!name || !email) return;
+  try {
+    const resp = await fetch(`/api/platform/organizations/${orgId}/invite-leitung`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, email, role, permissions }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showMessage(data.error || 'Fehler bei der Einladung', 'error'); return; }
+    showMessage(`Einladung an ${email} gesendet.`, 'success');
+    loadOrgUsers(orgId);
+    toggleInviteForm(orgId);
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+/** Applies a role/permission change for an existing account — always confirmed via popup first, and always applies live (no logout/login needed on the admin-panel side). */
+async function changeOrgUserRole(orgId, userId, role, permissions, name) {
+  const confirmText = role === 'leitung'
+    ? `Berechtigungen für „${name}“ speichern (Rolle: Leitung)?`
+    : `Rolle für „${name}“ zu „${roleLabel(role)}“ ändern?`;
+  const ok = await askConfirm(confirmText);
+  if (!ok) { loadOrgUsers(orgId); return; }
+  try {
+    const resp = await fetch(`/api/platform/organizations/${orgId}/users/${userId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ role, permissions }),
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showMessage(d.error || 'Fehler', 'error'); loadOrgUsers(orgId); return; }
+    showMessage('Änderung gespeichert — gilt sofort, ohne erneute Anmeldung.', 'success');
+    loadOrgUsers(orgId);
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+function onRoleSelectChange(orgId, userId, name, selectEl) {
+  const role = selectEl.value;
+  if (role === 'leitung') {
+    // Permission grid is always visible for Leitung — just reveal it here;
+    // actual save happens via its own "Speichern" button (with confirm).
+    const box = document.getElementById(`perm-edit-${orgId}-${userId}`);
+    if (box) box.classList.remove('hidden');
+  } else {
+    changeOrgUserRole(orgId, userId, role, undefined, name);
+  }
+}
+
+async function resendOrgUserInvite(orgId, userId) {
+  try {
+    const resp = await fetch(`/api/platform/organizations/${orgId}/users/${userId}/resend`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await resp.json().catch(() => ({}));
+    showMessage(resp.ok ? 'Einladung erneut gesendet.' : (data.error || 'Fehler'), resp.ok ? 'success' : 'error');
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function removeOrgUser(orgId, userId, name) {
+  if (!confirm(`Zugang von „${name}“ wirklich entfernen?`)) return;
+  try {
+    const resp = await fetch(`/api/platform/organizations/${orgId}/users/${userId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showMessage(d.error || 'Fehler', 'error'); return; }
+    loadOrgUsers(orgId);
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function loadOrganizations() {
+  try {
+    const resp = await fetch('/api/platform/organizations', { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) { doLogout(); return; }
+    const orgs = await resp.json();
+    const list = document.getElementById('org-list');
+    if (orgs.length === 0) { list.innerHTML = '<p class="muted">Noch keine Organisationen angelegt.</p>'; return; }
+
+    list.innerHTML = orgs.map(o => `
+      <div class="org-item" id="org-${o.id}">
+        <div class="org-item-head">
+          <div>
+            <div class="org-name">${escapeHtml(o.name)}</div>
+            <div class="org-meta">Angelegt: ${new Date(o.createdAt).toLocaleDateString('de-DE')}</div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-outline btn-sm" onclick='renameOrg(${JSON.stringify(o.id)}, ${JSON.stringify(o.name)})'>Umbenennen</button>
+            <button class="btn btn-outline btn-sm" onclick='toggleInviteForm(${JSON.stringify(o.id)})'>Zugang einladen</button>
+          </div>
+        </div>
+
+        <div id="invite-form-${o.id}" class="perm-box hidden">
+          <div class="form-row form-row-3" style="margin-bottom:6px;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label>Name</label>
+              <input id="invite-name-${o.id}" placeholder="Name">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label>E-Mail</label>
+              <input id="invite-email-${o.id}" type="email" placeholder="name@firma.de">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label>Rolle</label>
+              <select id="invite-role-${o.id}" onchange="document.getElementById('invite-perm-box-${o.id}').classList.toggle('hidden', this.value !== 'leitung')">
+                <option value="admin">Admin (alle Rechte)</option>
+                <option value="leitung" selected>Leitung (Rechte auswählen)</option>
+                <option value="betrachter">Betrachter (nur ansehen)</option>
+              </select>
+            </div>
+          </div>
+          <div id="invite-perm-box-${o.id}">
+            <label>Berechtigte Bereiche</label>
+            ${permGridHtml(`invite-perm-${o.id}`, [])}
+          </div>
+          <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='submitInvite(${JSON.stringify(o.id)})'>Einladung senden</button>
+        </div>
+
+        <div class="org-users" id="org-users-${o.id}">Lade Zugänge…</div>
+      </div>
+    `).join('');
+
+    orgs.forEach(o => loadOrgUsers(o.id));
+  } catch {
+    showMessage('Fehler beim Laden der Organisationen', 'error');
+  }
+}
+
+async function loadOrgUsers(orgId) {
+  try {
+    const resp = await fetch(`/api/platform/organizations/${orgId}/users`, { headers: { Authorization: `Bearer ${token}` } });
+    const users = await resp.json();
+    const el = document.getElementById(`org-users-${orgId}`);
+    if (!el) return;
+    if (!users || users.length === 0) { el.innerHTML = '<span class="muted">Noch keine Zugänge.</span>'; return; }
+    el.innerHTML = users.map(u => `
+      <div class="user-row">
+        <span>${escapeHtml(u.name)} <span class="muted">(${escapeHtml(u.email)})</span></span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <select class="btn-sm" style="width:auto;padding:5px 8px;" onchange='onRoleSelectChange(${JSON.stringify(orgId)}, ${JSON.stringify(u.id)}, ${JSON.stringify(u.name)}, this)'>
+            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+            <option value="leitung" ${u.role === 'leitung' ? 'selected' : ''}>Leitung</option>
+            <option value="betrachter" ${u.role === 'betrachter' ? 'selected' : ''}>Betrachter</option>
+          </select>
+          <span class="badge badge-${u.role}">${roleLabel(u.role)}</span>
+          <button class="btn btn-outline btn-sm" onclick='resendOrgUserInvite(${JSON.stringify(orgId)}, ${JSON.stringify(u.id)})'>Erneut einladen</button>
+          <button class="btn btn-danger-outline btn-sm" onclick='removeOrgUser(${JSON.stringify(orgId)}, ${JSON.stringify(u.id)}, ${JSON.stringify(u.name)})'>Entfernen</button>
+        </div>
+      </div>
+      <div id="perm-edit-${orgId}-${u.id}" class="perm-box ${u.role === 'leitung' ? '' : 'hidden'}">
+        <label>Berechtigte Bereiche für ${escapeHtml(u.name)}</label>
+        ${permGridHtml(`perm-${orgId}-${u.id}`, u.permissions || [])}
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='changeOrgUserRole(${JSON.stringify(orgId)}, ${JSON.stringify(u.id)}, "leitung", collectChecked(${JSON.stringify(`perm-${orgId}-${u.id}`)}), ${JSON.stringify(u.name)})'>Speichern</button>
+      </div>
+    `).join('');
+  } catch { /* ignore */ }
+}
+
+// ── Changelog ──────────────────────────────────────────────────────────
+
+async function loadChangelogOrgOptions() {
+  try {
+    const resp = await fetch('/api/platform/organizations', { headers: { Authorization: `Bearer ${token}` } });
+    const orgs = await resp.json();
+    const sel = document.getElementById('cl-org');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Alle Organisationen</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
+    sel.value = current;
+  } catch { /* ignore */ }
+}
+
+async function loadChangelog() {
+  const list = document.getElementById('changelog-list');
+  list.innerHTML = '<p class="muted">Lade…</p>';
+  try {
+    const orgId = document.getElementById('cl-org').value;
+    const from = document.getElementById('cl-from').value;
+    const to = document.getElementById('cl-to').value;
+    const params = new URLSearchParams();
+    if (orgId) params.set('organizationId', orgId);
+    if (from) params.set('from', new Date(from + 'T00:00:00').toISOString());
+    if (to) params.set('to', new Date(to + 'T23:59:59').toISOString());
+    const resp = await fetch(`/api/platform/changelog?${params.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) { doLogout(); return; }
+    const entries = await resp.json();
+    if (!entries || entries.length === 0) { list.innerHTML = '<p class="muted">Keine Einträge gefunden.</p>'; return; }
+    list.innerHTML = `<div style="max-height:65vh;overflow-y:auto;">${entries.map(e => `
+      <div class="user-row" style="align-items:flex-start;border-bottom:1px solid var(--gray-100);padding:9px 0;">
+        <div style="min-width:0;">
+          <div style="font-size:13px;color:var(--gray-900);">${escapeHtml(e.summary)}</div>
+          <div class="org-meta">
+            ${new Date(e.timestamp).toLocaleString('de-DE')} ·
+            ${e.organizationName ? escapeHtml(e.organizationName) + ' · ' : ''}
+            ${escapeHtml(e.actorName)}${e.actorEmail ? ' (' + escapeHtml(e.actorEmail) + ')' : ''} ·
+            ${escapeHtml(e.area)}
+          </div>
+        </div>
+      </div>
+    `).join('')}</div>`;
+  } catch {
+    list.innerHTML = '<p class="muted">Fehler beim Laden.</p>';
+  }
+}
+
+// ── Einstellungen (platform users) ────────────────────────────────────
+
+async function invitePlatformUser() {
+  const name = document.getElementById('new-platform-name').value.trim();
+  const email = document.getElementById('new-platform-email').value.trim();
+  if (!name || !email) return;
+  try {
+    const resp = await fetch('/api/platform/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, email }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showMessage(data.error || 'Fehler beim Einladen', 'error'); return; }
+    document.getElementById('new-platform-name').value = '';
+    document.getElementById('new-platform-email').value = '';
+    showMessage(`Einladung an ${email} gesendet.`, 'success');
+    loadPlatformUsers();
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function resetPlatformUserPw(id, name) {
+  if (!confirm(`Neues Einmalpasswort für „${name}“ per E-Mail versenden?`)) return;
+  try {
+    const resp = await fetch(`/api/platform/users/${id}/reset-password`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    const data = await resp.json().catch(() => ({}));
+    showMessage(resp.ok ? 'Neues Passwort versendet.' : (data.error || 'Fehler'), resp.ok ? 'success' : 'error');
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function deletePlatformUserRow(id, name) {
+  if (!confirm(`Zugang von „${name}“ wirklich entfernen?`)) return;
+  try {
+    const resp = await fetch(`/api/platform/users/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) { const d = await resp.json().catch(() => ({})); showMessage(d.error || 'Fehler', 'error'); return; }
+    loadPlatformUsers();
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+async function loadPlatformUsers() {
+  const el = document.getElementById('platform-users-list');
+  try {
+    const resp = await fetch('/api/platform/users', { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) { doLogout(); return; }
+    const users = await resp.json();
+    if (!users || users.length === 0) { el.innerHTML = '<p class="muted">Keine Zugänge gefunden.</p>'; return; }
+    const isLast = users.length <= 1;
+    el.innerHTML = users.map(u => `
+      <div class="user-row" style="border-bottom:1px solid var(--gray-100);padding:9px 0;">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(u.name)}${u.username ? ` <span class="badge badge-admin">Login: ${escapeHtml(u.username)}</span>` : ''}</div>
+          <div class="org-meta">${escapeHtml(u.email)} · seit ${new Date(u.createdAt).toLocaleDateString('de-DE')}</div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" onclick='resetPlatformUserPw(${JSON.stringify(u.id)}, ${JSON.stringify(u.name)})'>Passwort zurücksetzen</button>
+          <button class="btn btn-danger-outline btn-sm" ${isLast ? 'disabled title="Es muss mindestens ein Zugang bestehen bleiben."' : ''} onclick='deletePlatformUserRow(${JSON.stringify(u.id)}, ${JSON.stringify(u.name)})'>Entfernen</button>
+        </div>
+      </div>
+    `).join('');
+  } catch {
+    el.innerHTML = '<p class="muted">Fehler beim Laden.</p>';
+  }
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────
+
+function boot() {
+  if (!token) { showEl('login-view'); hideEl('app-shell'); return; }
+  hideEl('login-view');
+  showEl('app-shell');
+  document.getElementById('whoami').textContent = whoamiName || '';
+  const savedView = localStorage.getItem('orga-view') || 'organisation';
+  switchView(savedView);
+}
+
+boot();
+</script>
+</body>
+</html>

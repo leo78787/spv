@@ -164,7 +164,9 @@ export function ShiftPlanning() {
     employees, departments, planningPeriods,
     addEmployee, addDepartment, addLabel, addCalendarLabel, acknowledgeViolation,
     applyGeneratedPeriod, importPeriodContent, clearPeriodAssignments, setPeriodReleased,
+    adminRole, permissions,
   } = useStore();
+  const canEdit = adminRole === 'admin' || (adminRole === 'leitung' && permissions.includes('planning'));
 
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(modulePersistedPeriodId);
   useEffect(() => { modulePersistedPeriodId = selectedPeriodId; }, [selectedPeriodId]);
@@ -799,7 +801,8 @@ export function ShiftPlanning() {
                       type="number" min={1} max={20}
                       value={schedulerConfig.shiftCounts.verschieben}
                       onChange={e => setShiftCount('verschieben', Math.max(1, Number(e.target.value)))}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      disabled={!canEdit}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
                     />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
@@ -814,7 +817,8 @@ export function ShiftPlanning() {
                       type="number" min={1} max={20}
                       value={schedulerConfig.shiftCounts.nachtbereitschaft}
                       onChange={e => setShiftCount('nachtbereitschaft', Math.max(1, Number(e.target.value)))}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      disabled={!canEdit}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
                     />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
@@ -829,7 +833,8 @@ export function ShiftPlanning() {
                       type="number" min={1} max={20}
                       value={schedulerConfig.shiftCounts.fruehschicht}
                       onChange={e => setShiftCount('fruehschicht', Math.max(1, Number(e.target.value)))}
-                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      disabled={!canEdit}
+                      className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
                     />
                   </label>
                   <p className="text-xs text-gray-400">Fairness-Auswirkung:</p>
@@ -846,7 +851,8 @@ export function ShiftPlanning() {
                       type="number" min={0} max={schedulerConfig.shiftCounts.verschieben}
                       value={schedulerConfig.over55VerschiebenSlots}
                       onChange={e => setSchedulerConfig(c => ({ ...c, over55VerschiebenSlots: Math.max(0, Math.min(c.shiftCounts.verschieben, Number(e.target.value))) }))}
-                      className="w-24 px-3 py-2 border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      disabled={!canEdit}
+                      className="w-24 px-3 py-2 border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100 disabled:text-gray-500"
                     />
                   </label>
                   <p className="text-xs text-amber-600">Mindestanzahl Ü55-Mitarbeiter pro Versetzt-Woche</p>
@@ -880,8 +886,9 @@ export function ShiftPlanning() {
                         type="button"
                         role="switch"
                         aria-checked={schedulerConfig.rules[key]}
-                        onClick={() => setRule(key, !schedulerConfig.rules[key])}
-                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors ${
+                        onClick={() => canEdit && setRule(key, !schedulerConfig.rules[key])}
+                        disabled={!canEdit}
+                        className={`relative flex-shrink-0 w-11 h-6 rounded-full overflow-hidden transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                           schedulerConfig.rules[key] ? 'bg-primary-600' : 'bg-gray-300'
                         }`}
                       >
@@ -902,12 +909,14 @@ export function ShiftPlanning() {
               </div>
             </div>
 
+            {canEdit && (
             <button
               onClick={() => setSchedulerConfig(DEFAULT_SCHEDULER_CONFIG)}
               className="text-sm text-gray-500 underline hover:text-gray-700"
             >
               Auf Standardwerte zurücksetzen
             </button>
+            )}
           </div>
         )}
       </div>
@@ -960,7 +969,7 @@ export function ShiftPlanning() {
                   </p>
                   <button
                     onClick={handleGenerateFullPlan}
-                    disabled={isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
+                    disabled={isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees || !canEdit}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                   >
                     <Sparkles className="h-4 w-4" />
@@ -979,7 +988,7 @@ export function ShiftPlanning() {
                   </p>
                   <button
                     onClick={handleEquality}
-                    disabled={!step1Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
+                    disabled={!step1Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees || !canEdit}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                   >
                     <Scale className="h-4 w-4" />
@@ -1004,7 +1013,7 @@ export function ShiftPlanning() {
                   </p>
                   <button
                     onClick={handleTotalBalance}
-                    disabled={!step2Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees}
+                    disabled={!step2Done || isGenerating || isOptimising || isEqualizing || isTotalBalancing || !hasEmployees || !canEdit}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-md hover:bg-violet-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                   >
                     <Scale className="h-4 w-4" />
@@ -1102,7 +1111,7 @@ export function ShiftPlanning() {
                   {!isOptimising ? (
                     <button
                       onClick={handleOptimise}
-                      disabled={!step3Done || isGenerating || isEqualizing || isTotalBalancing || !hasEmployees || !Object.values(optimiserTargets).some(Boolean)}
+                      disabled={!step3Done || isGenerating || isEqualizing || isTotalBalancing || !hasEmployees || !canEdit || !Object.values(optimiserTargets).some(Boolean)}
                       className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-md hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
                     >
                       <Zap className="h-4 w-4" />

@@ -150,6 +150,8 @@ export interface SuggestedEmployee {
 export interface Department {
   id: string;
   name: string;
+  /** Admin-user id (Manager) assigned to this department — used to pre-select their department by default in Mitarbeiter/Kalender. */
+  managerId?: string;
 }
 
 /** A shift period that could not be fully staffed during auto-generation */

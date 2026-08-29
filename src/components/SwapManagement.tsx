@@ -20,7 +20,8 @@ interface SwapData {
 }
 
 export function SwapManagement() {
-  const { employees, departments, swapSettings } = useStore();
+  const { employees, departments, swapSettings, adminRole } = useStore();
+  const canEdit = adminRole !== 'betrachter';
   const [data, setData] = useState<SwapData>({ offers: [], matches: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -185,6 +186,7 @@ export function SwapManagement() {
             {openOffers.length} offene Angebote · {pendingMatches.length} ausstehende Matches
           </p>
         </div>
+        {canEdit && (
         <button
           onClick={handleScan}
           className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
@@ -192,6 +194,7 @@ export function SwapManagement() {
           <RefreshCw size={16} />
           Matches suchen
         </button>
+        )}
       </div>
 
       {error && (
@@ -302,14 +305,14 @@ export function SwapManagement() {
 
                   <div className="flex justify-end gap-2">
                     <button
-                      disabled={actionLoading === match.id}
+                      disabled={actionLoading === match.id || !canEdit}
                       onClick={() => handleResolve(match.id, 'reject')}
                       className="flex items-center gap-1 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
                       <X size={16} /> Ablehnen
                     </button>
                     <button
-                      disabled={actionLoading === match.id}
+                      disabled={actionLoading === match.id || !canEdit}
                       onClick={() => handleResolve(match.id, 'approve')}
                       className="flex items-center gap-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
                     >
@@ -387,14 +390,14 @@ export function SwapManagement() {
 
                   <div className="flex justify-end gap-2">
                     <button
-                      disabled={actionLoading === match.id}
+                      disabled={actionLoading === match.id || !canEdit}
                       onClick={() => handleResolve(match.id, 'reject')}
                       className="flex items-center gap-1 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
                       <X size={16} /> Ablehnen
                     </button>
                     <button
-                      disabled={actionLoading === match.id}
+                      disabled={actionLoading === match.id || !canEdit}
                       onClick={() => handleResolve(match.id, 'approve')}
                       className="flex items-center gap-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
                     >
@@ -473,14 +476,14 @@ export function SwapManagement() {
 
                 <div className="flex justify-end gap-2">
                   <button
-                    disabled={actionLoading === match.id}
+                    disabled={actionLoading === match.id || !canEdit}
                     onClick={() => handleResolve(match.id, 'reject')}
                     className="flex items-center gap-1 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
                   >
                     <X size={16} /> Ablehnen
                   </button>
                   <button
-                    disabled={actionLoading === match.id}
+                    disabled={actionLoading === match.id || !canEdit}
                     onClick={() => handleResolve(match.id, 'approve')}
                     className="flex items-center gap-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
                   >
@@ -552,7 +555,7 @@ export function SwapManagement() {
                             )}
                             <div className="flex justify-end mt-3">
                               <button
-                                disabled={undoLoading}
+                                disabled={undoLoading || !canEdit}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setUndoModal({ matchId: match.id, wasApproved: match.status === 'approved' });
@@ -625,7 +628,7 @@ export function SwapManagement() {
                             )}
                             <div className="flex justify-end mt-3">
                               <button
-                                disabled={undoLoading}
+                                disabled={undoLoading || !canEdit}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setUndoModal({ matchId: match.id, wasApproved: match.status === 'approved' });
@@ -700,7 +703,7 @@ export function SwapManagement() {
                           )}
                           <div className="flex justify-end mt-3">
                             <button
-                              disabled={undoLoading}
+                              disabled={undoLoading || !canEdit}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setUndoModal({ matchId: match.id, wasApproved: match.status === 'approved' });

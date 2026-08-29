@@ -9,10 +9,19 @@ import { addDays, startOfDay, startOfMonth, endOfMonth, eachDayOfInterval, addMo
 import * as XLSX from 'xlsx-js-style';
 
 export function EmployeeManagement() {
-  const { employees, departments, planningPeriods, customHolidays, addEmployee, updateEmployee, deleteEmployee, batchImport } = useStore();
+  const { employees, departments, planningPeriods, customHolidays, addEmployee, updateEmployee, deleteEmployee, batchImport, defaultDepartmentId, adminRole } = useStore();
+  const canEdit = adminRole !== 'betrachter';
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  // Managers assigned to a department get it pre-selected here by default (still switchable)
+  const appliedDefaultDept = React.useRef(false);
+  useEffect(() => {
+    if (!appliedDefaultDept.current && defaultDepartmentId) {
+      setSelectedDepartment(defaultDepartmentId);
+      appliedDefaultDept.current = true;
+    }
+  }, [defaultDepartmentId]);
   const [selectedPeriodId, setSelectedPeriodIdState] = useState<string>(
     () => localStorage.getItem('spm-employees-period') || 'all'
   );
@@ -556,6 +565,7 @@ export function EmployeeManagement() {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 gap-3 sm:gap-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Mitarbeiterverwaltung</h2>
+          {canEdit && (
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => downloadTemplate('xlsx')}
@@ -571,8 +581,10 @@ export function EmployeeManagement() {
             >Import (.xlsx/.csv)</button>
             <input ref={fileInputRef} type="file" accept=".csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" onChange={onFileChange} className="hidden" />
           </div>
+          )}
         </div>
 
+        {canEdit && (
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => {
@@ -600,8 +612,9 @@ export function EmployeeManagement() {
             {showAddForm ? 'Abbrechen' : 'Mitarbeiter hinzufügen'}
           </button>
         </div>
+        )}
       </div>
-      
+
       {importPreview && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded shadow-lg w-11/12 max-w-3xl">
@@ -1119,6 +1132,7 @@ export function EmployeeManagement() {
                   <h3 className="font-semibold text-lg text-gray-800">{employee.name}</h3>
                   <p className="text-sm text-gray-600">{dept?.name}</p>
                 </div>
+                {canEdit && (
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleEdit(employee)}
@@ -1133,6 +1147,7 @@ export function EmployeeManagement() {
                     <Trash2 size={16} />
                   </button>
                 </div>
+                )}
               </div>
               
               <div className="space-y-1 text-sm">

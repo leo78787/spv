@@ -33,16 +33,37 @@ function App() {
   useEffect(() => {
     if (authenticated) {
       loadFromServer().then(() => setStateLoaded(true));
+      useStore.getState().loadAdminMe();
     }
   }, [authenticated]);
+
+  // If the server rejects our token (e.g. it was restarted and lost its
+  // in-memory sessions) loadFromServer()/loadAdminMe() flag this — drop back
+  // to the login screen automatically instead of getting stuck showing
+  // stale/empty data until the user manually clears site data.
+  const sessionExpired = useStore(s => s.sessionExpired);
+  useEffect(() => {
+    if (sessionExpired) {
+      setAuthenticated(false);
+      setStateLoaded(false);
+      useStore.setState({ sessionExpired: false });
+    }
+  }, [sessionExpired]);
 
   // Real-time polling: watch for state changes made by employees / other tabs
   useEffect(() => {
     if (!authenticated) return;
     let lastVersion: string | null = null;
     const poll = async () => {
+      const token = getAuthToken();
+      if (!token) return;
       try {
-        const resp = await fetch('/api/state/version');
+        const resp = await fetch('/api/state/version', { headers: { Authorization: `Bearer ${token}` } });
+        if (resp.status === 401) {
+          clearAuthToken();
+          useStore.setState({ sessionExpired: true });
+          return;
+        }
         const { version } = await resp.json();
         if (lastVersion !== null && version !== lastVersion) {
           await loadFromServer();
@@ -54,9 +75,17 @@ function App() {
     return () => clearInterval(timer);
   }, [authenticated]);
 
-  
+  // Real-time polling: role/permissions/tab-visibility can be changed by an
+  // Admin elsewhere (Team tab, orga portal) while this session stays open —
+  // re-check periodically instead of requiring logout/login to pick it up.
+  useEffect(() => {
+    if (!authenticated) return;
+    const timer = setInterval(() => { useStore.getState().loadAdminMe(); }, 10000);
+    return () => clearInterval(timer);
+  }, [authenticated]);
+
   const swapSettings = useStore(s => s.swapSettings);
-  const tabVisibility = useStore(s => s.tabVisibility) || DEFAULT_TAB_VISIBILITY;
+  const effectiveTabVisibility = useStore(s => s.effectiveTabVisibility) || DEFAULT_TAB_VISIBILITY;
 
   const allTabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
@@ -68,9 +97,19 @@ function App() {
   ];
 
   const tabs = allTabs.filter(t => {
-    return (tabVisibility as any)[t.id] !== false;
+    return (effectiveTabVisibility as any)[t.id] !== false;
   });
-  
+
+  // If the currently active tab becomes hidden (e.g. an Admin restricts
+  // Betrachter tab visibility while this session is open), redirect to the
+  // first still-visible tab instead of leaving a blank/orphaned view.
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some(t => t.id === activeTab)) {
+      handleSetTab(tabs[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.map(t => t.id).join(',')]);
+
   const SettingsButton = () => (
     <button onClick={() => setShowHolidaySettings(true)} title="Einstellungen: Feiertage verwalten" className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600">
       <Settings size={16} />
@@ -182,7 +221,7 @@ function App() {
       {/* Footer */}
       <footer className="mt-12 py-6 text-center text-sm text-gray-600 border-t border-gray-200">
         <p>Schichtplan Manager &copy; 2026</p>
-        <p className="mt-1"><a href="https://schichtapp.de/impressum.html" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
+        <p className="mt-1"><a href="https://schichtapp.de/impressum.html?from=admin" className="text-gray-500 underline hover:text-gray-700">Impressum</a></p>
       </footer>
     </div>
   );

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Schichtplan – Mitarbeiter-Portal</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon-calendar.svg">
   <!-- Material Symbols -->
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@100..900&family=Plus+Jakarta+Sans:wght@100..900&display=swap">
@@ -1012,11 +1013,20 @@ function startPolling() { stopPolling(); pollTimer = setInterval(pollVersion, 30
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 async function pollVersion() {
   try {
-    const resp = await fetch('/api/state/version');
+    const resp = await fetch('/api/state/version', { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) {
+      // Session no longer valid (e.g. the server was restarted and lost its
+      // in-memory sessions) — go back to the login screen automatically
+      // instead of silently getting stuck on stale data.
+      doLogout();
+      return;
+    }
     const { version } = await resp.json();
     if (lastVersion !== null && version !== lastVersion) { await loadData(); }
     lastVersion = version;
-  } catch {}
+  } catch (err) {
+    if (err && err.message === 'Unauthorized') doLogout();
+  }
 }
 
 // ─── Vacation ────────────────────────────────────────────────────────

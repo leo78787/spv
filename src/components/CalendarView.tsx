@@ -38,15 +38,27 @@ export function CalendarView() {
     acknowledgeViolation,
     labels,
     calendarLabels,
+    defaultDepartmentId,
+    adminRole,
+    permissions,
   } = useStore();
+  const canEditCalendar = adminRole === 'admin' || (adminRole === 'leitung' && permissions.includes('calendar'));
 
   const [showPipeline, setShowPipeline] = useState(false);
-  
+
   const [currentMonth, setCurrentMonth] = useState(_persistedMonth ?? new Date().getMonth());
 
   // Keep module-level variable in sync so the month survives tab switches
   useEffect(() => { _persistedMonth = currentMonth; }, [currentMonth]);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  // Managers assigned to a department get it pre-selected here by default (still switchable)
+  const appliedDefaultDept = React.useRef(false);
+  useEffect(() => {
+    if (!appliedDefaultDept.current && defaultDepartmentId) {
+      setSelectedDepartment(defaultDepartmentId);
+      appliedDefaultDept.current = true;
+    }
+  }, [defaultDepartmentId]);
   const [editingShift, setEditingShift] = useState<{
     assignment: ShiftAssignment;
     date: Date;
@@ -1392,8 +1404,8 @@ export function CalendarView() {
                     return (
                       <div
                         key={emp.id}
-                        onClick={() => !isOnVacation && handleToggleEmployee(emp.id)}
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        onClick={() => canEditCalendar && !isOnVacation && handleToggleEmployee(emp.id)}
+                        className={`p-3 rounded-lg border-2 transition-all ${!canEditCalendar ? 'cursor-default' : ''} ${
                           isOnVacation
                             ? 'bg-gray-100 border-gray-300 cursor-not-allowed opacity-60'
                             : (!isEligible || blockedByAdjacency || blockedByQualification || hasOtherOverlapping || blockedByVacationBoundary || blockedByAvoidance)
@@ -1509,6 +1521,7 @@ export function CalendarView() {
           employeeName={labelModalData.employeeName}
           date={labelModalData.date}
           onClose={() => setLabelModalData(null)}
+          readOnly={!canEditCalendar}
         />
       )}
 

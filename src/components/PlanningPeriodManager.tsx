@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useStore } from '../store';
+import { useStore, verifyAdminPassword } from '../store';
 import { PlanningPeriod, periodsOverlap, getPeriodDateRange } from '../types';
 import { getMonthName } from '../utils/helpers';
 import { Plus, Edit2, Trash2, Lock, Unlock, CheckCircle2, AlertTriangle, Circle } from 'lucide-react';
@@ -57,7 +57,10 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
     deletePlanningPeriod,
     setPeriodReleased,
     setPeriodLocked,
+    adminRole,
+    permissions,
   } = useStore();
+  const canEdit = adminRole === 'admin' || (adminRole === 'leitung' && permissions.includes('planning'));
 
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<PeriodFormState>(emptyForm());
@@ -66,27 +69,31 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // Password-protected confirmation for destructive/administrative actions
-  // (Löschen, Freigeben/Zurückziehen, Sperren/Entsperren) — matches the
-  // "2026" password convention used elsewhere in the admin UI.
+  // (Löschen, Freigeben/Zurückziehen, Sperren/Entsperren) — re-checks the
+  // password of whoever is currently logged in (Admin or Leitung).
   const [pwConfirm, setPwConfirm] = useState<{ title: string; message: string; run: () => void | Promise<void> } | null>(null);
   const [pwValue, setPwValue] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
-  const ADMIN_PASSWORD = '2026';
+  const [pwError, setPwError] = useState(false);
 
   const requirePassword = (title: string, message: string, run: () => void | Promise<void>) => {
     setPwValue('');
+    setPwError(false);
     setPwConfirm({ title, message, run });
   };
 
   const runPwConfirm = async () => {
-    if (!pwConfirm || pwValue !== ADMIN_PASSWORD) return;
+    if (!pwConfirm || !pwValue || pwBusy) return;
     setPwBusy(true);
+    setPwError(false);
     try {
+      const ok = await verifyAdminPassword(pwValue);
+      if (!ok) { setPwError(true); return; }
       await pwConfirm.run();
-    } finally {
-      setPwBusy(false);
       setPwConfirm(null);
       setPwValue('');
+    } finally {
+      setPwBusy(false);
     }
   };
 
@@ -196,12 +203,14 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
           <h2 className="text-lg sm:text-xl font-bold text-gray-900">Planungsperioden</h2>
           <p className="text-sm text-gray-600">Verwalten Sie beliebig viele Zeiträume — Freigabe und Änderungssperre gelten pro Periode.</p>
         </div>
+        {canEdit && (
         <button
           onClick={openCreateForm}
           className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 font-medium text-sm"
         >
           <Plus size={16} /> Neue Periode
         </button>
+        )}
       </div>
 
       {sorted.length === 0 ? (
@@ -250,6 +259,7 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
                       </span>
                     )}
 
+                    {canEdit && (<>
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleRelease(period); }}
                       disabled={isBusy}
@@ -292,6 +302,7 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
                     >
                       <Trash2 size={14} />
                     </button>
+                    </>)}
                   </div>
                 </div>
 
@@ -411,17 +422,17 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
             </div>
             <p className="text-gray-600 mb-4">{pwConfirm.message}</p>
             <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort eingeben</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Ihr Passwort eingeben</label>
               <input
                 type="password"
                 autoFocus
                 value={pwValue}
-                onChange={e => setPwValue(e.target.value)}
+                onChange={e => { setPwValue(e.target.value); setPwError(false); }}
                 placeholder="Passwort"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                onKeyDown={e => { if (e.key === 'Enter' && pwValue === ADMIN_PASSWORD) runPwConfirm(); }}
+                onKeyDown={e => { if (e.key === 'Enter' && pwValue && !pwBusy) runPwConfirm(); }}
               />
-              {pwValue.length > 0 && pwValue !== ADMIN_PASSWORD && (
+              {pwError && (
                 <p className="text-sm text-red-500 mt-1">Falsches Passwort</p>
               )}
             </div>
@@ -434,12 +445,12 @@ export function PlanningPeriodManager({ selectedPeriodId, onSelect }: Props) {
               </button>
               <button
                 onClick={runPwConfirm}
-                disabled={pwBusy || pwValue !== ADMIN_PASSWORD}
+                disabled={pwBusy || !pwValue}
                 className={`px-4 py-2 rounded-md text-white font-medium ${
-                  pwValue !== ADMIN_PASSWORD ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
+                  !pwValue ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                {pwBusy ? 'Wird verarbeitet…' : 'Bestätigen'}
+                {pwBusy ? 'Wird geprüft…' : 'Bestätigen'}
               </button>
             </div>
           </div>

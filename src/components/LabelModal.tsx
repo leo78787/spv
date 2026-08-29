@@ -9,9 +9,11 @@ interface LabelModalProps {
   employeeName: string;
   date: Date;
   onClose: () => void;
+  /** Betrachter (or a Leitung lacking the 'calendar' permission) can view labels but not create/edit/delete/assign them. */
+  readOnly?: boolean;
 }
 
-export function LabelModal({ employeeId, employeeName, date, onClose }: LabelModalProps) {
+export function LabelModal({ employeeId, employeeName, date, onClose, readOnly }: LabelModalProps) {
   const { labels, calendarLabels, addLabel, updateLabel, deleteLabel, addCalendarLabel, deleteCalendarLabel } = useStore();
   
   const [mode, setMode] = useState<'select' | 'create' | 'edit'>('select');
@@ -158,10 +160,11 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                         >
                           <div className="flex items-center gap-3 flex-1">
                             <button
-                              onClick={() => handleToggleLabelAssignment(label.id)}
+                              onClick={() => !readOnly && handleToggleLabelAssignment(label.id)}
+                              disabled={readOnly}
                               className={`flex items-center gap-3 flex-1 text-left ${
                                 isAssigned ? 'opacity-100' : 'opacity-60'
-                              }`}
+                              } ${readOnly ? 'cursor-default' : ''}`}
                             >
                               <div
                                 className="w-8 h-8 rounded flex items-center justify-center text-white font-bold text-sm"
@@ -176,6 +179,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                               {isAssigned && <Check className="w-5 h-5 text-green-600" />}
                             </button>
                           </div>
+                          {!readOnly && (
                           <div className="flex items-center gap-1 ml-2">
                             <button
                               onClick={() => startEdit(label)}
@@ -192,6 +196,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
+                          )}
                         </div>
                       );
                     })}
@@ -200,6 +205,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
               </div>
 
               {/* Create new label button */}
+              {!readOnly && (
               <button
                 onClick={() => setMode('create')}
                 className="w-full flex items-center justify-center gap-2 p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-blue-500 hover:text-blue-600 transition-colors"
@@ -207,6 +213,7 @@ export function LabelModal({ employeeId, employeeName, date, onClose }: LabelMod
                 <Plus className="w-5 h-5" />
                 <span className="font-medium">Neues Label erstellen</span>
               </button>
+              )}
             </>
           )}
 

@@ -1,14 +1,34 @@
-import React, { useState } from 'react';
-import { useStore } from '../store';
+import React, { useState, useEffect } from 'react';
+import { useStore, getAuthToken } from '../store';
 import { Department } from '../types';
 import { generateId } from '../utils/helpers';
-import { Building2, Plus, Edit2, Trash2, Save, X } from 'lucide-react';
+import { Building2, Plus, Edit2, Trash2, Save, X, UserCog } from 'lucide-react';
+
+interface OrgAdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'leitung' | 'betrachter';
+}
 
 export function DepartmentManagement() {
-  const { departments, employees, addDepartment, updateDepartment, deleteDepartment } = useStore();
+  const { departments, employees, addDepartment, updateDepartment, deleteDepartment, adminRole } = useStore();
+  const canEdit = adminRole !== 'betrachter';
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [formData, setFormData] = useState<{ name: string }>({ name: '' });
+  const [orgUsers, setOrgUsers] = useState<OrgAdminUser[]>([]);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) return;
+    fetch('/api/admin/org/users', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setOrgUsers)
+      .catch(() => {});
+  }, []);
+
+  const managers = orgUsers.filter(u => u.role === 'leitung');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,13 +82,15 @@ export function DepartmentManagement() {
     <div className="p-3 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
         <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Abteilungsverwaltung</h2>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
-        >
-          {showAddForm ? <X size={20} /> : <Plus size={20} />}
-          {showAddForm ? 'Abbrechen' : 'Abteilung hinzufügen'}
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            {showAddForm ? <X size={20} /> : <Plus size={20} />}
+            {showAddForm ? 'Abbrechen' : 'Abteilung hinzufügen'}
+          </button>
+        )}
       </div>
       
       {showAddForm && (
@@ -129,6 +151,7 @@ export function DepartmentManagement() {
                     </p>
                   </div>
                 </div>
+                {canEdit && (
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleEdit(dept)}
@@ -145,8 +168,27 @@ export function DepartmentManagement() {
                     <Trash2 size={16} />
                   </button>
                 </div>
+                )}
               </div>
-              
+
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <label className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                  <UserCog size={12} /> Manager
+                </label>
+                <select
+                  value={dept.managerId || ''}
+                  onChange={e => updateDepartment(dept.id, { managerId: e.target.value || undefined })}
+                  disabled={!canEdit}
+                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500"
+                >
+                  <option value="">Kein Manager zugeordnet</option>
+                  {managers.map(m => (
+                    <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-1">Wird dem Manager standardmäßig bei Mitarbeiter/Kalender als Filter vorausgewählt.</p>
+              </div>
+
               {employeeCount > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <div className="text-xs text-gray-500">

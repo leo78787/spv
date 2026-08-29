@@ -1,7 +1,7 @@
 /**
- * Employee portal authentication & credential management.
+ * Employee portal authentication & credential management — multi-tenant.
  *
- * Stores employee credentials in data/portal.json:
+ * Stores employee credentials per-organization in data/orgs/<orgId>/portal.json:
  * {
  *   credentials: {
  *     [employeeId]: {
@@ -15,15 +15,24 @@
  *     [token]: { employeeId: string, expiresAt: string }
  *   }
  * }
+ *
+ * Which organization load()/save() (used by every function below except the
+ * cross-org ones) operate on is resolved implicitly from the current
+ * request's AsyncLocalStorage context (see orgContext.ts) — set up by
+ * portalAuthMiddleware once the token has been resolved to an organization.
+ *
+ * Portal session tokens are prefixed with their organization id
+ * (`<orgId>::<uuid>`) so that validatePortalToken() — called before any org
+ * context exists — can resolve which org's portal.json to check without
+ * scanning every organization on every request. Login (by username, before
+ * we know the org) is the one place that legitimately scans all orgs.
  */
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORTAL_FILE = path.join(__dirname, '..', 'data', 'portal.json');
+import { currentOrgId } from './orgContext.js';
+import { orgDataDir, listOrganizations } from './db.js';
 
 interface Credential {
   username: string;
@@ -43,21 +52,34 @@ interface PortalData {
   sessions: Record<string, Session>;          // keyed by token
 }
 
-function load(): PortalData {
-  if (!fs.existsSync(PORTAL_FILE)) {
+function portalFilePath(orgId: string): string {
+  return path.join(orgDataDir(orgId), 'portal.json');
+}
+
+function loadFor(orgId: string): PortalData {
+  const file = portalFilePath(orgId);
+  if (!fs.existsSync(file)) {
     return { credentials: {}, sessions: {} };
   }
   try {
-    return JSON.parse(fs.readFileSync(PORTAL_FILE, 'utf-8'));
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
   } catch {
     return { credentials: {}, sessions: {} };
   }
 }
 
-function save(data: PortalData): void {
-  const dir = path.dirname(PORTAL_FILE);
+function saveFor(orgId: string, data: PortalData): void {
+  const dir = path.dirname(portalFilePath(orgId));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(PORTAL_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  fs.writeFileSync(portalFilePath(orgId), JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function load(): PortalData {
+  return loadFor(currentOrgId());
+}
+
+function save(data: PortalData): void {
+  saveFor(currentOrgId(), data);
 }
 
 function hashPassword(password: string, salt: string): string {
@@ -92,17 +114,27 @@ export function generateUsername(name: string, existingUsernames: string[]): str
   return candidate;
 }
 
-/** Create or reset credentials for an employee. Returns { username, oneTimePassword }. */
+/** All usernames across every organization — usernames must be globally unique since portal login resolves the organization by scanning for a username match. */
+function allUsernamesPlatformWide(excludeEmployeeId?: string): string[] {
+  const usernames: string[] = [];
+  for (const org of listOrganizations()) {
+    const data = loadFor(org.id);
+    for (const [id, cred] of Object.entries(data.credentials)) {
+      if (id === excludeEmployeeId) continue;
+      usernames.push(cred.username);
+    }
+  }
+  return usernames;
+}
+
+/** Create or reset credentials for an employee (in the current org context). Returns { username, oneTimePassword }. */
 export function createOrResetCredentials(
   employeeId: string,
   employeeName: string,
 ): { username: string; oneTimePassword: string } {
   const data = load();
 
-  // Determine existing usernames (excluding this employee's own)
-  const existingUsernames = Object.entries(data.credentials)
-    .filter(([id]) => id !== employeeId)
-    .map(([, c]) => c.username);
+  const existingUsernames = allUsernamesPlatformWide(employeeId);
 
   // Keep existing username if already set, otherwise generate one
   const existingCred = data.credentials[employeeId];
@@ -123,52 +155,56 @@ export function createOrResetCredentials(
   return { username, oneTimePassword };
 }
 
-/** Authenticate an employee by username + password. Returns employeeId and token or null. */
+/** Authenticate an employee by username + password, scanning across all organizations (the org isn't known until the username matches). Returns employeeId, organizationId and a token, or null. */
 export function authenticateEmployee(
   username: string,
   password: string,
-): { employeeId: string; token: string; mustChangePassword: boolean } | null {
-  const data = load();
+): { employeeId: string; organizationId: string; token: string; mustChangePassword: boolean } | null {
+  for (const org of listOrganizations()) {
+    const data = loadFor(org.id);
+    const entry = Object.entries(data.credentials).find(([, c]) => c.username === username);
+    if (!entry) continue;
 
-  // Find credential by username
-  const entry = Object.entries(data.credentials).find(([, c]) => c.username === username);
-  if (!entry) return null;
+    const [employeeId, cred] = entry;
+    const hash = hashPassword(password, cred.salt);
+    if (hash !== cred.passwordHash) return null; // username is unique platform-wide — wrong password, stop here
 
-  const [employeeId, cred] = entry;
-  const hash = hashPassword(password, cred.salt);
-  if (hash !== cred.passwordHash) return null;
+    const token = `${org.id}::${crypto.randomUUID()}`;
+    data.sessions[token] = {
+      employeeId,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    };
 
-  // Create session (24h)
-  const token = crypto.randomUUID();
-  data.sessions[token] = {
-    employeeId,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-  };
+    // Prune expired sessions for this org while we're here.
+    const now = new Date().toISOString();
+    for (const [t, s] of Object.entries(data.sessions)) {
+      if (s.expiresAt < now) delete data.sessions[t];
+    }
 
-  // Prune expired sessions
-  const now = new Date().toISOString();
-  for (const [t, s] of Object.entries(data.sessions)) {
-    if (s.expiresAt < now) delete data.sessions[t];
+    saveFor(org.id, data);
+    return { employeeId, organizationId: org.id, token, mustChangePassword: cred.mustChangePassword };
   }
-
-  save(data);
-  return { employeeId, token, mustChangePassword: cred.mustChangePassword };
+  return null;
 }
 
-/** Validate a portal token. Returns employeeId or null. */
-export function validatePortalToken(token: string): string | null {
-  const data = load();
+/** Validate a portal token (org-prefixed, see module docs). Returns { employeeId, organizationId } or null. */
+export function validatePortalToken(token: string): { employeeId: string; organizationId: string } | null {
+  const sepIdx = token.indexOf('::');
+  if (sepIdx === -1) return null;
+  const orgId = token.slice(0, sepIdx);
+
+  const data = loadFor(orgId);
   const session = data.sessions[token];
   if (!session) return null;
   if (new Date(session.expiresAt) < new Date()) {
     delete data.sessions[token];
-    save(data);
+    saveFor(orgId, data);
     return null;
   }
-  return session.employeeId;
+  return { employeeId: session.employeeId, organizationId: orgId };
 }
 
-/** Change an employee's password. */
+/** Change an employee's password (in the current org context). */
 export function changePassword(employeeId: string, newPassword: string): boolean {
   const data = load();
   const cred = data.credentials[employeeId];
@@ -183,24 +219,24 @@ export function changePassword(employeeId: string, newPassword: string): boolean
   return true;
 }
 
-/** Wipe all credentials and sessions (used on full app reset). */
+/** Wipe all credentials and sessions for the current org (used on org reset). */
 export function clearAllCredentials(): void {
   save({ credentials: {}, sessions: {} });
 }
 
-/** Check whether an employee has portal credentials. */
+/** Check whether an employee (in the current org context) has portal credentials. */
 export function hasCredentials(employeeId: string): boolean {
   const data = load();
   return !!data.credentials[employeeId];
 }
 
-/** Get the username for an employee. */
+/** Get the username for an employee (in the current org context). */
 export function getUsername(employeeId: string): string | undefined {
   const data = load();
   return data.credentials[employeeId]?.username;
 }
 
-/** Get all usernames (for display in employee management). */
+/** Get all usernames (in the current org context) for display in employee management. */
 export function getAllCredentialInfo(): Record<string, { username: string; mustChangePassword: boolean }> {
   const data = load();
   const result: Record<string, { username: string; mustChangePassword: boolean }> = {};
@@ -210,12 +246,12 @@ export function getAllCredentialInfo(): Record<string, { username: string; mustC
   return result;
 }
 
-/** Read the complete portal data (credentials + sessions) as-is — used for full-system backups. */
+/** Read the complete portal data (credentials + sessions) for the current org — used for full-system backups. */
 export function getFullPortalData(): PortalData {
   return load();
 }
 
-/** Overwrite the complete portal data (credentials + sessions) — used to restore from a full-system backup. */
+/** Overwrite the complete portal data (credentials + sessions) for the current org — used to restore from a backup. */
 export function restorePortalData(data: PortalData): void {
   save(data);
 }

@@ -20,7 +20,7 @@
 </head>
 <body>
   <div class="container">
-    <a href="/" class="back-link">← Zurück zum Portal</a>
+    <a href="/" id="back-link" class="back-link">← Zurück zum Portal</a>
     <div class="card">
       <h1>Impressum</h1>
 
@@ -42,5 +42,17 @@
     <p>Schichtplan Manager &copy; 2026</p>
     <p><a href="/impressum.html">Impressum</a></p>
   </div>
+  <script>
+    // Return to whichever app linked here (schichtapp.de by default, or
+    // admin.schichtapp.de / orga.schichtapp.de via ?from=admin|orga), not
+    // always the employee portal root.
+    (function () {
+      var from = new URLSearchParams(location.search).get('from');
+      var hrefs = { admin: 'https://admin.schichtapp.de/', orga: 'https://orga.schichtapp.de/' };
+      if (from && hrefs[from]) {
+        document.getElementById('back-link').href = hrefs[from];
+      }
+    })();
+  </script>
 </body>
 </html>

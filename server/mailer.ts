@@ -99,6 +99,42 @@ export async function sendInvitationEmail(
 }
 
 /**
+ * Send an invitation email to a newly created admin-panel user (Leitung or Manager).
+ */
+export async function sendAdminInviteEmail(
+  to: string,
+  name: string,
+  organizationName: string,
+  role: 'admin' | 'leitung' | 'betrachter',
+  oneTimePassword: string,
+): Promise<void> {
+  const adminUrl = process.env.ADMIN_BASE_URL || 'https://admin.schichtapp.de';
+  const roleLabel = role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : 'Betrachter';
+  await sendMail({
+    to,
+    subject: `Schichtplan Manager – Zugang für ${organizationName}`,
+    text: `Hallo ${name},\n\nSie wurden als ${roleLabel} für "${organizationName}" im Schichtplan Manager eingerichtet.\n\nE-Mail: ${to}\nEinmalpasswort: ${oneTimePassword}\n\nAdmin-Bereich: ${adminUrl}\n\nBitte melden Sie sich an und vergeben Sie ein neues Passwort.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #4f46e5; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+          <h2 style="margin:0;">Schichtplan Manager</h2>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+          <p>Hallo <strong>${name}</strong>,</p>
+          <p>Sie wurden als <strong>${roleLabel}</strong> für <strong>${organizationName}</strong> im Schichtplan Manager eingerichtet.</p>
+          <table style="margin: 16px 0; border-collapse: collapse;">
+            <tr><td style="padding: 8px; font-weight: bold; color: #374151;">E-Mail:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${to}</td></tr>
+            <tr><td style="padding: 8px; font-weight: bold; color: #374151;">Einmalpasswort:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${oneTimePassword}</td></tr>
+          </table>
+          <a href="${adminUrl}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zum Admin-Bereich</a>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">Bitte melden Sie sich an und vergeben Sie ein neues Passwort.</p>
+        </div>
+      </div>
+    `,
+  });
+}
+
+/**
  * Send a notification to an employee when their shift plan has been released or updated.
  */
 export async function sendPlanNotificationEmail(
