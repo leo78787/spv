@@ -46,6 +46,13 @@ import {
   type AdminPermissionArea,
 } from './adminAuth.js';
 import {
+  listVacations,
+  getVacation,
+  createVacation,
+  updateVacation,
+  deleteVacation,
+} from './adminVacations.js';
+import {
   initPlatformOwner,
   authenticatePlatform,
   listPlatformUsers,
@@ -141,6 +148,13 @@ function logAdminChange(req: express.Request, area: string, summary: string): vo
   logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area, summary });
 }
 
+/** Mutating endpoints every admin-dashboard account may call regardless of role — own account only, never someone else's data. */
+const BETRACHTER_SELF_SERVICE_PATHS = [
+  '/api/admin/change-password',
+  '/api/admin/my-tab-visibility',
+  '/api/admin/vacations',
+];
+
 function authMiddleware(
   req: express.Request,
   res: express.Response,
@@ -166,9 +180,15 @@ function authMiddleware(
     }
     effectiveSession = { ...session, role: user.role };
   }
-  // Betrachter is read-only everywhere — blocked generically here so every
-  // existing and future mutating endpoint is covered without individual checks.
-  if (effectiveSession.role === 'betrachter' && req.method !== 'GET') {
+  // Betrachter is read-only everywhere EXCEPT a small set of self-service,
+  // account-scoped actions every dashboard account gets regardless of role
+  // (own password, own tab preference, own vacation/substitute entries) —
+  // blocked generically here so every existing and future mutating endpoint
+  // is covered without individual checks, with this explicit allowlist.
+  const isBetrachterSelfService = BETRACHTER_SELF_SERVICE_PATHS.some(
+    p => req.path === p || req.path.startsWith(`${p}/`),
+  );
+  if (effectiveSession.role === 'betrachter' && req.method !== 'GET' && !isBetrachterSelfService) {
     res.status(403).json({ error: 'Betrachter können keine Änderungen vornehmen.' });
     return;
   }
@@ -306,6 +326,8 @@ app.get('/api/admin/me', authMiddleware, (req, res) => {
     role: session.role,
     organizationId: session.organizationId,
     organizationName: org?.name ?? null,
+    adminUserId: session.adminUserId ?? null,
+    name: user?.name ?? null,
     defaultDepartmentId: myDepartment?.id ?? null,
     permissions,
     tabVisibility: state.tabVisibility ?? null,
@@ -332,6 +354,72 @@ app.put('/api/admin/my-tab-visibility', authMiddleware, (req, res) => {
   const updated = updatePersonalTabVisibility(session.adminUserId, clamped);
   if (!updated) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
   res.json({ success: true, personalTabVisibility: clamped });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN VACATION CALENDAR — every admin-dashboard account (Admin/Leitung/
+// Betrachter) can record their own absence + substitute, and see everyone
+// else's, within their own organization. Self-service: only the owner may
+// edit/delete their own entry.
+// ═══════════════════════════════════════════════════════════════════════
+
+app.get('/api/admin/vacations', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  res.json(listVacations(session.organizationId));
+});
+
+app.post('/api/admin/vacations', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  if (!session.adminUserId) { res.status(400).json({ error: 'Nicht verfügbar für diesen Zugang.' }); return; }
+  const { startDate, endDate, substituteAdminUserId, note } = req.body ?? {};
+  if (substituteAdminUserId) {
+    const substitute = getAdminUser(String(substituteAdminUserId));
+    if (!substitute || substitute.organizationId !== session.organizationId) {
+      res.status(400).json({ error: 'Ungültige Vertretung.' });
+      return;
+    }
+  }
+  const result = createVacation(session.organizationId, session.adminUserId, {
+    startDate: String(startDate ?? ''),
+    endDate: String(endDate ?? ''),
+    substituteAdminUserId: substituteAdminUserId ? String(substituteAdminUserId) : undefined,
+    note: typeof note === 'string' ? note : undefined,
+  });
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.put('/api/admin/vacations/:id', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const existing = getVacation(String(req.params.id));
+  if (!existing || existing.organizationId !== session.organizationId) { res.status(404).json({ error: 'Eintrag nicht gefunden.' }); return; }
+  if (existing.adminUserId !== session.adminUserId) { res.status(403).json({ error: 'Nur der eigene Eintrag kann bearbeitet werden.' }); return; }
+  const { startDate, endDate, substituteAdminUserId, note } = req.body ?? {};
+  if (substituteAdminUserId) {
+    const substitute = getAdminUser(String(substituteAdminUserId));
+    if (!substitute || substitute.organizationId !== session.organizationId) {
+      res.status(400).json({ error: 'Ungültige Vertretung.' });
+      return;
+    }
+  }
+  const result = updateVacation(existing.id, {
+    startDate: String(startDate ?? ''),
+    endDate: String(endDate ?? ''),
+    substituteAdminUserId: substituteAdminUserId ? String(substituteAdminUserId) : undefined,
+    note: typeof note === 'string' ? note : undefined,
+  });
+  if (!result) { res.status(404).json({ error: 'Eintrag nicht gefunden.' }); return; }
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/admin/vacations/:id', authMiddleware, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const existing = getVacation(String(req.params.id));
+  if (!existing || existing.organizationId !== session.organizationId) { res.status(404).json({ error: 'Eintrag nicht gefunden.' }); return; }
+  if (existing.adminUserId !== session.adminUserId) { res.status(403).json({ error: 'Nur der eigene Eintrag kann gelöscht werden.' }); return; }
+  deleteVacation(existing.id);
+  res.json({ success: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

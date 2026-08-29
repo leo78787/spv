@@ -161,6 +161,9 @@ interface AppState {
   // Current admin session info (role-based UI, e.g. default department filter for Leitung)
   adminRole: 'admin' | 'leitung' | 'betrachter' | null;
   organizationName: string | null;
+  /** This session's own AdminUser id/name (null for the legacy fallback session, if any still exist). Used e.g. by the vacation calendar to tell "my entries" apart from others'. */
+  myAdminUserId: string | null;
+  myName: string | null;
   defaultDepartmentId: string | null;
   /** Permission areas the current session may mutate. Full list for admin, granted subset for leitung, empty for betrachter. */
   permissions: string[];
@@ -258,6 +261,8 @@ export const useStore = create<AppState>((set) => {
 
     adminRole: null as 'admin' | 'leitung' | 'betrachter' | null,
     organizationName: null as string | null,
+    myAdminUserId: null as string | null,
+    myName: null as string | null,
     defaultDepartmentId: null as string | null,
     permissions: [] as string[],
     orgTabVisibility: DEFAULT_TAB_VISIBILITY,
@@ -280,6 +285,8 @@ export const useStore = create<AppState>((set) => {
           ...state,
           adminRole: data.role ?? null,
           organizationName: data.organizationName ?? null,
+          myAdminUserId: data.adminUserId ?? null,
+          myName: data.name ?? null,
           defaultDepartmentId: data.defaultDepartmentId ?? null,
           permissions: data.permissions ?? [],
           tabVisibility: data.tabVisibility ?? state.tabVisibility,

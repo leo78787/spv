@@ -5,10 +5,11 @@ import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
 import { ViewTab, DEFAULT_TAB_VISIBILITY } from './types';
-import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight } from 'lucide-react';
+import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight, Palmtree } from 'lucide-react';
 
 const SwapManagement = lazy(() => import('./components/SwapManagement').then(m => ({ default: m.SwapManagement })));
 import { HolidaySettings } from './components/HolidaySettings';
+import { AdminVacationCalendar } from './components/AdminVacationCalendar';
 import { Login } from './components/Login';
 import { getAuthToken, clearAuthToken, loadFromServer, useStore } from './store';
 
@@ -18,6 +19,7 @@ function App() {
     return (saved as ViewTab) || 'employees';
   });
   const [showHolidaySettings, setShowHolidaySettings] = useState(false);
+  const [showVacationCalendar, setShowVacationCalendar] = useState(false);
   const [stateLoaded, setStateLoaded] = useState(false);
 
   // Persist last visited tab
@@ -115,6 +117,12 @@ function App() {
       <Settings size={16} />
     </button>
   );
+
+  const VacationCalendarButton = () => (
+    <button onClick={() => setShowVacationCalendar(true)} title="Urlaubskalender: eigenen Urlaub & Vertretung eintragen" className="px-3 py-2 rounded hover:bg-gray-50 border border-gray-100 text-gray-600">
+      <Palmtree size={16} />
+    </button>
+  );
   
   // if not authenticated show login screen only
   if (!authenticated) {
@@ -146,6 +154,7 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-2">
+              <VacationCalendarButton />
               <SettingsButton />
               <button
                 onClick={() => {
@@ -216,6 +225,11 @@ function App() {
         <React.Suspense>
           <HolidaySettings onClose={() => setShowHolidaySettings(false)} />
         </React.Suspense>
+      )}
+
+      {/* Vacation calendar modal */}
+      {showVacationCalendar && (
+        <AdminVacationCalendar onClose={() => setShowVacationCalendar(false)} />
       )}
 
       {/* Footer */}
