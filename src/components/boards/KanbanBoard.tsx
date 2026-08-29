@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
   DragOverlay, type DragEndEvent, type DragStartEvent,
@@ -9,8 +9,9 @@ import { Plus, MoreVertical, Trash2 } from 'lucide-react';
 import { getAuthToken } from '../../store';
 import { Board, BoardSection, BoardTask } from '../../types';
 import type { OrgUser } from './BoardsModal';
-import { TaskCard } from './TaskCard';
+import { TaskCard, TaskCardOverlay } from './TaskCard';
 import { TaskDetailPopup } from './TaskDetailPopup';
+import { animateItemIn } from './animations';
 
 interface Props {
   board: Board;
@@ -18,17 +19,24 @@ interface Props {
   onBoardChanged: (board: Board) => void;
 }
 
-function Column({ section, orgUsers, onOpenTask, onAddTask, onDeleteSection }: {
+function Column({ section, orgUsers, onOpenTask, onAddTask, onDeleteSection, onToggleDone }: {
   section: BoardSection;
   orgUsers: OrgUser[];
   onOpenTask: (taskId: string) => void;
   onAddTask: (sectionId: string, title: string) => void;
   onDeleteSection: (sectionId: string) => void;
+  onToggleDone: (taskId: string, done: boolean) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: section.id });
   const [addingTask, setAddingTask] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const columnRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    animateItemIn(columnRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submitTask = () => {
     if (!taskTitle.trim()) { setAddingTask(false); return; }
@@ -38,7 +46,7 @@ function Column({ section, orgUsers, onOpenTask, onAddTask, onDeleteSection }: {
   };
 
   return (
-    <div className={`w-72 flex-shrink-0 bg-gray-50 rounded-lg flex flex-col max-h-full border ${isOver ? 'border-primary-400 bg-primary-50/40' : 'border-gray-200'}`}>
+    <div ref={columnRef} className={`w-72 flex-shrink-0 bg-gray-50 rounded-lg flex flex-col max-h-full border ${isOver ? 'border-primary-400 bg-primary-50/40' : 'border-gray-200'}`}>
       <div className="flex items-center justify-between px-3 py-2 flex-shrink-0">
         <h5 className="font-medium text-sm text-gray-700">{section.name} <span className="text-gray-400 font-normal">({section.tasks.length})</span></h5>
         <div className="relative">
@@ -59,7 +67,13 @@ function Column({ section, orgUsers, onOpenTask, onAddTask, onDeleteSection }: {
       <div ref={setNodeRef} className="flex-1 overflow-y-auto px-2 space-y-2 pb-2 min-h-[40px]">
         <SortableContext items={section.tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
           {section.tasks.map(task => (
-            <TaskCard key={task.id} task={task} orgUsers={orgUsers} onClick={() => onOpenTask(task.id)} />
+            <TaskCard
+              key={task.id}
+              task={task}
+              orgUsers={orgUsers}
+              onClick={() => onOpenTask(task.id)}
+              onToggleDone={() => onToggleDone(task.id, !task.done)}
+            />
           ))}
         </SortableContext>
       </div>
@@ -121,6 +135,16 @@ export function KanbanBoard({ board, orgUsers, onBoardChanged }: Props) {
 
   const addTask = async (sectionId: string, title: string) => {
     await fetch(`/api/boards/${board.id}/sections/${sectionId}/tasks`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ title }) });
+    refetchBoard();
+  };
+
+  const toggleTaskDone = async (taskId: string, done: boolean) => {
+    // Optimistic local update so the checkbox responds immediately.
+    onBoardChanged({
+      ...board,
+      sections: board.sections.map(s => ({ ...s, tasks: s.tasks.map(t => t.id === taskId ? { ...t, done } : t) })),
+    });
+    await fetch(`/api/boards/${board.id}/tasks/${taskId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ done }) });
     refetchBoard();
   };
 
@@ -194,6 +218,7 @@ export function KanbanBoard({ board, orgUsers, onBoardChanged }: Props) {
               onOpenTask={setOpenTaskId}
               onAddTask={addTask}
               onDeleteSection={deleteSection}
+              onToggleDone={toggleTaskDone}
             />
           ))}
 
@@ -221,8 +246,22 @@ export function KanbanBoard({ board, orgUsers, onBoardChanged }: Props) {
           </div>
         </div>
 
-        <DragOverlay>
-          {activeTask && <TaskCard task={activeTask} orgUsers={orgUsers} onClick={() => {}} />}
+        {/*
+          dropAnimation={null}: dnd-kit's default drop animation briefly sets
+          the original card's inline opacity to 0 and then restores it to
+          whatever opacity it captured at the exact instant of drop — which,
+          mid-drag, is the dimmed 0.5 from useSortable's isDragging state, not
+          the resting 1. Because React's own style diffing only rewrites a
+          prop when its own last-rendered value changes (not when the actual
+          DOM has been mutated externally), that stale 0.5/0 can sit there
+          forever once the card's logical opacity settles back to a steady 1
+          — the card goes invisible or translucent until something forces a
+          fresh mount. Our own animejs entrance animation already gives
+          moved/dropped cards a proper arrival animation, so dnd-kit's own
+          fade is both redundant and actively conflicting with it.
+        */}
+        <DragOverlay dropAnimation={null}>
+          {activeTask && <TaskCardOverlay task={activeTask} orgUsers={orgUsers} />}
         </DragOverlay>
       </DndContext>
 

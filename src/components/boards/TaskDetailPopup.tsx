@@ -3,6 +3,7 @@ import { X, Trash2, Plus, Paperclip, Send, FileText, CheckSquare, Square } from 
 import { useStore, getAuthToken } from '../../store';
 import { Board, BoardTask, BoardComment } from '../../types';
 import type { OrgUser } from './BoardsModal';
+import { animateModalIn, animatePop } from './animations';
 
 interface Props {
   board: Board;
@@ -73,14 +74,30 @@ export function TaskDetailPopup({ board, task, orgUsers, onClose, onChanged }: P
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const doneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const titleFocused = useRef(false);
+  const descriptionFocused = useRef(false);
 
-  // Keep local edit state in sync if the task is refreshed from a poll while open.
   useEffect(() => {
-    setTitle(task.title);
-    setDescription(task.description || '');
+    animateModalIn(panelRef.current);
+  }, []);
+
+  // Keep local edit state in sync if the task is refreshed from a poll (or from any other
+  // action's refetch) while open — but never while the user is actively typing into a field.
+  // `onChanged()` re-fetches the whole board after every action (adding a subtask, toggling a
+  // different task, posting a comment, ...) and the board also polls every 6s while this popup
+  // is open, so `task` here updates far more often than the user actually edits anything; title
+  // and description are only persisted on blur, so blindly resetting them on every such refresh
+  // would wipe out whatever the user has typed since their last blur.
+  const assigneeIdsKey = task.assigneeIds.join(',');
+  useEffect(() => {
+    if (!titleFocused.current) setTitle(task.title);
+    if (!descriptionFocused.current) setDescription(task.description || '');
     setDeadline(task.deadline || '');
     setAssigneeIds(task.assigneeIds);
-  }, [task.id, task.title, task.description, task.deadline, task.assigneeIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id, task.title, task.description, task.deadline, assigneeIdsKey]);
 
   const people = assignablePeople(board, orgUsers);
 
@@ -90,7 +107,7 @@ export function TaskDetailPopup({ board, task, orgUsers, onClose, onChanged }: P
     onChanged();
   };
 
-  const toggleDone = () => patchTask({ done: !task.done });
+  const toggleDone = () => { animatePop(doneButtonRef.current); patchTask({ done: !task.done }); };
   const saveTitle = () => { if (title.trim() && title !== task.title) patchTask({ title }); };
   const saveDescription = () => { if (description !== (task.description || '')) patchTask({ description }); };
   const saveDeadline = (value: string) => { setDeadline(value); patchTask({ deadline: value || null }); };
@@ -162,16 +179,17 @@ export function TaskDetailPopup({ board, task, orgUsers, onClose, onChanged }: P
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-2xl bg-white rounded-lg shadow-lg overflow-hidden max-h-[90vh] flex flex-col">
+      <div ref={panelRef} className="w-full max-w-2xl bg-white rounded-lg shadow-lg overflow-hidden max-h-[90vh] flex flex-col" style={{ opacity: 0 }}>
         <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <button onClick={toggleDone} className="flex-shrink-0 text-primary-600">
+            <button ref={doneButtonRef} onClick={toggleDone} className="flex-shrink-0 text-primary-600">
               {task.done ? <CheckSquare size={20} /> : <Square size={20} className="text-gray-300" />}
             </button>
             <input
               value={title}
               onChange={e => setTitle(e.target.value)}
-              onBlur={saveTitle}
+              onFocus={() => { titleFocused.current = true; }}
+              onBlur={() => { titleFocused.current = false; saveTitle(); }}
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               className={`flex-1 min-w-0 font-semibold text-lg px-1 py-0.5 border border-transparent hover:border-gray-200 focus:border-primary-400 rounded outline-none ${task.done ? 'line-through text-gray-400' : ''}`}
             />
@@ -206,7 +224,8 @@ export function TaskDetailPopup({ board, task, orgUsers, onClose, onChanged }: P
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              onBlur={saveDescription}
+              onFocus={() => { descriptionFocused.current = true; }}
+              onBlur={() => { descriptionFocused.current = false; saveDescription(); }}
               rows={3}
               placeholder="Beschreibung hinzufügen…"
               className="w-full px-2 py-1.5 border rounded text-sm"

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Trash2 } from 'lucide-react';
 import { getAuthToken } from '../../store';
 import { Board, BoardVisibility } from '../../types';
 import type { OrgUser } from './BoardsModal';
+import { animateModalIn } from './animations';
 
 interface Props {
   board: Board;
@@ -21,6 +22,11 @@ export function BoardSettingsPopup({ board, orgUsers, myAdminUserId, onClose, on
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    animateModalIn(panelRef.current);
+  }, []);
 
   const save = async () => {
     setSaving(true);
@@ -51,7 +57,7 @@ export function BoardSettingsPopup({ board, orgUsers, myAdminUserId, onClose, on
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md bg-white rounded-lg shadow-lg overflow-hidden">
+      <div ref={panelRef} className="w-full max-w-md bg-white rounded-lg shadow-lg overflow-hidden" style={{ opacity: 0 }}>
         <div className="flex items-center justify-between p-4 border-b">
           <h3 className="text-lg font-semibold">Board-Einstellungen</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded"><X size={18} /></button>

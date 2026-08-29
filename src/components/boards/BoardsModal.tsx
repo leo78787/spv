@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Plus, Settings, Trello } from 'lucide-react';
 import { useStore, getAuthToken } from '../../store';
 import { Board, BoardVisibility } from '../../types';
 import { KanbanBoard } from './KanbanBoard';
 import { BoardSettingsPopup } from './BoardSettingsPopup';
+import { animateModalIn, animateListIn } from './animations';
 
 export interface OrgUser {
   id: string;
@@ -42,6 +43,13 @@ export function BoardsModal({ onClose }: { onClose: () => void }) {
     return [];
   }, []);
 
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    animateModalIn(panelRef.current);
+  }, []);
+
   useEffect(() => {
     const token = getAuthToken();
     if (!token) return;
@@ -53,6 +61,11 @@ export function BoardsModal({ onClose }: { onClose: () => void }) {
       setOrgUsers(users);
       if (bs.length > 0 && !selectedBoardId) setSelectedBoardId(bs[0].id);
       setLoading(false);
+      if (bs.length > 0) {
+        requestAnimationFrame(() => {
+          if (sidebarRef.current) animateListIn(sidebarRef.current.querySelectorAll('.board-list-item'));
+        });
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -118,7 +131,7 @@ export function BoardsModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-6xl h-[88vh] bg-white rounded-lg shadow-lg overflow-hidden flex flex-col">
+      <div ref={panelRef} className="w-full max-w-6xl h-[88vh] bg-white rounded-lg shadow-lg overflow-hidden flex flex-col" style={{ opacity: 0 }}>
         <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
           <h3 className="text-lg font-semibold flex items-center gap-2"><Trello size={20} className="text-primary-600" /> Boards</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded"><X /></button>
@@ -126,7 +139,7 @@ export function BoardsModal({ onClose }: { onClose: () => void }) {
 
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar */}
-          <div className="w-64 flex-shrink-0 border-r bg-gray-50 overflow-y-auto p-3 space-y-1">
+          <div ref={sidebarRef} className="w-64 flex-shrink-0 border-r bg-gray-50 overflow-y-auto p-3 space-y-1">
             {loading ? (
               <p className="text-sm text-gray-400 px-2">Lädt…</p>
             ) : boardsList.length === 0 ? (
@@ -136,7 +149,7 @@ export function BoardsModal({ onClose }: { onClose: () => void }) {
                 <button
                   key={b.id}
                   onClick={() => setSelectedBoardId(b.id)}
-                  className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${selectedBoardId === b.id ? 'bg-primary-100 text-primary-800 font-medium' : 'hover:bg-gray-100 text-gray-700'}`}
+                  className={`board-list-item w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${selectedBoardId === b.id ? 'bg-primary-100 text-primary-800 font-medium' : 'hover:bg-gray-100 text-gray-700'}`}
                 >
                   <div className="truncate">{b.name}</div>
                   <div className="text-[11px] text-gray-400">{visibilityLabel(b)}</div>
