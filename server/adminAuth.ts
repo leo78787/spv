@@ -74,7 +74,11 @@ interface AdminCredential {
   passwordHash: string;
   salt: string;
   mustChangePassword: boolean;
+  /** Pending self-service reset ("Passwort vergessen"): a separate one-time password that coexists with the current one, so a stranger requesting a reset can't lock the real user out. */
+  reset?: { hash: string; salt: string; expiresAt: number };
 }
+
+const RESET_TTL_MS = 60 * 60 * 1000;
 
 interface AdminUsersData {
   users: AdminUser[];
@@ -282,8 +286,36 @@ export function authenticateAdmin(email: string, password: string): { user: Admi
   const cred = data.credentials[user.id];
   if (!cred) return null;
   const hash = hashPassword(password, cred.salt);
-  if (hash !== cred.passwordHash) return null;
+  if (hash !== cred.passwordHash) {
+    if (cred.reset && cred.reset.expiresAt > Date.now()) {
+      const a = Buffer.from(hashPassword(password, cred.reset.salt));
+      const b = Buffer.from(cred.reset.hash);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        return { user, mustChangePassword: true };
+      }
+    }
+    return null;
+  }
   return { user, mustChangePassword: cred.mustChangePassword };
+}
+
+/**
+ * Self-service "Passwort vergessen": create a time-limited one-time password for the
+ * account with this email. Returns null for unknown emails and for the legacy
+ * username login (no real address). Doesn't touch the current password.
+ */
+export function createPasswordResetByEmail(email: string): { user: AdminUser; oneTimePassword: string } | null {
+  const data = load();
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return null;
+  const user = data.users.find(u => u.email.toLowerCase() === normalizedEmail);
+  const cred = user && data.credentials[user.id];
+  if (!user || !cred) return null;
+  const oneTimePassword = generateOneTimePassword();
+  const salt = crypto.randomBytes(16).toString('hex');
+  cred.reset = { hash: hashPassword(oneTimePassword, salt), salt, expiresAt: Date.now() + RESET_TTL_MS };
+  save(data);
+  return { user, oneTimePassword };
 }
 
 export function changeAdminPassword(id: string, newPassword: string): boolean {

@@ -17,6 +17,12 @@ export function Login({ onSuccess }: Props) {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
 
+  // "Passwort vergessen" flow
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotDone, setForgotDone] = useState<string | null>(null);
+
   const isEmail = identifier.includes('@');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -79,6 +85,78 @@ export function Login({ onSuccess }: Props) {
       setError('Verbindungsfehler — Server nicht erreichbar.');
     }
   };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setForgotLoading(true);
+    try {
+      const resp = await fetch('/api/admin/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      setForgotLoading(false);
+      if (resp.ok) setForgotDone(data.message || 'Einmalpasswort wurde gesendet.');
+      else setError(data.error || 'Anfrage fehlgeschlagen.');
+    } catch {
+      setForgotLoading(false);
+      setError('Verbindungsfehler — Server nicht erreichbar.');
+    }
+  };
+
+  const leaveForgot = () => {
+    setForgotMode(false);
+    setForgotDone(null);
+    setError(null);
+    if (forgotEmail) setIdentifier(forgotEmail);
+  };
+
+  if (forgotMode) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 p-4">
+        <form onSubmit={forgotDone ? (e => { e.preventDefault(); leaveForgot(); }) : handleForgot} className="w-full max-w-md bg-white shadow-md rounded-lg p-6">
+          <h2 className="text-2xl font-bold mb-2 text-gray-900">Passwort zurücksetzen</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            Geben Sie Ihre E-Mail-Adresse ein. Sie erhalten ein Einmalpasswort, mit dem Sie sich anmelden und ein neues Passwort vergeben können.
+          </p>
+
+          {error && <div className="mb-3 text-sm text-rose-700 bg-rose-50 border border-rose-100 p-2 rounded">{error}</div>}
+          {forgotDone && <div className="mb-3 text-sm text-green-700 bg-green-50 border border-green-100 p-2 rounded">{forgotDone}</div>}
+
+          {!forgotDone && (
+            <div className="mb-4">
+              <label className="text-xs text-gray-600">E-Mail</label>
+              <input
+                type="email"
+                autoFocus
+                value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)}
+                className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                placeholder="E-Mail-Adresse"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="submit"
+              disabled={forgotLoading}
+              className="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-60"
+            >
+              {forgotDone ? 'Zur Anmeldung' : forgotLoading ? 'Wird gesendet…' : 'Einmalpasswort senden'}
+            </button>
+            {!forgotDone && (
+              <button type="button" onClick={leaveForgot} className="text-sm text-gray-500 underline hover:text-gray-700">
+                Zurück
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+    );
+  }
 
   if (needsPasswordChange) {
     return (
@@ -159,7 +237,13 @@ export function Login({ onSuccess }: Props) {
           >
             {loading ? 'Anmeldung...' : 'Anmelden'}
           </button>
-          <div className="text-xs text-gray-500">Kontakt: Admin, falls Probleme auftreten.</div>
+          <button
+            type="button"
+            onClick={() => { setForgotMode(true); setForgotEmail(isEmail ? identifier : ''); setError(null); }}
+            className="text-sm text-gray-500 underline hover:text-gray-700"
+          >
+            Passwort vergessen?
+          </button>
         </div>
       </form>
       <div className="absolute bottom-6 left-0 right-0 text-center text-xs text-gray-400">

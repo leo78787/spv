@@ -36,6 +36,7 @@ import {
   getAdminUser,
   inviteAdminUser,
   resetAdminPassword,
+  createPasswordResetByEmail,
   updateAdminUserRole,
   updatePersonalTabVisibility,
   deleteAdminUser,
@@ -64,7 +65,7 @@ import {
   deletePlatformUser,
   changePlatformUserPassword,
 } from './platformAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail } from './mailer.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail, sendAdminPasswordResetEmail } from './mailer.js';
 import { initBackupSchedule, updateBackupSettings, disableBackupSettings, restoreFromBackup } from './backup.js';
 import { diffState } from './stateDiff.js';
 import { logChange, logChanges, queryChangeLog } from './auditLog.js';
@@ -74,6 +75,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAIRNESS_WORKER_PATH = path.join(__dirname, 'fairnessWorker.mjs');
 
 const app = express();
+// Behind nginx on the same host: trust its X-Forwarded-For so req.ip is the real client (used for the reset-mail throttle).
+app.set('trust proxy', 'loopback');
 const PORT = 3002;
 
 app.use(cors());
@@ -261,6 +264,34 @@ app.post('/api/admin/login', (req, res) => {
     mustChangePassword: result.mustChangePassword,
     name: result.user.name,
   });
+});
+
+/**
+ * Admin: "Passwort vergessen". Always answers with the same generic success so it
+ * can't be used to find out which emails exist. Throttled per email (60s) and per
+ * IP (10/hour) since it triggers outgoing mail.
+ */
+const resetLastByEmail = new Map<string, number>();
+const resetHitsByIp = new Map<string, number[]>();
+app.post('/api/admin/forgot-password', async (req, res) => {
+  const generic = { success: true, message: 'Falls ein Zugang mit dieser E-Mail-Adresse existiert, wurde ein Einmalpasswort gesendet.' };
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  if (!email) { res.status(400).json({ error: 'Bitte E-Mail-Adresse eingeben.' }); return; }
+  const now = Date.now();
+  const ip = req.ip ?? 'unknown';
+  const hits = (resetHitsByIp.get(ip) ?? []).filter(t => now - t < 3600_000);
+  if (hits.length >= 10) { res.status(429).json({ error: 'Zu viele Anfragen. Bitte später erneut versuchen.' }); return; }
+  hits.push(now);
+  resetHitsByIp.set(ip, hits);
+  if (now - (resetLastByEmail.get(email) ?? 0) < 60_000) { res.json(generic); return; }
+  resetLastByEmail.set(email, now);
+  try {
+    const result = createPasswordResetByEmail(email);
+    if (result) await sendAdminPasswordResetEmail(result.user.email, result.user.name, result.oneTimePassword);
+  } catch (err) {
+    console.error('Passwort-Reset-Mail fehlgeschlagen:', err);
+  }
+  res.json(generic);
 });
 
 /** Admin: change own password (invited accounts only — the legacy shared login has no changeable password here). */

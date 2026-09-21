@@ -135,6 +135,39 @@ export async function sendAdminInviteEmail(
 }
 
 /**
+ * Send a one-time password for the admin-panel "Passwort vergessen" flow.
+ */
+export async function sendAdminPasswordResetEmail(
+  to: string,
+  name: string,
+  oneTimePassword: string,
+): Promise<void> {
+  const adminUrl = process.env.ADMIN_BASE_URL || 'https://admin.schichtapp.de';
+  await sendMail({
+    to,
+    subject: 'Schichtplan Manager – Passwort zurücksetzen',
+    text: `Hallo ${name},\n\nfür Ihren Zugang wurde ein Zurücksetzen des Passworts angefordert.\n\nEinmalpasswort: ${oneTimePassword}\n(gültig für 1 Stunde)\n\nAdmin-Bereich: ${adminUrl}\n\nMelden Sie sich mit Ihrer E-Mail-Adresse und diesem Einmalpasswort an und vergeben Sie danach ein neues Passwort.\n\nWenn Sie das nicht angefordert haben, können Sie diese E-Mail ignorieren – Ihr bisheriges Passwort bleibt gültig.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #4f46e5; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+          <h2 style="margin:0;">Schichtplan Manager</h2>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+          <p>Hallo <strong>${name}</strong>,</p>
+          <p>für Ihren Zugang wurde ein Zurücksetzen des Passworts angefordert.</p>
+          <table style="margin: 16px 0; border-collapse: collapse;">
+            <tr><td style="padding: 8px; font-weight: bold; color: #374151;">Einmalpasswort:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${oneTimePassword}</td></tr>
+          </table>
+          <p style="color: #6b7280; font-size: 14px;">Gültig für 1 Stunde. Melden Sie sich mit Ihrer E-Mail-Adresse und diesem Einmalpasswort an und vergeben Sie danach ein neues Passwort.</p>
+          <a href="${adminUrl}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zum Admin-Bereich</a>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">Wenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail – Ihr bisheriges Passwort bleibt gültig.</p>
+        </div>
+      </div>
+    `,
+  });
+}
+
+/**
  * Send a notification to an employee when their shift plan has been released or updated.
  */
 export async function sendPlanNotificationEmail(
