@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Plus, Trash2, Pencil, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useStore, getAuthToken } from '../store';
+import { animateModalIn, animateNudge, animatePop } from '../utils/uiAnimations';
 
 interface OrgUser {
   id: string;
@@ -87,6 +88,14 @@ export function AdminVacationCalendar({ onClose }: { onClose: () => void }) {
   const [formNote, setFormNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const prevMonthRef = useRef<HTMLButtonElement | null>(null);
+  const nextMonthRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    animateModalIn(panelRef.current);
+  }, []);
 
   const load = async () => {
     const token = getAuthToken();
@@ -178,8 +187,14 @@ export function AdminVacationCalendar({ onClose }: { onClose: () => void }) {
     await load();
   };
 
-  const goPrevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); };
-  const goNextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); };
+  const goPrevMonth = () => {
+    animateNudge(prevMonthRef.current, 'left');
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1);
+  };
+  const goNextMonth = () => {
+    animateNudge(nextMonthRef.current, 'right');
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1);
+  };
   const goToday = () => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); };
 
   const grid = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -187,7 +202,7 @@ export function AdminVacationCalendar({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-5xl bg-white rounded-lg shadow-lg overflow-hidden max-h-[90vh] flex flex-col">
+      <div ref={panelRef} className="w-full max-w-5xl bg-white rounded-lg shadow-lg overflow-hidden max-h-[90vh] flex flex-col" style={{ opacity: 0 }}>
         <div className="flex items-center justify-between p-4 border-b">
           <h3 className="text-lg font-semibold">Urlaubskalender</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded"><X /></button>
@@ -198,9 +213,9 @@ export function AdminVacationCalendar({ onClose }: { onClose: () => void }) {
           <div className="lg:col-span-2">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <button onClick={goPrevMonth} className="p-1.5 border rounded hover:bg-gray-50"><ChevronLeft size={16} /></button>
+                <button ref={prevMonthRef} onClick={goPrevMonth} className="p-1.5 border rounded hover:bg-gray-50"><ChevronLeft size={16} /></button>
                 <span className="font-medium text-gray-800 w-40 text-center">{MONTH_NAMES[viewMonth]} {viewYear}</span>
-                <button onClick={goNextMonth} className="p-1.5 border rounded hover:bg-gray-50"><ChevronRight size={16} /></button>
+                <button ref={nextMonthRef} onClick={goNextMonth} className="p-1.5 border rounded hover:bg-gray-50"><ChevronRight size={16} /></button>
               </div>
               <button onClick={goToday} className="text-xs px-2 py-1 border rounded hover:bg-gray-50">Heute</button>
             </div>
@@ -301,8 +316,8 @@ export function AdminVacationCalendar({ onClose }: { onClose: () => void }) {
                         )}
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button onClick={() => startEdit(e)} className="p-1 text-gray-500 hover:bg-gray-100 rounded"><Pencil size={13} /></button>
-                        <button onClick={() => removeEntry(e.id)} className="p-1 text-rose-600 hover:bg-rose-50 rounded"><Trash2 size={13} /></button>
+                        <button onClick={ev => { animatePop(ev.currentTarget); startEdit(e); }} className="p-1 text-gray-500 hover:bg-gray-100 rounded"><Pencil size={13} /></button>
+                        <button onClick={ev => { animatePop(ev.currentTarget); removeEntry(e.id); }} className="p-1 text-rose-600 hover:bg-rose-50 rounded"><Trash2 size={13} /></button>
                       </div>
                     </div>
                   ))}

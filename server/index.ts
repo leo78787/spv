@@ -1099,6 +1099,14 @@ function entryOverlapsPeriod(entry: { startDate: any; endDate: any }, period: an
   return s <= end && e >= start;
 }
 
+/** Whether a single ISO date (e.g. a calendar label's `date`) falls within a planning period's date range. */
+function dateWithinPeriod(dateStr: string, period: any): boolean {
+  if (!period) return false;
+  const { start, end } = periodDateRange(period);
+  const d = new Date(dateStr);
+  return d >= start && d <= end;
+}
+
 /** Find the planning period containing a given assignment id. Returns null if not found. */
 function findPeriodByAssignmentId(state: any, assignmentId: string): any | null {
   const periods: any[] = state.planningPeriods || [];
@@ -1850,7 +1858,7 @@ app.get('/api/portal/my-data', portalAuthMiddleware, (req, res) => {
   const visibleLabels = (state.labels || []).filter((l: any) => l.visibleToEmployee !== false);
   const visibleLabelIds = new Set(visibleLabels.map((l: any) => l.id));
   const myCalendarLabels = (state.calendarLabels || []).filter(
-    (cl: any) => cl.employeeId === employeeId && visibleLabelIds.has(cl.labelId)
+    (cl: any) => cl.employeeId === employeeId && visibleLabelIds.has(cl.labelId) && dateWithinPeriod(cl.date, selectedPeriod)
   );
 
   // Department

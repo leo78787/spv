@@ -4,7 +4,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { CheckSquare, Square, Calendar, MessageSquare, Paperclip } from 'lucide-react';
 import { BoardTask } from '../../types';
 import type { OrgUser } from './BoardsModal';
-import { animateItemIn, animatePop } from './animations';
+import { animateItemIn, animatePop } from '../../utils/uiAnimations';
 
 function initials(name: string): string {
   return name.split(' ').map(p => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();

@@ -3,7 +3,7 @@ import { X, Trash2, Plus, Paperclip, Send, FileText, CheckSquare, Square } from 
 import { useStore, getAuthToken } from '../../store';
 import { Board, BoardTask, BoardComment } from '../../types';
 import type { OrgUser } from './BoardsModal';
-import { animateModalIn, animatePop } from './animations';
+import { animateModalIn, animatePop } from '../../utils/uiAnimations';
 
 interface Props {
   board: Board;

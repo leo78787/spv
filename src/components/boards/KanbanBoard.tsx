@@ -11,7 +11,7 @@ import { Board, BoardSection, BoardTask } from '../../types';
 import type { OrgUser } from './BoardsModal';
 import { TaskCard, TaskCardOverlay } from './TaskCard';
 import { TaskDetailPopup } from './TaskDetailPopup';
-import { animateItemIn } from './animations';
+import { animateItemIn } from '../../utils/uiAnimations';
 
 interface Props {
   board: Board;

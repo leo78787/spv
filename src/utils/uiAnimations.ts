@@ -1,9 +1,9 @@
 /**
- * Small shared animejs helpers for the Boards feature. Kept deliberately
- * minimal — purposeful entrance/feedback motion, not decoration for its own
- * sake, and always driven by a mount-effect so it fires once per genuinely
- * new element (React re-renders reuse the same DOM node via `key`, so this
- * never re-triggers on ordinary data refreshes).
+ * Small shared animejs helpers for micro-interactions across the app. Kept
+ * deliberately minimal — purposeful entrance/feedback motion, not decoration
+ * for its own sake, and always driven by a mount-effect so it fires once per
+ * genuinely new element (React re-renders reuse the same DOM node via `key`,
+ * so this never re-triggers on ordinary data refreshes).
  *
  * Every helper clears its own inline `transform` once the animation
  * completes. animejs otherwise leaves the final keyframe value (even an
@@ -61,13 +61,25 @@ export function animateListIn(selectorOrEls: string | Element[] | NodeListOf<Ele
   });
 }
 
-/** Quick scale "pop" — used for the done-checkbox toggle feedback. */
+/** Quick scale "pop" — used for done-checkbox / edit / delete click feedback. */
 export function animatePop(el: Element | null) {
   if (!el) return;
   animate(el, {
     scale: [1, 1.35, 1],
     duration: 280,
     ease: 'outElastic(1, .6)',
+    onComplete: () => clearTransform(el),
+  });
+}
+
+/** Small directional nudge-and-return — used for prev/next chevron click feedback. */
+export function animateNudge(el: Element | null, direction: 'left' | 'right') {
+  if (!el) return;
+  const dx = direction === 'left' ? -4 : 4;
+  animate(el, {
+    translateX: [0, dx, 0],
+    duration: 220,
+    ease: 'outQuad',
     onComplete: () => clearTransform(el),
   });
 }

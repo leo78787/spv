@@ -4,7 +4,7 @@ import { useStore, getAuthToken } from '../../store';
 import { Board, BoardVisibility } from '../../types';
 import { KanbanBoard } from './KanbanBoard';
 import { BoardSettingsPopup } from './BoardSettingsPopup';
-import { animateModalIn, animateListIn } from './animations';
+import { animateModalIn, animateListIn } from '../../utils/uiAnimations';
 
 export interface OrgUser {
   id: string;

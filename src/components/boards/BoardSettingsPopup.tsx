@@ -3,7 +3,7 @@ import { X, Trash2 } from 'lucide-react';
 import { getAuthToken } from '../../store';
 import { Board, BoardVisibility } from '../../types';
 import type { OrgUser } from './BoardsModal';
-import { animateModalIn } from './animations';
+import { animateModalIn } from '../../utils/uiAnimations';
 
 interface Props {
   board: Board;
