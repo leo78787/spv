@@ -90,7 +90,7 @@
   .perm-box { border: 1px solid var(--gray-200); border-radius: var(--radius-sm); padding: 12px; background: var(--gray-50); margin: 10px 0; }
   .perm-box label:not(.perm-grid label) { margin-bottom: 8px; }
 
-  #login-view {
+  #login-view, #forgot-password-view, #force-password-view {
     min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
     background: radial-gradient(circle at 20% 20%, #eef2ff 0%, var(--gray-50) 55%);
   }
@@ -124,6 +124,36 @@
   .view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 10px; }
 
   hr.sep { border: none; border-top: 1px solid var(--gray-100); margin: 16px 0; }
+
+  /* ── Datenbank ─────────────────────────────────────────────────────── */
+  #db-layout { display: flex; align-items: flex-start; gap: 18px; }
+  #db-sidebar { width: 240px; flex-shrink: 0; padding: 14px 10px; max-height: calc(100vh - 120px); overflow-y: auto; position: sticky; top: 32px; }
+  #db-main { flex: 1; min-width: 0; }
+  .db-group-label { font-size: 10.5px; font-weight: 700; color: var(--gray-400); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 10px 6px; }
+  .db-nav-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; margin: 1px 0; border-radius: 9px; font-size: 13px; font-weight: 600; color: var(--gray-700); cursor: pointer; transition: background 0.15s ease; }
+  .db-nav-item:hover { background: var(--gray-100); }
+  .db-nav-item.active { background: var(--primary-light); color: var(--primary-dark); }
+  .db-count-badge { font-size: 10.5px; font-weight: 700; color: var(--gray-400); background: var(--gray-100); border-radius: 999px; padding: 1px 7px; flex-shrink: 0; }
+  .db-nav-item.active .db-count-badge { background: white; color: var(--primary); }
+
+  .db-rel-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--primary-light); color: var(--primary-dark); border: 1px solid #e0e7ff; cursor: pointer; transition: filter 0.15s; white-space: nowrap; }
+  .db-rel-pill:hover { filter: brightness(0.95); }
+  .db-expand-btn { font-family: monospace; font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 7px; background: var(--gray-100); color: var(--gray-600); border: 1px solid var(--gray-200); cursor: pointer; transition: background 0.15s; }
+  .db-expand-btn:hover { background: var(--gray-200); }
+
+  .db-table-wrap { overflow-x: auto; border: 1px solid var(--gray-200); border-radius: 12px; }
+  table.db-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.db-table th { position: sticky; top: 0; background: var(--gray-50); text-align: left; padding: 9px 12px; font-size: 10.5px; font-weight: 700; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--gray-200); white-space: nowrap; }
+  table.db-table td { padding: 8px 12px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  table.db-table tbody tr:hover { background: var(--gray-50); }
+  table.db-table tbody tr:last-child td { border-bottom: none; }
+  table.db-table td.db-actions-cell { max-width: none; overflow: visible; text-align: right; }
+
+  @media (max-width: 860px) {
+    #db-layout { flex-direction: column; }
+    #db-sidebar { width: 100%; position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 4px; }
+    #db-sidebar > .db-group-label { width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -142,6 +172,24 @@
       <input id="login-password" type="password" autocomplete="current-password">
     </div>
     <button class="btn btn-primary" style="width:100%;margin-top:6px;" onclick="doLogin()">Anmelden</button>
+    <button type="button" class="toggle-link" style="display:block;margin:12px auto 0;" onclick="showForgotView()">Passwort vergessen?</button>
+  </div>
+</div>
+
+<div id="forgot-password-view" class="hidden">
+  <div class="login-box">
+    <h1>Passwort zurücksetzen</h1>
+    <p class="muted" style="margin-bottom:22px;">Geben Sie Ihre E-Mail-Adresse ein. Falls ein Zugang damit existiert, erhalten Sie ein Einmalpasswort, mit dem Sie sich anmelden und ein neues Passwort vergeben können.</p>
+    <div id="forgot-error" class="msg msg-error hidden"></div>
+    <div id="forgot-done" class="msg msg-success hidden"></div>
+    <div id="forgot-form-fields">
+      <div class="form-group">
+        <label>E-Mail</label>
+        <input id="forgot-email" type="email" autocomplete="username">
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:6px;" id="forgot-submit-btn" onclick="submitForgotPassword()">Einmalpasswort senden</button>
+    </div>
+    <button type="button" class="toggle-link" style="display:block;margin:12px auto 0;" onclick="leaveForgotView()">Zurück zur Anmeldung</button>
   </div>
 </div>
 
@@ -173,6 +221,16 @@
   </div>
 </div>
 
+<div id="db-json-modal" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:70;" onclick="if (event.target === this) closeDbJsonModal()">
+  <div class="login-box" style="max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;">
+      <h1 style="font-size:16px;font-family:monospace;word-break:break-all;" id="db-json-modal-title">Feld</h1>
+      <button class="btn btn-outline btn-sm" style="flex-shrink:0;" onclick="closeDbJsonModal()">Schließen</button>
+    </div>
+    <pre id="db-json-modal-content" style="overflow:auto;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:12px;font-size:12.5px;flex:1;margin:0;"></pre>
+  </div>
+</div>
+
 <div id="app-shell" class="hidden">
   <div id="sidebar">
     <div class="brand"><span class="brand-dot"></span> Schichtplan Manager</div>
@@ -183,6 +241,10 @@
     <div class="nav-item" data-view="changelog" onclick="switchView('changelog')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
       Changelog
+    </div>
+    <div class="nav-item" data-view="datenbank" onclick="switchView('datenbank')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+      Datenbank
     </div>
     <div class="nav-item" data-view="einstellungen" onclick="switchView('einstellungen')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -253,6 +315,31 @@
       </div>
       <div class="card">
         <div id="changelog-list"><p class="muted">Lade Changelog…</p></div>
+      </div>
+    </div>
+
+    <!-- ══════════════ DATENBANK VIEW ══════════════ -->
+    <div id="view-datenbank" class="view hidden">
+      <div class="view-header">
+        <h1>Datenbank</h1>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label style="margin:0;text-transform:none;font-weight:600;color:var(--gray-500);font-size:12px;">Organisation</label>
+          <select id="db-org-select" style="width:auto;min-width:180px;" onchange="onDbOrgChange(this.value)"></select>
+        </div>
+      </div>
+
+      <div id="db-layout">
+        <div id="db-sidebar" class="card">
+          <div class="db-group-label">Plattformweit</div>
+          <div id="db-nav-platform"></div>
+          <div class="db-group-label" style="margin-top:16px;">Pro Organisation</div>
+          <div id="db-nav-org"></div>
+        </div>
+
+        <div id="db-main">
+          <div class="card" id="db-collection-info"><p class="muted">Lade Schema…</p></div>
+          <div class="card" id="db-collection-data"></div>
+        </div>
       </div>
     </div>
 
@@ -375,6 +462,58 @@ function doLogout() {
   showEl('login-view');
 }
 
+// ── "Passwort vergessen" (self-service, no login required) ─────────────
+
+function showForgotView() {
+  hideEl('login-view');
+  document.getElementById('forgot-email').value = document.getElementById('login-username').value.includes('@')
+    ? document.getElementById('login-username').value.trim() : '';
+  hideEl('forgot-error');
+  hideEl('forgot-done');
+  showEl('forgot-form-fields');
+  document.getElementById('forgot-submit-btn').disabled = false;
+  document.getElementById('forgot-submit-btn').textContent = 'Einmalpasswort senden';
+  showEl('forgot-password-view');
+}
+
+function leaveForgotView() {
+  hideEl('forgot-password-view');
+  showEl('login-view');
+}
+
+async function submitForgotPassword() {
+  const email = document.getElementById('forgot-email').value.trim();
+  const errEl = document.getElementById('forgot-error');
+  hideEl('forgot-error');
+  if (!email) { errEl.textContent = 'Bitte E-Mail-Adresse eingeben.'; showEl('forgot-error'); return; }
+  const btn = document.getElementById('forgot-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Wird gesendet…';
+  try {
+    const resp = await fetch('/api/platform/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      errEl.textContent = data.error || 'Anfrage fehlgeschlagen.';
+      showEl('forgot-error');
+      btn.disabled = false;
+      btn.textContent = 'Einmalpasswort senden';
+      return;
+    }
+    hideEl('forgot-form-fields');
+    const doneEl = document.getElementById('forgot-done');
+    doneEl.textContent = data.message || 'Einmalpasswort wurde gesendet.';
+    showEl('forgot-done');
+  } catch {
+    errEl.textContent = 'Verbindungsfehler';
+    showEl('forgot-error');
+    btn.disabled = false;
+    btn.textContent = 'Einmalpasswort senden';
+  }
+}
+
 /** Only reachable right after logging in with a one-time password — there is no general "change my password anytime" flow, only "Passwort zurücksetzen" in Einstellungen, which sends a fresh one-time password and leads back here. */
 async function submitForcedPasswordChange() {
   const newPassword = document.getElementById('force-pw-new').value;
@@ -421,6 +560,7 @@ function switchView(view) {
   localStorage.setItem('orga-view', view);
   if (view === 'organisation') loadOrganizations();
   if (view === 'changelog') { loadChangelogOrgOptions(); loadChangelog(); }
+  if (view === 'datenbank') loadDatabaseView();
   if (view === 'einstellungen') loadPlatformUsers();
 }
 
@@ -678,6 +818,267 @@ async function loadChangelog() {
     list.innerHTML = '<p class="muted">Fehler beim Laden.</p>';
   }
 }
+
+// ── Datenbank (read-only data browser) ──────────────────────────────────
+
+let dbSchema = [];
+let dbCounts = [];
+let dbSelectedOrgId = null;
+let dbSelectedCollection = null;
+let dbCurrentRows = [];
+let dbCurrentTotal = 0;
+let dbCurrentTruncated = false;
+let dbSearchTerm = '';
+
+async function loadDatabaseView() {
+  await loadDbOrgOptions();
+  await loadDbSchema();
+}
+
+async function loadDbOrgOptions() {
+  try {
+    const resp = await fetch('/api/platform/organizations', { headers: { Authorization: `Bearer ${token}` } });
+    const orgs = await resp.json();
+    const sel = document.getElementById('db-org-select');
+    const current = sel.value || dbSelectedOrgId;
+    sel.innerHTML = orgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
+    if (current && orgs.some(o => o.id === current)) sel.value = current;
+    else if (orgs.length) sel.value = orgs[0].id;
+    dbSelectedOrgId = sel.value || null;
+  } catch { /* ignore */ }
+}
+
+function onDbOrgChange(orgId) {
+  dbSelectedOrgId = orgId || null;
+  loadDbSchema();
+  const meta = dbSchema.find(c => c.id === dbSelectedCollection);
+  if (meta && meta.scope === 'org') loadDbCollection(dbSelectedCollection);
+}
+
+async function loadDbSchema() {
+  try {
+    const params = new URLSearchParams();
+    if (dbSelectedOrgId) params.set('orgId', dbSelectedOrgId);
+    const resp = await fetch(`/api/platform/database/schema?${params.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) { doLogout(); return; }
+    const data = await resp.json();
+    dbSchema = data.collections;
+    dbCounts = data.counts;
+    renderDbNav();
+    if (!dbSelectedCollection) selectDbCollection(dbSchema[0].id);
+    else renderDbCollectionInfo();
+  } catch {
+    document.getElementById('db-collection-info').innerHTML = '<p class="msg msg-error">Fehler beim Laden des Datenbank-Schemas.</p>';
+  }
+}
+
+function dbLabel(id) {
+  const m = dbSchema.find(c => c.id === id);
+  return m ? m.label : id;
+}
+
+function dbCountOf(id) {
+  const c = dbCounts.find(x => x.id === id);
+  return c && c.count != null ? c.count : '—';
+}
+
+function renderDbNav() {
+  const itemHtml = c => `
+    <div class="db-nav-item ${dbSelectedCollection === c.id ? 'active' : ''}" onclick="selectDbCollection('${c.id}')">
+      <span>${escapeHtml(c.label)}</span>
+      <span class="db-count-badge">${dbCountOf(c.id)}</span>
+    </div>`;
+  document.getElementById('db-nav-platform').innerHTML = dbSchema.filter(c => c.scope === 'platform').map(itemHtml).join('');
+  document.getElementById('db-nav-org').innerHTML = dbSchema.filter(c => c.scope === 'org').map(itemHtml).join('');
+}
+
+function selectDbCollection(id, presetSearch) {
+  dbSelectedCollection = id;
+  dbSearchTerm = presetSearch || '';
+  renderDbNav();
+  renderDbCollectionInfo();
+  loadDbCollection(id);
+}
+
+function renderDbCollectionInfo() {
+  const meta = dbSchema.find(c => c.id === dbSelectedCollection);
+  const el = document.getElementById('db-collection-info');
+  if (!meta) { el.innerHTML = ''; return; }
+  const relHtml = meta.relations.length
+    ? meta.relations.map(r => `<span class="db-rel-pill" onclick="selectDbCollection('${r.target}')" title="Zu „${escapeHtml(dbLabel(r.target))}“ wechseln">${escapeHtml(r.field)} → ${escapeHtml(dbLabel(r.target))}</span>`).join('')
+    : '<span class="muted" style="font-size:12.5px;">Keine ausgehenden Beziehungen.</span>';
+  el.innerHTML = `
+    <div>
+      <h2 style="margin-bottom:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ${escapeHtml(meta.label)}
+        <span class="badge ${meta.scope === 'platform' ? 'badge-admin' : 'badge-leitung'}">${meta.scope === 'platform' ? 'plattformweit' : 'pro Organisation'}</span>
+      </h2>
+      <p class="muted" style="max-width:680px;">${escapeHtml(meta.description)}</p>
+      <div style="margin-top:8px;font-size:11px;color:var(--gray-400);font-family:monospace;">${escapeHtml(meta.source)}</div>
+    </div>
+    <div style="margin-top:14px;">
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;">Beziehungen</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">${relHtml}</div>
+    </div>
+    ${meta.deletable ? '' : '<p class="muted" style="margin-top:12px;font-size:12px;">Diese Tabelle unterstützt kein Löschen einzelner Datensätze.</p>'}
+  `;
+}
+
+async function loadDbCollection(id) {
+  const meta = dbSchema.find(c => c.id === id);
+  const dataEl = document.getElementById('db-collection-data');
+  if (meta && meta.scope === 'org' && !dbSelectedOrgId) {
+    dataEl.innerHTML = '<p class="muted" style="padding:20px 4px;">Bitte zuerst eine Organisation auswählen.</p>';
+    return;
+  }
+  dataEl.innerHTML = '<p class="muted" style="padding:20px 4px;">Lade Daten…</p>';
+  try {
+    const params = new URLSearchParams();
+    if (meta && meta.scope === 'org') params.set('orgId', dbSelectedOrgId);
+    const resp = await fetch(`/api/platform/database/collection/${id}?${params.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (resp.status === 401) { doLogout(); return; }
+    const data = await resp.json();
+    if (!resp.ok) { dataEl.innerHTML = `<p class="msg msg-error">${escapeHtml(data.error || 'Fehler beim Laden.')}</p>`; return; }
+    if (id !== dbSelectedCollection) return; // user already switched away while this was in flight
+    dbCurrentRows = data.rows;
+    dbCurrentTotal = data.total;
+    dbCurrentTruncated = data.truncated;
+    renderDbTable();
+  } catch {
+    dataEl.innerHTML = '<p class="msg msg-error">Fehler beim Laden der Daten.</p>';
+  }
+}
+
+function dbComputeColumns(rows) {
+  const cols = [];
+  const seen = new Set();
+  for (const r of rows.slice(0, 300)) {
+    for (const k of Object.keys(r)) {
+      if (!seen.has(k)) { seen.add(k); cols.push(k); }
+    }
+  }
+  return cols;
+}
+
+function dbRelPill(targetId, value) {
+  const label = dbLabel(targetId);
+  return `<span class="db-rel-pill db-rel-value" data-target="${escapeHtml(targetId)}" data-value="${escapeHtml(String(value))}" title="${escapeHtml(label)}: ${escapeHtml(String(value))} — anzeigen">${escapeHtml(String(value))}</span>`;
+}
+
+function renderDbCell(value, fieldName, meta, rowIndex) {
+  const rel = meta && meta.relations.find(r => r.field === fieldName);
+  if (value === null || value === undefined || value === '') return '<span class="muted">–</span>';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '<span class="muted">–</span>';
+    if (rel) {
+      const shown = value.slice(0, 4).map(v => dbRelPill(rel.target, v)).join(' ');
+      return shown + (value.length > 4 ? ` <span class="muted">+${value.length - 4}</span>` : '');
+    }
+    return `<button type="button" class="db-expand-btn" data-row="${rowIndex}" data-field="${escapeHtml(fieldName)}">Array (${value.length})</button>`;
+  }
+  if (typeof value === 'object') {
+    return `<button type="button" class="db-expand-btn" data-row="${rowIndex}" data-field="${escapeHtml(fieldName)}">Objekt</button>`;
+  }
+  if (rel) return dbRelPill(rel.target, value);
+  if (typeof value === 'boolean') return value ? '<span class="badge badge-admin">ja</span>' : '<span class="badge badge-betrachter">nein</span>';
+  let s = String(value);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) { try { s = new Date(s).toLocaleString('de-DE'); } catch { /* keep raw */ } }
+  const full = s;
+  if (s.length > 70) s = s.slice(0, 67) + '…';
+  return `<span title="${escapeHtml(full)}">${escapeHtml(s)}</span>`;
+}
+
+function renderDbTable() {
+  const meta = dbSchema.find(c => c.id === dbSelectedCollection);
+  const dataEl = document.getElementById('db-collection-data');
+  const term = dbSearchTerm.trim().toLowerCase();
+  const filtered = term ? dbCurrentRows.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : dbCurrentRows;
+  const cols = dbComputeColumns(dbCurrentRows);
+
+  const header = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <input id="db-search-input" placeholder="In Datensätzen suchen…" value="${escapeHtml(dbSearchTerm)}" style="width:240px;" oninput="onDbSearchInput(this.value)">
+      <span class="muted" style="font-size:12.5px;">${filtered.length} von ${dbCurrentTotal}${dbCurrentTruncated ? ' (gekürzt)' : ''} Datensätzen</span>
+    </div>`;
+
+  if (dbCurrentRows.length === 0) {
+    dataEl.innerHTML = header + '<p class="muted" style="padding:16px 4px;">Keine Datensätze vorhanden.</p>';
+    return;
+  }
+  if (filtered.length === 0) {
+    dataEl.innerHTML = header + '<p class="muted" style="padding:16px 4px;">Keine Treffer für diese Suche.</p>';
+    return;
+  }
+
+  const canDelete = !!(meta && meta.deletable);
+  const theadHtml = `<tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}${canDelete ? '<th></th>' : ''}</tr>`;
+  const tbodyHtml = filtered.map(row => {
+    const rowIndex = dbCurrentRows.indexOf(row);
+    const cellsHtml = cols.map(c => `<td>${renderDbCell(row[c], c, meta, rowIndex)}</td>`).join('');
+    const actionHtml = canDelete
+      ? `<td class="db-actions-cell"><button type="button" class="btn btn-danger-outline btn-sm db-delete-btn" data-row="${rowIndex}">Löschen</button></td>`
+      : '';
+    return `<tr>${cellsHtml}${actionHtml}</tr>`;
+  }).join('');
+
+  dataEl.innerHTML = `${header}<div class="db-table-wrap"><table class="db-table"><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table></div>`;
+}
+
+function onDbSearchInput(value) {
+  dbSearchTerm = value;
+  renderDbTable();
+  const input = document.getElementById('db-search-input');
+  if (input) { input.focus(); const len = input.value.length; input.setSelectionRange(len, len); }
+}
+
+document.getElementById('db-collection-data').addEventListener('click', e => {
+  const expandBtn = e.target.closest('.db-expand-btn');
+  if (expandBtn) {
+    const row = dbCurrentRows[Number(expandBtn.dataset.row)];
+    const field = expandBtn.dataset.field;
+    openDbJsonModal(field, row ? row[field] : undefined);
+    return;
+  }
+  const pill = e.target.closest('.db-rel-value');
+  if (pill) {
+    selectDbCollection(pill.dataset.target, pill.dataset.value);
+    return;
+  }
+  const delBtn = e.target.closest('.db-delete-btn');
+  if (delBtn) {
+    const row = dbCurrentRows[Number(delBtn.dataset.row)];
+    if (row) deleteDbRow(dbSelectedCollection, row.id);
+  }
+});
+
+async function deleteDbRow(collectionId, id) {
+  const meta = dbSchema.find(c => c.id === collectionId);
+  const ok = await askConfirm(`Datensatz „${id}“ aus „${meta ? meta.label : collectionId}“ endgültig löschen? Dies kann nicht rückgängig gemacht werden.`);
+  if (!ok) return;
+  try {
+    const params = new URLSearchParams();
+    if (meta && meta.scope === 'org') params.set('orgId', dbSelectedOrgId);
+    const resp = await fetch(`/api/platform/database/collection/${collectionId}/${encodeURIComponent(id)}?${params.toString()}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401) { doLogout(); return; }
+    if (!resp.ok) { showMessage(data.error || 'Fehler beim Löschen', 'error'); return; }
+    showMessage('Datensatz gelöscht.', 'success');
+    if (collectionId === dbSelectedCollection) await loadDbCollection(collectionId);
+    await loadDbSchema();
+  } catch {
+    showMessage('Verbindungsfehler', 'error');
+  }
+}
+
+function openDbJsonModal(field, value) {
+  document.getElementById('db-json-modal-title').textContent = field;
+  document.getElementById('db-json-modal-content').textContent = JSON.stringify(value, null, 2);
+  showEl('db-json-modal');
+}
+
+function closeDbJsonModal() { hideEl('db-json-modal'); }
 
 // ── Einstellungen (platform users) ────────────────────────────────────
 

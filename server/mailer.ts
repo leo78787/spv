@@ -16,6 +16,8 @@
  *                   Base URL of the employee portal (its own domain/root,
  *                   NOT the admin app, which now lives on a separate
  *                   admin.schichtapp.de subdomain).
+ *   ORGA_BASE_URL — default: https://orga.schichtapp.de
+ *                   Base URL of the platform/organization-management app.
  */
 
 import nodemailer from 'nodemailer';
@@ -26,6 +28,7 @@ const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || 'Schichtplan Manager <noreply@schichtapp.de>';
 export const APP_BASE_URL = process.env.APP_BASE_URL || 'https://schichtapp.de';
+const ORGA_BASE_URL = process.env.ORGA_BASE_URL || 'https://orga.schichtapp.de';
 
 const transporter = nodemailer.createTransport({
   host: SMTP_HOST,
@@ -160,6 +163,38 @@ export async function sendAdminPasswordResetEmail(
           </table>
           <p style="color: #6b7280; font-size: 14px;">Gültig für 1 Stunde. Melden Sie sich mit Ihrer E-Mail-Adresse und diesem Einmalpasswort an und vergeben Sie danach ein neues Passwort.</p>
           <a href="${adminUrl}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zum Admin-Bereich</a>
+          <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">Wenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail – Ihr bisheriges Passwort bleibt gültig.</p>
+        </div>
+      </div>
+    `,
+  });
+}
+
+/**
+ * Send a one-time password for the orga.schichtapp.de "Passwort vergessen" flow.
+ */
+export async function sendPlatformPasswordResetEmail(
+  to: string,
+  name: string,
+  oneTimePassword: string,
+): Promise<void> {
+  await sendMail({
+    to,
+    subject: 'Schichtplan Manager – Passwort zurücksetzen (Organisationsverwaltung)',
+    text: `Hallo ${name},\n\nfür Ihren Zugang zur Organisationsverwaltung wurde ein Zurücksetzen des Passworts angefordert.\n\nEinmalpasswort: ${oneTimePassword}\n(gültig für 1 Stunde)\n\nOrganisationsverwaltung: ${ORGA_BASE_URL}\n\nMelden Sie sich mit Ihrer E-Mail-Adresse und diesem Einmalpasswort an und vergeben Sie danach ein neues Passwort.\n\nWenn Sie das nicht angefordert haben, können Sie diese E-Mail ignorieren – Ihr bisheriges Passwort bleibt gültig.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #4f46e5; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+          <h2 style="margin:0;">Schichtplan Manager</h2>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+          <p>Hallo <strong>${name}</strong>,</p>
+          <p>für Ihren Zugang zur Organisationsverwaltung wurde ein Zurücksetzen des Passworts angefordert.</p>
+          <table style="margin: 16px 0; border-collapse: collapse;">
+            <tr><td style="padding: 8px; font-weight: bold; color: #374151;">Einmalpasswort:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${oneTimePassword}</td></tr>
+          </table>
+          <p style="color: #6b7280; font-size: 14px;">Gültig für 1 Stunde. Melden Sie sich mit Ihrer E-Mail-Adresse und diesem Einmalpasswort an und vergeben Sie danach ein neues Passwort.</p>
+          <a href="${ORGA_BASE_URL}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zur Organisationsverwaltung</a>
           <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">Wenn Sie das nicht angefordert haben, ignorieren Sie diese E-Mail – Ihr bisheriges Passwort bleibt gültig.</p>
         </div>
       </div>

@@ -64,8 +64,10 @@ import {
   resetPlatformUserPassword,
   deletePlatformUser,
   changePlatformUserPassword,
+  createPlatformPasswordResetByEmail,
 } from './platformAuth.js';
-import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail, sendAdminPasswordResetEmail } from './mailer.js';
+import { DB_SCHEMA, getAllCounts, getCollectionRows, deleteRow, getCollectionMeta } from './dbExplorer.js';
+import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail, sendAdminPasswordResetEmail, sendPlatformPasswordResetEmail } from './mailer.js';
 import { initBackupSchedule, updateBackupSettings, disableBackupSettings, restoreFromBackup } from './backup.js';
 import { diffState } from './stateDiff.js';
 import { logChange, logChanges, queryChangeLog } from './auditLog.js';
@@ -560,6 +562,34 @@ app.post('/api/platform/login', (req, res) => {
 });
 
 /**
+ * Platform: "Passwort vergessen". Always answers with the same generic success so it
+ * can't be used to find out which emails exist. Throttled per email (60s) and per
+ * IP (10/hour) since it triggers outgoing mail.
+ */
+const platformResetLastByEmail = new Map<string, number>();
+const platformResetHitsByIp = new Map<string, number[]>();
+app.post('/api/platform/forgot-password', async (req, res) => {
+  const generic = { success: true, message: 'Falls ein Zugang mit dieser E-Mail-Adresse existiert, wurde ein Einmalpasswort gesendet.' };
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  if (!email) { res.status(400).json({ error: 'Bitte E-Mail-Adresse eingeben.' }); return; }
+  const now = Date.now();
+  const ip = req.ip ?? 'unknown';
+  const hits = (platformResetHitsByIp.get(ip) ?? []).filter(t => now - t < 3600_000);
+  if (hits.length >= 10) { res.status(429).json({ error: 'Zu viele Anfragen. Bitte später erneut versuchen.' }); return; }
+  hits.push(now);
+  platformResetHitsByIp.set(ip, hits);
+  if (now - (platformResetLastByEmail.get(email) ?? 0) < 60_000) { res.json(generic); return; }
+  platformResetLastByEmail.set(email, now);
+  try {
+    const result = createPlatformPasswordResetByEmail(email);
+    if (result) await sendPlatformPasswordResetEmail(result.user.email, result.user.name, result.oneTimePassword);
+  } catch (err) {
+    console.error('Platform-Passwort-Reset-Mail fehlgeschlagen:', err);
+  }
+  res.json(generic);
+});
+
+/**
  * Set a new password for the current platform session — only ever reachable
  * right after logging in with a one-time password (mustChangePassword was
  * true), not a general "change my password whenever" action. There is no
@@ -732,6 +762,38 @@ app.delete('/api/platform/users/:id', platformAuthMiddleware, (req, res) => {
   if ('error' in result) { res.status(400).json({ error: result.error }); return; }
   logChange({ organizationId: null, organizationName: null, ...actorFromPlatformSession(session), area: 'platform', summary: `Plattform-Zugang entfernt: ${user.name} (${user.email})` });
   res.json({ success: true });
+});
+
+// ─── Datenbank (read-only data browser) ──────────────────────────────
+
+app.get('/api/platform/database/schema', platformAuthMiddleware, (req, res) => {
+  const orgId = typeof req.query.orgId === 'string' && req.query.orgId ? req.query.orgId : undefined;
+  res.json({ collections: DB_SCHEMA, counts: getAllCounts(orgId) });
+});
+
+app.get('/api/platform/database/collection/:id', platformAuthMiddleware, (req, res) => {
+  const orgId = typeof req.query.orgId === 'string' && req.query.orgId ? req.query.orgId : undefined;
+  const result = getCollectionRows(String(req.params.id), orgId);
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/platform/database/collection/:id/:rowId', platformAuthMiddleware, (req, res) => {
+  const session: PlatformSession = (req as any).platformSession;
+  const collectionId = String(req.params.id);
+  const orgId = typeof req.query.orgId === 'string' && req.query.orgId ? req.query.orgId : undefined;
+  const result = deleteRow(collectionId, orgId, String(req.params.rowId));
+  if ('error' in result) { res.status(400).json(result); return; }
+  const meta = getCollectionMeta(collectionId);
+  const org = orgId ? getOrganization(orgId) : null;
+  logChange({
+    organizationId: orgId ?? null,
+    organizationName: org?.name ?? null,
+    ...actorFromPlatformSession(session),
+    area: 'database',
+    summary: `Datensatz gelöscht in „${meta?.label ?? collectionId}“: ${req.params.rowId}`,
+  });
+  res.json(result);
 });
 
 // ─── Changelog ────────────────────────────────────────────────────────
