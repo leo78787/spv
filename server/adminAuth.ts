@@ -34,7 +34,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const ADMIN_USERS_FILE = path.join(DATA_DIR, 'adminUsers.json');
 
-export type AdminRole = 'admin' | 'leitung' | 'betrachter';
+/**
+ * `forderung` is a fourth, special-purpose role: it never sees the
+ * shift-planning app at all (blocked entirely in authMiddleware — see
+ * server/index.ts). It exists only to use the Forderungen (receivables)
+ * tool at forderung.schichtapp.de, where it can create/import claims and
+ * assign them to a `leitung` account. `leitung`/`admin` accounts also use
+ * that tool (to work their assigned/all claims) in addition to the normal
+ * shift-planning app.
+ */
+export type AdminRole = 'admin' | 'leitung' | 'betrachter' | 'forderung';
 
 /**
  * Configurable permission areas for the `leitung` role. Team management and

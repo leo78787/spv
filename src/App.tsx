@@ -5,7 +5,7 @@ import { ShiftPlanning } from './components/ShiftPlanning';
 import { CalendarView } from './components/CalendarView';
 import { FairnessKPIs } from './components/FairnessKPIs';
 import { ViewTab, DEFAULT_TAB_VISIBILITY } from './types';
-import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight, Palmtree, Trello } from 'lucide-react';
+import { Users, Calendar, ClipboardList, Building2, BarChart3, Settings, LogOut, ArrowLeftRight, Palmtree, Trello, Receipt } from 'lucide-react';
 
 const SwapManagement = lazy(() => import('./components/SwapManagement').then(m => ({ default: m.SwapManagement })));
 import { HolidaySettings } from './components/HolidaySettings';
@@ -90,6 +90,7 @@ function App() {
 
   const swapSettings = useStore(s => s.swapSettings);
   const effectiveTabVisibility = useStore(s => s.effectiveTabVisibility) || DEFAULT_TAB_VISIBILITY;
+  const adminRole = useStore(s => s.adminRole);
 
   const allTabs = [
     { id: 'employees' as ViewTab, label: 'Mitarbeiter', icon: Users },
@@ -131,7 +132,25 @@ function App() {
       <Trello size={16} />
     </button>
   );
-  
+
+  const ForderungButton = () => (
+    <button
+      onClick={() => {
+        // Hand the current session token off via URL so an already-logged-in
+        // admin/leitung account lands in the Forderungen tool already signed
+        // in — forderung.schichtapp.de is a separate origin, so it can't read
+        // this app's localStorage directly. The tool consumes+strips it from
+        // the URL on load (see public/forderung/index.html).
+        const t = getAuthToken();
+        window.location.href = t ? `https://forderung.schichtapp.de/?token=${encodeURIComponent(t)}` : 'https://forderung.schichtapp.de';
+      }}
+      title="Forderungen"
+      className="px-3 py-2 rounded hover:bg-amber-50 border border-gray-100 text-amber-600"
+    >
+      <Receipt size={16} />
+    </button>
+  );
+
   // if not authenticated show login screen only
   if (!authenticated) {
     return <Login onSuccess={() => setAuthenticated(true)} />;
@@ -142,6 +161,35 @@ function App() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
         <p className="text-gray-500">Lade Daten vom Server…</p>
+      </div>
+    );
+  }
+
+  // A `forderung` account never sees the shift-planning app — the backend
+  // blocks it from every shift-plan endpoint (see authMiddleware in
+  // server/index.ts), so there is nothing to show here besides a way out.
+  if (adminRole === 'forderung') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 p-4">
+        <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 text-center">
+          <div className="mx-auto mb-4 w-12 h-12 rounded-lg bg-amber-500 text-white flex items-center justify-center">
+            <Receipt size={22} />
+          </div>
+          <h2 className="text-xl font-bold mb-2 text-gray-900">Forderungen-Tool</h2>
+          <p className="text-sm text-gray-600 mb-5">Dieser Zugang ist für das Forderungen-Tool eingerichtet und hat keinen Zugriff auf den Schichtplan Manager.</p>
+          <a
+            href="https://forderung.schichtapp.de"
+            className="inline-block w-full px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium"
+          >
+            Zum Forderungen-Tool
+          </a>
+          <button
+            onClick={() => { clearAuthToken(); setAuthenticated(false); setStateLoaded(false); }}
+            className="mt-3 text-sm text-gray-500 underline hover:text-gray-700"
+          >
+            Abmelden
+          </button>
+        </div>
       </div>
     );
   }
@@ -162,6 +210,7 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-2">
+              <ForderungButton />
               <BoardsButton />
               <VacationCalendarButton />
               <SettingsButton />

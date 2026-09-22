@@ -67,6 +67,8 @@ import {
   createPlatformPasswordResetByEmail,
 } from './platformAuth.js';
 import { DB_SCHEMA, getAllCounts, getCollectionRows, deleteRow, getCollectionMeta } from './dbExplorer.js';
+import * as forderungen from './forderungen.js';
+import * as forderungRules from './forderungRules.js';
 import { sendInvitationEmail, sendPlanNotificationEmail, sendSwapMatchEmail, sendRingSwapMatchEmail, sendTakeoverMatchEmail, sendAdminInviteEmail, sendAdminPasswordResetEmail, sendPlatformPasswordResetEmail } from './mailer.js';
 import { initBackupSchedule, updateBackupSettings, disableBackupSettings, restoreFromBackup } from './backup.js';
 import { diffState } from './stateDiff.js';
@@ -162,6 +164,18 @@ const BETRACHTER_SELF_SERVICE_PATHS = [
   '/api/admin/vacations',
 ];
 
+const VALID_ADMIN_ROLES: AdminRole[] = ['admin', 'leitung', 'betrachter', 'forderung'];
+
+/** Paths a `forderung` account may call — the Forderungen tool's own API plus the account-scoped self-service every role gets. It never touches shift-planning data. */
+const FORDERUNG_ALLOWED_PATHS = [
+  '/api/admin/change-password',
+  // The shift-planning app's own "who am I" endpoint — allowed so it can
+  // recognize a `forderung` session and immediately redirect instead of
+  // hanging on a permanently-blocked request. It never returns raw
+  // shift-plan data, only role/name/org summary fields.
+  '/api/admin/me',
+];
+
 function authMiddleware(
   req: express.Request,
   res: express.Response,
@@ -198,6 +212,18 @@ function authMiddleware(
   if (effectiveSession.role === 'betrachter' && req.method !== 'GET' && !isBetrachterSelfService) {
     res.status(403).json({ error: 'Betrachter können keine Änderungen vornehmen.' });
     return;
+  }
+  // `forderung` accounts never see shift-planning data at all — restricted
+  // to the Forderungen tool's own API namespace (plus own-account
+  // self-service), read or write, unlike betrachter's read-everything rule.
+  if (effectiveSession.role === 'forderung') {
+    const allowed = req.path.startsWith('/api/forderung/') || FORDERUNG_ALLOWED_PATHS.some(
+      p => req.path === p || req.path.startsWith(`${p}/`),
+    );
+    if (!allowed) {
+      res.status(403).json({ error: 'Dieser Zugang hat nur Zugriff auf das Forderungen-Tool.' });
+      return;
+    }
   }
   (req as any).adminSession = effectiveSession;
   runWithOrg(effectiveSession.organizationId, next);
@@ -471,8 +497,8 @@ app.post('/api/admin/org/users', authMiddleware, requireAdmin, async (req, res) 
   try {
     const session: AdminSession = (req as any).adminSession;
     const { name, email, role, permissions } = req.body ?? {};
-    if (!name || !email || (role !== 'admin' && role !== 'leitung' && role !== 'betrachter')) {
-      res.status(400).json({ error: 'Name, E-Mail und Rolle (admin/leitung/betrachter) erforderlich.' });
+    if (!name || !email || !VALID_ADMIN_ROLES.includes(role)) {
+      res.status(400).json({ error: 'Name, E-Mail und Rolle (admin/leitung/betrachter/forderung) erforderlich.' });
       return;
     }
     const result = inviteAdminUser(session.organizationId, String(name), String(email), role, Array.isArray(permissions) ? permissions : undefined);
@@ -511,7 +537,7 @@ app.put('/api/admin/org/users/:id', authMiddleware, requireAdmin, (req, res) => 
   const user = getAdminUser(String(req.params.id));
   if (!user || user.organizationId !== session.organizationId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
   const { role, permissions } = req.body ?? {};
-  if (role !== 'admin' && role !== 'leitung' && role !== 'betrachter') { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
+  if (!VALID_ADMIN_ROLES.includes(role)) { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
   const updated = updateAdminUserRole(user.id, role, Array.isArray(permissions) ? permissions : undefined);
   const org = getOrganization(session.organizationId);
   logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'team', summary: `Rolle geändert: ${user.name} (${user.email}) → ${role}${role === 'leitung' ? ` [${(permissions || []).join(', ')}]` : ''}` });
@@ -664,7 +690,7 @@ app.post('/api/platform/organizations/:id/invite-leitung', platformAuthMiddlewar
     if (!org) { res.status(404).json({ error: 'Organisation nicht gefunden.' }); return; }
     const { name, email, role, permissions } = req.body ?? {};
     if (!name || !email) { res.status(400).json({ error: 'Name und E-Mail erforderlich.' }); return; }
-    const resolvedRole: AdminRole = role === 'leitung' || role === 'betrachter' ? role : 'admin';
+    const resolvedRole: AdminRole = role === 'leitung' || role === 'betrachter' || role === 'forderung' ? role : 'admin';
     const result = inviteAdminUser(orgId, String(name), String(email), resolvedRole, Array.isArray(permissions) ? permissions : undefined);
     if ('error' in result) { res.status(400).json({ error: result.error }); return; }
     await sendAdminInviteEmail(result.user.email, result.user.name, org.name, resolvedRole, result.oneTimePassword);
@@ -681,7 +707,7 @@ app.put('/api/platform/organizations/:id/users/:userId', platformAuthMiddleware,
   const user = getAdminUser(String(req.params.userId));
   if (!user || user.organizationId !== orgId) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
   const { role, permissions } = req.body ?? {};
-  if (role !== 'admin' && role !== 'leitung' && role !== 'betrachter') { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
+  if (!VALID_ADMIN_ROLES.includes(role)) { res.status(400).json({ error: 'Ungültige Rolle.' }); return; }
   const updated = updateAdminUserRole(user.id, role, Array.isArray(permissions) ? permissions : undefined);
   const org = getOrganization(orgId);
   logChange({ organizationId: orgId, organizationName: org?.name ?? null, ...actorFromPlatformSession(session), area: 'team', summary: `Rolle geändert: ${user.name} (${user.email}) → ${role}${role === 'leitung' ? ` [${(permissions || []).join(', ')}]` : ''}` });
@@ -3451,6 +3477,219 @@ app.get('/api/boards/attachments/:attachmentId', authMiddleware, (req, res) => {
   res.setHeader('Content-Type', resolved.meta.mimeType);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(resolved.meta.filename)}"`);
   fs.createReadStream(filePath).pipe(res);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// FORDERUNGEN (forderung.schichtapp.de) — receivables/claims tool.
+// Reuses the normal admin-dashboard login (/api/admin/login) and session
+// system (authMiddleware) — same accounts, same tokens, just a separate
+// origin/UI and its own role gate below. `forderung.schichtapp.de` is the
+// only surface a `forderung`-role account ever gets (see authMiddleware's
+// FORDERUNG_ALLOWED_PATHS check); `admin`/`leitung` also use it alongside
+// the normal shift-planning app, while `betrachter` has no access at all.
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Gates every /api/forderung/* route — admin, leitung and forderung roles only (betrachter excluded, unlike its usual "read anything" rule). */
+function requireForderungAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const session: AdminSession = (req as any).adminSession;
+  if (session.role !== 'admin' && session.role !== 'leitung' && session.role !== 'forderung') {
+    res.status(403).json({ error: 'Kein Zugriff auf das Forderungen-Tool.' });
+    return;
+  }
+  next();
+}
+
+/** Creating/importing/deleting claims is Forderung/Admin work — Leitung only ever works claims already assigned to them. */
+function requireForderungManage(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const session: AdminSession = (req as any).adminSession;
+  if (session.role !== 'admin' && session.role !== 'forderung') {
+    res.status(403).json({ error: 'Nur Forderung- und Admin-Zugänge können Forderungen anlegen, importieren oder löschen.' });
+    return;
+  }
+  next();
+}
+
+/** Every role that passes requireForderungAccess can VIEW any claim in the org (Leitung included — "Alle Forderungen" is a shared overview, not just their own). */
+function canViewForderungRecord(_session: AdminSession, _record: forderungen.ForderungRecord): boolean {
+  return true;
+}
+
+/** ...but only Admin/Forderung, or the Leitung it's currently assigned to, may EDIT/comment on it — viewing everything doesn't imply working on everything. */
+function canEditForderungRecord(session: AdminSession, record: forderungen.ForderungRecord): boolean {
+  if (session.role === 'admin' || session.role === 'forderung') return true;
+  return session.role === 'leitung' && record.assignedLeitungId === session.adminUserId;
+}
+
+function actorNameFromSession(session: AdminSession): string {
+  if (!session.adminUserId) return 'Unbekannt';
+  return getAdminUser(session.adminUserId)?.name ?? 'Unbekannt';
+}
+
+app.get('/api/forderung/me', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const org = getOrganization(session.organizationId);
+  res.json({
+    name: actorNameFromSession(session),
+    role: session.role,
+    adminUserId: session.adminUserId ?? null,
+    organizationId: session.organizationId,
+    organizationName: org?.name ?? '',
+  });
+});
+
+/** Everyone a claim can be assigned to (Admin + Leitung + Forderung accounts) — the assignment dropdown's data source. */
+app.get('/api/forderung/leitungen', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const list = listAdminUsers(session.organizationId)
+    .filter(u => u.role === 'leitung' || u.role === 'forderung' || u.role === 'admin')
+    .map(u => ({ id: u.id, name: u.name, email: u.email, role: u.role }));
+  res.json(list);
+});
+
+/** All roles that pass requireForderungAccess (admin, leitung, forderung) can see every claim in the org — "Alle Forderungen" is a shared overview. The "Meine Forderungen" Kanban filters this client-side to the signed-in Leitung's own assignments. */
+app.get('/api/forderung/records', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  res.json(forderungen.listRecords(session.organizationId));
+});
+
+app.get('/api/forderung/records/:id', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const record = forderungen.getRecord(session.organizationId, String(req.params.id));
+  if (!record || !canViewForderungRecord(session, record)) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json(record);
+});
+
+app.post('/api/forderung/records', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const result = forderungen.createRecordManually(session.organizationId, req.body ?? {}, actorNameFromSession(session));
+  if ('error' in result) { res.status(400).json(result); return; }
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'forderung', summary: `Forderung angelegt: ${result.record.debitor} / ${result.record.rechnungsnummer}` });
+  res.json({ success: true, record: result.record });
+});
+
+app.put('/api/forderung/records/:id', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const id = String(req.params.id);
+  const existing = forderungen.getRecord(session.organizationId, id);
+  if (!existing || !canEditForderungRecord(session, existing)) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+
+  const { kanbanStatus, assignedLeitungId, notizen } = req.body ?? {};
+  const patch: forderungen.WorkflowPatch = {};
+  if (kanbanStatus !== undefined) patch.kanbanStatus = kanbanStatus;
+  if (notizen !== undefined) patch.notizen = notizen;
+  // A Leitung works their own assigned claims but doesn't hand them off to someone else.
+  if (assignedLeitungId !== undefined && (session.role === 'admin' || session.role === 'forderung')) {
+    patch.assignedLeitungId = assignedLeitungId;
+  }
+
+  const result = forderungen.updateWorkflow(session.organizationId, id, patch, actorNameFromSession(session));
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json({ success: true, record: result.record });
+});
+
+const forderungUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: forderungen.MAX_ATTACHMENT_SIZE, files: forderungen.MAX_ATTACHMENTS_PER_COMMENT },
+});
+
+app.post('/api/forderung/records/:id/comments', authMiddleware, requireForderungAccess, (req, res, next) => {
+  forderungUpload.array('files', forderungen.MAX_ATTACHMENTS_PER_COMMENT)(req, res, (err: unknown) => {
+    if (err) {
+      const message = err instanceof multer.MulterError ? `Upload-Fehler: ${err.message}` : String(err);
+      res.status(400).json({ error: message });
+      return;
+    }
+    next();
+  });
+}, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const id = String(req.params.id);
+  const existing = forderungen.getRecord(session.organizationId, id);
+  if (!existing || !canEditForderungRecord(session, existing)) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const files = ((req.files as Express.Multer.File[]) || []).map(f => ({
+    originalname: f.originalname, mimetype: f.mimetype, size: f.size, buffer: f.buffer,
+  }));
+  const result = forderungen.addComment(session.organizationId, id, session.adminUserId ?? null, actorNameFromSession(session), String(req.body?.text ?? ''), files);
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json({ success: true, record: result.record });
+});
+
+/** Attachment download — authenticated; every Forderungen-access role can view every claim in the org (see canViewForderungRecord), so this only needs to stay scoped to the session's org, not re-check per-record edit rights. */
+app.get('/api/forderung/attachments/:attachmentId', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const meta = forderungen.resolveAttachment(session.organizationId, String(req.params.attachmentId));
+  if (!meta) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  const filePath = forderungen.attachmentFilePath(session.organizationId, String(req.params.attachmentId), meta);
+  if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'Datei nicht gefunden.' }); return; }
+  res.setHeader('Content-Type', meta.mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(meta.filename)}"`);
+  fs.createReadStream(filePath).pipe(res);
+});
+
+app.delete('/api/forderung/records/:id', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const ok = forderungen.deleteRecordRow(session.organizationId, String(req.params.id));
+  if (!ok) { res.status(404).json({ error: 'Nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+/** Applies an already client-side-parsed+normalized Excel import (see public/forderung/js/excelImport.js) — dedup/merge/missing-tracking logic lives in forderungen.ts, mirroring /beispiel's store.js. */
+app.post('/api/forderung/import', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  const summary = forderungen.applyImport(session.organizationId, rows, actorNameFromSession(session));
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'forderung', summary: `Excel-Import: ${summary.createdCount} neu, ${summary.updatedCount} aktualisiert, ${summary.missingCount} fehlen aktuell` });
+  res.json({ success: true, summary });
+});
+
+app.get('/api/forderung/import/last', authMiddleware, requireForderungAccess, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  res.json(forderungen.getLastImportInfo(session.organizationId));
+});
+
+// ── Rules ("Zuweisen" tab) ───────────────────────────────────────────────
+// Condition/action rules that auto-assign or set a claim's status. Management
+// (create/edit/delete/run) is Admin/Forderung work, same gate as Import —
+// Leitung can view "Alle Forderungen" but doesn't configure automation.
+
+app.get('/api/forderung/rules', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  res.json(forderungRules.listRules(session.organizationId));
+});
+
+app.post('/api/forderung/rules', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const result = forderungRules.createRule(session.organizationId, req.body ?? {}, actorNameFromSession(session));
+  if ('error' in result) { res.status(400).json(result); return; }
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'forderung', summary: `Regel angelegt: ${result.name}` });
+  res.json({ success: true, rule: result });
+});
+
+app.put('/api/forderung/rules/:id', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const result = forderungRules.updateRule(session.organizationId, String(req.params.id), req.body ?? {});
+  if ('error' in result) { res.status(400).json(result); return; }
+  res.json({ success: true, rule: result });
+});
+
+app.delete('/api/forderung/rules/:id', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const ok = forderungRules.deleteRule(session.organizationId, String(req.params.id));
+  if (!ok) { res.status(404).json({ error: 'Regel nicht gefunden.' }); return; }
+  res.json({ success: true });
+});
+
+/** "Jetzt ausführen" — applies one rule to every current record in the org right now. The only trigger for a 'once' rule; an optional backfill for a 'permanent' one. */
+app.post('/api/forderung/rules/:id/run', authMiddleware, requireForderungAccess, requireForderungManage, (req, res) => {
+  const session: AdminSession = (req as any).adminSession;
+  const result = forderungen.runRuleNow(session.organizationId, String(req.params.id), actorNameFromSession(session));
+  if ('error' in result) { res.status(404).json(result); return; }
+  const org = getOrganization(session.organizationId);
+  logChange({ organizationId: session.organizationId, organizationName: org?.name ?? null, ...actorFromAdminSession(session), area: 'forderung', summary: `Regel ausgeführt: ${result.matchCount} Treffer, ${result.changedCount} geändert` });
+  res.json({ success: true, ...result });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

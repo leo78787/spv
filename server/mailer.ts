@@ -108,15 +108,20 @@ export async function sendAdminInviteEmail(
   to: string,
   name: string,
   organizationName: string,
-  role: 'admin' | 'leitung' | 'betrachter',
+  role: 'admin' | 'leitung' | 'betrachter' | 'forderung',
   oneTimePassword: string,
 ): Promise<void> {
-  const adminUrl = process.env.ADMIN_BASE_URL || 'https://admin.schichtapp.de';
-  const roleLabel = role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : 'Betrachter';
+  // `forderung` accounts never use the shift-planning app — point them
+  // straight at the Forderungen tool instead of admin.schichtapp.de.
+  const adminUrl = role === 'forderung'
+    ? (process.env.FORDERUNG_BASE_URL || 'https://forderung.schichtapp.de')
+    : (process.env.ADMIN_BASE_URL || 'https://admin.schichtapp.de');
+  const roleLabel = role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : role === 'forderung' ? 'Forderung' : 'Betrachter';
+  const areaLabel = role === 'forderung' ? 'Forderungen-Tool' : 'Admin-Bereich';
   await sendMail({
     to,
     subject: `Schichtplan Manager – Zugang für ${organizationName}`,
-    text: `Hallo ${name},\n\nSie wurden als ${roleLabel} für "${organizationName}" im Schichtplan Manager eingerichtet.\n\nE-Mail: ${to}\nEinmalpasswort: ${oneTimePassword}\n\nAdmin-Bereich: ${adminUrl}\n\nBitte melden Sie sich an und vergeben Sie ein neues Passwort.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
+    text: `Hallo ${name},\n\nSie wurden als ${roleLabel} für "${organizationName}" im Schichtplan Manager eingerichtet.\n\nE-Mail: ${to}\nEinmalpasswort: ${oneTimePassword}\n\n${areaLabel}: ${adminUrl}\n\nBitte melden Sie sich an und vergeben Sie ein neues Passwort.\n\nMit freundlichen Grüßen\nSchichtplan Manager`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #4f46e5; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
@@ -129,7 +134,7 @@ export async function sendAdminInviteEmail(
             <tr><td style="padding: 8px; font-weight: bold; color: #374151;">E-Mail:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${to}</td></tr>
             <tr><td style="padding: 8px; font-weight: bold; color: #374151;">Einmalpasswort:</td><td style="padding: 8px; font-family: monospace; background: #f3f4f6; border-radius: 4px;">${oneTimePassword}</td></tr>
           </table>
-          <a href="${adminUrl}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zum Admin-Bereich</a>
+          <a href="${adminUrl}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Zum ${areaLabel}</a>
           <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">Bitte melden Sie sich an und vergeben Sie ein neues Passwort.</p>
         </div>
       </div>

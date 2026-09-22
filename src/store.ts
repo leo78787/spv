@@ -163,7 +163,7 @@ interface AppState {
   defaultSchedulerConfig: SchedulerConfig;
 
   // Current admin session info (role-based UI, e.g. default department filter for Leitung)
-  adminRole: 'admin' | 'leitung' | 'betrachter' | null;
+  adminRole: 'admin' | 'leitung' | 'betrachter' | 'forderung' | null;
   organizationName: string | null;
   /** This session's own AdminUser id/name (null for the legacy fallback session, if any still exist). Used e.g. by the vacation calendar to tell "my entries" apart from others'. */
   myAdminUserId: string | null;
@@ -267,7 +267,7 @@ export const useStore = create<AppState>((set) => {
     betrachterTabVisibility: DEFAULT_TAB_VISIBILITY,
     defaultSchedulerConfig: DEFAULT_SCHEDULER_CONFIG,
 
-    adminRole: null as 'admin' | 'leitung' | 'betrachter' | null,
+    adminRole: null as 'admin' | 'leitung' | 'betrachter' | 'forderung' | null,
     organizationName: null as string | null,
     myAdminUserId: null as string | null,
     myName: null as string | null,

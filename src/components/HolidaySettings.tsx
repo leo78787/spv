@@ -32,10 +32,10 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
   }, [adminRole, settingsTab]);
 
   // Team tab state (Admin only — invite/manage Leitung & Betrachter accounts)
-  const [orgAdminUsers, setOrgAdminUsers] = useState<{ id: string; name: string; email: string; role: 'admin' | 'leitung' | 'betrachter'; permissions?: string[]; createdAt: string }[]>([]);
+  const [orgAdminUsers, setOrgAdminUsers] = useState<{ id: string; name: string; email: string; role: 'admin' | 'leitung' | 'betrachter' | 'forderung'; permissions?: string[]; createdAt: string }[]>([]);
   const [teamName, setTeamName] = useState('');
   const [teamEmail, setTeamEmail] = useState('');
-  const [teamRole, setTeamRole] = useState<'admin' | 'leitung' | 'betrachter'>('leitung');
+  const [teamRole, setTeamRole] = useState<'admin' | 'leitung' | 'betrachter' | 'forderung'>('leitung');
   const [teamPermissions, setTeamPermissions] = useState<string[]>([]);
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamMessage, setTeamMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -89,7 +89,7 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const changeTeamRole = async (id: string, role: 'admin' | 'leitung' | 'betrachter', perms?: string[]) => {
+  const changeTeamRole = async (id: string, role: 'admin' | 'leitung' | 'betrachter' | 'forderung', perms?: string[]) => {
     const token = localStorage.getItem('spm-auth-token');
     await fetch(`/api/admin/org/users/${id}`, {
       method: 'PUT',
@@ -652,12 +652,13 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
               />
               <select
                 value={teamRole}
-                onChange={e => setTeamRole(e.target.value as 'admin' | 'leitung' | 'betrachter')}
+                onChange={e => setTeamRole(e.target.value as 'admin' | 'leitung' | 'betrachter' | 'forderung')}
                 className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               >
                 <option value="admin">Admin (alle Rechte)</option>
                 <option value="leitung">Leitung (Rechte auswählen)</option>
                 <option value="betrachter">Betrachter (nur ansehen)</option>
+                <option value="forderung">Forderung (nur Forderungen-Tool)</option>
               </select>
             </div>
             {teamRole === 'leitung' && (
@@ -706,7 +707,7 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                         <select
                           value={u.role}
                           onChange={e => {
-                            const role = e.target.value as 'admin' | 'leitung' | 'betrachter';
+                            const role = e.target.value as 'admin' | 'leitung' | 'betrachter' | 'forderung';
                             if (role === 'leitung') { setEditingPermsId(u.id); setEditingPerms(u.permissions || []); }
                             else { changeTeamRole(u.id, role); }
                           }}
@@ -715,6 +716,7 @@ export function HolidaySettings({ onClose }: { onClose: () => void }) {
                           <option value="admin">Admin</option>
                           <option value="leitung">Leitung</option>
                           <option value="betrachter">Betrachter</option>
+                          <option value="forderung">Forderung</option>
                         </select>
                         {u.role === 'leitung' && (
                           <button

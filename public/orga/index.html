@@ -82,6 +82,7 @@
   .badge-admin { background: #ede9fe; color: #6d28d9; }
   .badge-leitung { background: #dbeafe; color: #1d4ed8; }
   .badge-betrachter { background: var(--gray-100); color: var(--gray-600); }
+  .badge-forderung { background: #fef9c3; color: #a16207; }
 
   .perm-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 12px; }
   @media (min-width: 480px) { .perm-grid { grid-template-columns: repeat(3, 1fr); } }
@@ -401,7 +402,7 @@ function escapeHtml(s) {
 }
 
 function roleLabel(role) {
-  return role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : 'Betrachter';
+  return role === 'admin' ? 'Admin' : role === 'leitung' ? 'Leitung' : role === 'forderung' ? 'Forderung' : 'Betrachter';
 }
 
 function permGridHtml(name, checkedList) {
@@ -723,6 +724,7 @@ async function loadOrganizations() {
                 <option value="admin">Admin (alle Rechte)</option>
                 <option value="leitung" selected>Leitung (Rechte auswählen)</option>
                 <option value="betrachter">Betrachter (nur ansehen)</option>
+                <option value="forderung">Forderung (nur Forderungen-Tool)</option>
               </select>
             </div>
           </div>
@@ -758,6 +760,7 @@ async function loadOrgUsers(orgId) {
             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
             <option value="leitung" ${u.role === 'leitung' ? 'selected' : ''}>Leitung</option>
             <option value="betrachter" ${u.role === 'betrachter' ? 'selected' : ''}>Betrachter</option>
+            <option value="forderung" ${u.role === 'forderung' ? 'selected' : ''}>Forderung</option>
           </select>
           <span class="badge badge-${u.role}">${roleLabel(u.role)}</span>
           <button class="btn btn-outline btn-sm" onclick='resendOrgUserInvite(${JSON.stringify(orgId)}, ${JSON.stringify(u.id)})'>Erneut einladen</button>

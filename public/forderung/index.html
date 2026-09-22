@@ -1,0 +1,1923 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forderungen – Schichtplan Manager</title>
+<link rel="icon" type="image/svg+xml" href="/favicon-calendar.svg">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --primary: #ca8a04; --primary-dark: #a16207; --primary-light: #fef9c3; --primary-ring: rgba(202,138,4,0.18);
+    --amber: #d97706; --amber-light: #fffbeb;
+    --danger: #dc2626; --danger-dark: #b91c1c; --danger-light: #fef2f2;
+    --success: #059669; --success-light: #ecfdf5;
+    --gray-50: #fafaf9; --gray-100: #f5f5f4; --gray-200: #e7e5e4; --gray-300: #d6d3d1;
+    --gray-400: #a8a29e; --gray-500: #78716c; --gray-600: #57534e; --gray-700: #44403c;
+    --gray-800: #292524; --gray-900: #1c1917;
+    --shadow-sm: 0 1px 2px rgba(28,25,23,0.06);
+    --shadow-md: 0 4px 16px rgba(28,25,23,0.07), 0 1px 3px rgba(28,25,23,0.05);
+    --shadow-lg: 0 12px 32px rgba(28,25,23,0.12), 0 2px 6px rgba(28,25,23,0.06);
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif;
+    background: var(--gray-50); color: var(--gray-800); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: 22px; font-weight: 800; color: var(--gray-900); letter-spacing: -0.02em; }
+  h2 { font-size: 15px; font-weight: 700; color: var(--gray-900); margin-bottom: 4px; letter-spacing: -0.01em; }
+  h3 { font-size: 13px; font-weight: 700; color: var(--gray-700); text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
+  p.muted { color: var(--gray-500); font-size: 13px; }
+
+  .card { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 22px; margin-bottom: 18px; box-shadow: var(--shadow-sm); }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: var(--radius-sm); border: none; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.06s ease, border-color 0.15s ease; white-space: nowrap; font-family: inherit; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+  .btn-primary { background: var(--primary); color: white; box-shadow: 0 1px 2px rgba(202,138,4,0.3), 0 4px 10px rgba(202,138,4,0.18); }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-outline { background: white; color: var(--gray-700); border: 1px solid var(--gray-300); }
+  .btn-outline:hover { background: var(--gray-50); border-color: var(--gray-400); }
+  .btn-danger-outline { background: white; color: var(--danger); border: 1px solid #fecaca; }
+  .btn-danger-outline:hover { background: var(--danger-light); border-color: var(--danger); }
+  .btn-sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
+
+  input, select, textarea {
+    width: 100%; padding: 9px 12px; border: 1px solid var(--gray-300); border-radius: var(--radius-sm);
+    font-size: 13.5px; background: white; color: var(--gray-800); font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  textarea { resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3.5px var(--primary-ring); }
+  select { cursor: pointer; }
+  label { display: block; font-size: 11.5px; font-weight: 700; color: var(--gray-500); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .form-group { margin-bottom: 12px; }
+  .form-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 640px) { .form-row-2 { grid-template-columns: 1fr 1fr; } .form-row-3 { grid-template-columns: 1fr 1fr 1fr; } }
+
+  .msg { padding: 11px 15px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 14px; border: 1px solid transparent; font-weight: 500; }
+  .msg-error { background: var(--danger-light); color: #991b1b; border-color: #fecaca; }
+  .msg-success { background: var(--success-light); color: #065f46; border-color: #a7f3d0; }
+  .msg-warning { background: var(--amber-light); color: #92400e; border-color: #fde68a; }
+
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: 0.02em; }
+  .badge-admin { background: #ede9fe; color: #6d28d9; }
+  .badge-leitung { background: #dbeafe; color: #1d4ed8; }
+  .badge-forderung { background: var(--primary-light); color: var(--primary-dark); }
+  .badge-offen { background: #fef3c7; color: #92400e; }
+  .badge-in_arbeit { background: #dbeafe; color: #1d4ed8; }
+  .badge-done { background: #d1fae5; color: #065f46; }
+  .badge-archiviert { background: var(--gray-200); color: var(--gray-600); }
+  .badge-missing { background: var(--danger-light); color: #991b1b; }
+
+  /* ── Login / auth screens ─────────────────────────────────────────── */
+  #login-view, #forgot-password-view, #force-password-view {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(circle at 20% 15%, #fef9c3 0%, var(--gray-50) 55%);
+  }
+  .login-box { width: 100%; max-width: 400px; background: white; border: 1px solid var(--gray-200); border-radius: 18px; padding: 32px; box-shadow: var(--shadow-lg); }
+  .login-box h1 { margin-bottom: 6px; }
+  .toggle-link { background: none; border: none; color: var(--primary-dark); font-size: 12px; cursor: pointer; text-decoration: underline; margin-top: 8px; }
+  .login-logo { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: white; margin-bottom: 14px; font-weight: 800; font-size: 19px; }
+
+  /* ── App shell ─────────────────────────────────────────────────────── */
+  #app-shell { display: flex; min-height: 100vh; }
+  #sidebar {
+    width: 232px; flex-shrink: 0; background: linear-gradient(180deg, #1c1917 0%, #0c0a09 100%);
+    color: white; display: flex; flex-direction: column; padding: 22px 0; position: sticky; top: 0; height: 100vh;
+  }
+  #sidebar .brand { padding: 0 22px 20px; font-weight: 800; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 14px; display: flex; align-items: center; gap: 10px; letter-spacing: -0.01em; }
+  #sidebar .brand .brand-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 4px rgba(202,138,4,0.3); flex-shrink: 0; }
+  #sidebar .nav-item { display: flex; align-items: center; gap: 11px; padding: 10px 22px; margin: 2px 10px; border-radius: 10px; color: #a8a29e; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+  #sidebar .nav-item svg { flex-shrink: 0; opacity: 0.85; }
+  #sidebar .nav-item:hover { background: rgba(255,255,255,0.06); color: #e7e5e4; }
+  #sidebar .nav-item.active { background: var(--primary); color: white; box-shadow: 0 2px 10px rgba(202,138,4,0.4); }
+  #sidebar .nav-item.active svg { opacity: 1; }
+  #sidebar .nav-spacer { flex: 1; }
+  #sidebar .nav-footer { padding: 14px 22px 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 8px 10px 0; font-size: 12px; color: #78716c; }
+  #sidebar .nav-footer #whoami { color: #d6d3d1; font-weight: 600; margin-bottom: 2px; font-size: 12.5px; word-break: break-word; }
+  #sidebar .nav-footer #whoami-role { color: #a8a29e; font-size: 11px; margin-bottom: 10px; }
+  #sidebar .nav-footer button { width: 100%; margin-top: 6px; }
+  #sidebar .nav-footer .btn-outline { background: rgba(255,255,255,0.04); color: #d6d3d1; border-color: rgba(255,255,255,0.14); }
+  #sidebar .nav-footer .btn-outline:hover { background: rgba(255,255,255,0.09); }
+  #back-to-spm { display: flex; align-items: center; gap: 9px; margin: 0 12px 14px; padding: 9px 14px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #e7e5e4; font-size: 12.5px; font-weight: 600; text-decoration: none; transition: background 0.15s; }
+  #back-to-spm:hover { background: rgba(255,255,255,0.1); }
+
+  #main-content { flex: 1; min-width: 0; padding: 32px 36px; max-width: 1280px; }
+  .view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 10px; }
+
+  /* ── Kanban ────────────────────────────────────────────────────────── */
+  .kanban-board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+  .kanban-col { flex: 1 1 0; min-width: 280px; background: var(--gray-100); border-radius: var(--radius); padding: 12px; }
+  .kanban-col-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 10px; }
+  .kanban-col-head h2 { margin: 0; }
+  .kanban-count { font-size: 11px; font-weight: 700; color: var(--gray-500); background: white; border-radius: 999px; padding: 2px 9px; }
+  .kanban-cards { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+  .kanban-card { background: white; border: 1px solid var(--gray-200); border-radius: 11px; padding: 12px; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
+  .kanban-card:hover { box-shadow: var(--shadow-sm); border-color: var(--gray-300); }
+  .kanban-card .kc-title { font-weight: 700; font-size: 13.5px; color: var(--gray-900); margin-bottom: 2px; }
+  .kanban-card .kc-sub { font-size: 11.5px; color: var(--gray-500); margin-bottom: 8px; }
+  .kanban-card .kc-amount { font-size: 13px; font-weight: 700; color: var(--gray-800); }
+  .kanban-card .kc-old { font-size: 10.5px; color: var(--danger); font-weight: 600; margin-top: 2px; }
+  .kanban-card[draggable="true"] { cursor: grab; }
+  .kanban-card.dragging { opacity: 0.4; }
+  .kanban-col { transition: background 0.15s ease, outline-color 0.15s ease; outline: 2px dashed transparent; outline-offset: -2px; }
+  .kanban-col.drag-over { background: var(--primary-light); outline-color: var(--primary); }
+
+  /* ── Dashboard / data-viz ─────────────────────────────────────────────
+     Chart tokens are kept separate from the app's amber brand accent —
+     marks use the validated blue sequential ramp + fixed status colors
+     from the dataviz palette; --primary stays reserved for UI chrome. */
+  :root {
+    --viz-seq-250: #86b6ef;
+    --viz-seq-350: #5598e7;
+    --viz-seq-450: #2a78d6;
+    --viz-seq-550: #1c5cab;
+    --viz-seq-650: #104281;
+    --viz-status-critical: #d03b3b;
+  }
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi-tile { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 15px 17px; }
+  .kpi-tile .kpi-label { font-size: 10.5px; font-weight: 700; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 7px; }
+  .kpi-tile .kpi-value { font-size: 21px; font-weight: 800; color: var(--gray-900); letter-spacing: -0.01em; }
+  .kpi-tile.kpi-alert .kpi-value { color: var(--viz-status-critical); }
+  .kpi-tile .kpi-sub { font-size: 11.5px; color: var(--gray-500); margin-top: 4px; }
+
+  .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .dashboard-grid { grid-template-columns: 1fr; } }
+  .viz-card { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 17px 19px; margin-bottom: 16px; }
+  .viz-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 2px; }
+  .viz-card h3 { font-size: 14px; font-weight: 700; color: var(--gray-900); margin: 0; text-transform: none; letter-spacing: 0; }
+  .viz-subtitle { font-size: 11.5px; color: var(--gray-500); margin: 1px 0 14px; }
+  .viz-toggle { font-size: 11px; color: var(--gray-500); background: none; border: 1px solid var(--gray-200); border-radius: 6px; padding: 3px 8px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .viz-toggle:hover { background: var(--gray-50); color: var(--gray-700); }
+  .viz-empty { font-size: 12px; color: var(--gray-400); padding: 10px 0; }
+
+  /* Horizontal bar chart (magnitude comparisons — sequential single hue) */
+  .hbar-list { display: flex; flex-direction: column; gap: 7px; }
+  .hbar-row { display: flex; align-items: center; gap: 9px; }
+  .hbar-label { width: 128px; flex-shrink: 0; font-size: 11.5px; color: var(--gray-600); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hbar-track { flex: 1; min-width: 0; height: 18px; background: var(--gray-100); border-radius: 4px; position: relative; }
+  .hbar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 4px; background: var(--viz-seq-450); cursor: default; }
+  .hbar-fill:hover, .hbar-fill:focus-visible { background: var(--viz-seq-550); outline: none; }
+  .hbar-value { width: 88px; flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--gray-800); font-variant-numeric: tabular-nums; }
+
+  /* Stacked bar (part-to-whole, ordinal pipeline — offen -> in Arbeit -> done) */
+  .stackbar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; background: var(--gray-100); }
+  .stackbar-seg { height: 100%; box-shadow: 2px 0 0 white; cursor: default; }
+  .stackbar-seg:last-child { box-shadow: none; }
+
+  .viz-legend { display: flex; flex-wrap: wrap; gap: 13px; margin-top: 11px; }
+  .viz-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--gray-600); }
+  .viz-legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  .viz-tooltip { position: fixed; z-index: 200; background: #1c1917; color: white; font-size: 11.5px; padding: 6px 10px; border-radius: 7px; pointer-events: none; box-shadow: var(--shadow-md); max-width: 220px; line-height: 1.4; }
+  .viz-tooltip .vt-value { font-weight: 700; }
+  .viz-tooltip .vt-label { color: #d6d3d1; margin-top: 1px; }
+
+  .viz-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .viz-table th { text-align: left; padding: 5px 8px; color: var(--gray-500); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.03em; border-bottom: 1px solid var(--gray-200); }
+  .viz-table td { padding: 5px 8px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); }
+  .viz-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .top-table-wrap { overflow-x: auto; }
+  table.top-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.top-table th { text-align: left; padding: 7px 10px; font-size: 10px; font-weight: 700; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--gray-200); white-space: nowrap; }
+  table.top-table td { padding: 7px 10px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); white-space: nowrap; }
+  table.top-table td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  table.top-table tbody tr:hover { background: var(--gray-50); cursor: pointer; }
+  table.top-table tbody tr:last-child td { border-bottom: none; }
+
+  /* ── Regeln (Zuweisen) ─────────────────────────────────────────────── */
+  .rule-list { display: flex; flex-direction: column; gap: 10px; }
+  .rule-card { background: white; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 14px 18px; }
+  .rule-card.rule-inactive { opacity: 0.6; }
+  .rule-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .rule-card-head h3 { font-size: 14px; font-weight: 700; color: var(--gray-900); margin: 0; }
+  .rule-badge-mode { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; }
+  .rule-badge-mode.permanent { background: #dbeafe; color: #1d4ed8; }
+  .rule-badge-mode.once { background: var(--primary-light); color: var(--primary-dark); }
+  .rule-summary { font-size: 12.5px; color: var(--gray-600); margin: 8px 0 4px; line-height: 1.6; }
+  .rule-summary code { background: var(--gray-100); border-radius: 4px; padding: 1px 5px; font-family: inherit; font-size: 12px; color: var(--gray-800); }
+  .rule-meta { font-size: 11px; color: var(--gray-400); margin-top: 6px; }
+  .rule-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+
+  .cond-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+  @media (max-width: 700px) { .cond-row { grid-template-columns: 1fr; } }
+  .cond-row .cond-remove { background: none; border: 1px solid var(--gray-200); border-radius: 8px; color: var(--gray-400); cursor: pointer; padding: 8px 10px; }
+  .cond-row .cond-remove:hover { color: var(--danger); border-color: #fecaca; background: var(--danger-light); }
+  .cond-and { font-size: 11px; font-weight: 700; color: var(--gray-400); text-transform: uppercase; letter-spacing: 0.04em; margin: 2px 0 8px; }
+  .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 560px) { .action-row { grid-template-columns: 1fr; } }
+
+  /* ── Table (Alle Forderungen) ─────────────────────────────────────── */
+  .frd-table-wrap { overflow-x: auto; border: 1px solid var(--gray-200); border-radius: 12px; }
+  table.frd-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.frd-table th { position: sticky; top: 0; background: var(--gray-50); text-align: left; padding: 9px 12px; font-size: 10.5px; font-weight: 700; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--gray-200); white-space: nowrap; }
+  table.frd-table td { padding: 8px 12px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); white-space: nowrap; }
+  table.frd-table tbody tr:hover { background: var(--gray-50); cursor: pointer; }
+  table.frd-table tbody tr:last-child td { border-bottom: none; }
+  table.frd-table select { width: auto; padding: 5px 8px; font-size: 12px; }
+
+  /* ── Detail modal ──────────────────────────────────────────────────── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(28,25,23,0.5); display: flex; align-items: flex-start; justify-content: center; padding: 32px 16px; z-index: 80; overflow-y: auto; }
+  .modal-box { background: white; border-radius: 18px; max-width: 720px; width: 100%; box-shadow: var(--shadow-lg); }
+  .modal-box-inner { padding: 26px; }
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+  .modal-head h1 { font-size: 19px; }
+  .modal-close { background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 18px; line-height: 1; padding: 4px; border-radius: 8px; }
+  .modal-close:hover { background: var(--gray-100); color: var(--gray-700); }
+  .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 18px; margin: 14px 0; }
+  @media (max-width: 560px) { .detail-grid { grid-template-columns: 1fr; } }
+  .detail-field__label { font-size: 10.5px; font-weight: 700; color: var(--gray-400); text-transform: uppercase; letter-spacing: 0.04em; }
+  .detail-field__value { font-size: 13.5px; color: var(--gray-800); word-break: break-word; }
+  hr.sep { border: none; border-top: 1px solid var(--gray-100); margin: 16px 0; }
+
+  .comment-list { display: flex; flex-direction: column; gap: 10px; max-height: 260px; overflow-y: auto; padding-right: 4px; }
+  .comment-bubble { background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 12px; padding: 10px 12px; }
+  .comment-bubble .cb-meta { font-size: 11px; color: var(--gray-500); margin-bottom: 3px; font-weight: 600; }
+  .comment-bubble .cb-text { font-size: 13px; color: var(--gray-800); white-space: pre-wrap; }
+  .comment-bubble .cb-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .cb-att-slot { display: inline-flex; }
+  .cb-att-slot img.att-thumb { max-height: 110px; border-radius: 8px; border: 1px solid var(--gray-200); display: block; }
+  .cb-att-slot .att-file { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--primary-dark); background: var(--primary-light); border: 1px solid #fde68a; border-radius: 7px; padding: 5px 9px; text-decoration: none; }
+  .cb-att-slot .att-file:hover { background: #fef3c7; }
+  .cb-att-slot .att-loading, .cb-att-slot .att-error { font-size: 11.5px; color: var(--gray-400); }
+  .cb-att-slot .att-error { color: var(--danger); }
+
+  .comment-input-row { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; border: 1px solid var(--gray-200); border-radius: 10px; padding: 8px; }
+  .comment-input-row textarea { border: none; padding: 4px; }
+  .comment-input-row textarea:focus { box-shadow: none; }
+  .comment-file-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .comment-file-chips:empty { display: none; }
+  .file-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; background: var(--gray-100); color: var(--gray-700); border-radius: 999px; padding: 3px 6px 3px 10px; }
+  .file-chip button { background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px; }
+  .file-chip button:hover { color: var(--danger); }
+  .comment-input-footer { display: flex; align-items: center; justify-content: space-between; }
+  .btn-attach { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; color: var(--gray-500); font-size: 12.5px; cursor: pointer; padding: 5px 6px; border-radius: 7px; }
+  .btn-attach:hover { background: var(--gray-100); color: var(--gray-700); }
+
+  .history-item { padding: 7px 0; border-bottom: 1px solid var(--gray-100); font-size: 12px; }
+  .history-item:last-child { border-bottom: none; }
+  .history-item__meta { color: var(--gray-400); font-size: 11px; }
+  .history-item__action { font-weight: 700; color: var(--gray-700); }
+  .history-item__detail { color: var(--gray-600); }
+
+  .empty-state { text-align: center; padding: 30px 16px; color: var(--gray-400); font-size: 13px; }
+
+  /* ── Import panel ──────────────────────────────────────────────────── */
+  .dropzone { border: 2px dashed var(--gray-300); border-radius: var(--radius); padding: 30px; text-align: center; color: var(--gray-500); font-size: 13px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+  .dropzone:hover, .dropzone.dropzone--over { border-color: var(--primary); background: var(--primary-light); }
+  .import-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 14px 0; }
+  .import-stat { background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 10px; padding: 12px; text-align: center; }
+  .import-stat .num { font-size: 20px; font-weight: 800; color: var(--gray-900); }
+  .import-stat .lbl { font-size: 10.5px; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.03em; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div id="login-view">
+  <div class="login-box">
+    <div class="login-logo">F</div>
+    <h1>Forderungen</h1>
+    <p class="muted" style="margin-bottom:22px;">Schichtplan Manager – Forderungsmanagement</p>
+    <div id="login-error" class="msg msg-error hidden"></div>
+    <div class="form-group">
+      <label>E-Mail</label>
+      <input id="login-email" type="email" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>Passwort</label>
+      <input id="login-password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:6px;" onclick="doLogin()">Anmelden</button>
+    <button type="button" class="toggle-link" style="display:block;margin:12px auto 0;" onclick="showForgotView()">Passwort vergessen?</button>
+  </div>
+</div>
+
+<div id="forgot-password-view" class="hidden">
+  <div class="login-box">
+    <h1>Passwort zurücksetzen</h1>
+    <p class="muted" style="margin-bottom:22px;">Geben Sie Ihre E-Mail-Adresse ein. Falls ein Zugang damit existiert, erhalten Sie ein Einmalpasswort.</p>
+    <div id="forgot-error" class="msg msg-error hidden"></div>
+    <div id="forgot-done" class="msg msg-success hidden"></div>
+    <div id="forgot-form-fields">
+      <div class="form-group">
+        <label>E-Mail</label>
+        <input id="forgot-email" type="email" autocomplete="username">
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:6px;" id="forgot-submit-btn" onclick="submitForgotPassword()">Einmalpasswort senden</button>
+    </div>
+    <button type="button" class="toggle-link" style="display:block;margin:12px auto 0;" onclick="leaveForgotView()">Zurück zur Anmeldung</button>
+  </div>
+</div>
+
+<div id="force-password-view" class="hidden">
+  <div class="login-box">
+    <h1>Neues Passwort vergeben</h1>
+    <p class="muted" style="margin-bottom:22px;">Sie haben sich mit einem Einmalpasswort angemeldet. Bitte legen Sie jetzt ein eigenes Passwort fest.</p>
+    <div id="force-pw-error" class="msg msg-error hidden"></div>
+    <div class="form-group">
+      <label>Neues Passwort (min. 6 Zeichen)</label>
+      <input id="force-pw-new" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>Passwort bestätigen</label>
+      <input id="force-pw-confirm" type="password" autocomplete="new-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:6px;" onclick="submitForcedPasswordChange()">Passwort festlegen</button>
+  </div>
+</div>
+
+<div id="detail-modal" class="modal-overlay hidden" onclick="if (event.target === this) closeDetailModal()">
+  <div class="modal-box"><div class="modal-box-inner" id="detail-modal-content"></div></div>
+</div>
+
+<div id="app-shell" class="hidden">
+  <div id="sidebar">
+    <div class="brand"><span class="brand-dot"></span> Forderungen</div>
+    <a id="back-to-spm" href="https://admin.schichtapp.de">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+      Zum Schichtplan Manager
+    </a>
+    <div class="nav-item" data-view="dashboard" onclick="switchView('dashboard')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
+      Dashboard
+    </div>
+    <div class="nav-item" data-view="meine" onclick="switchView('meine')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="10" rx="1"/></svg>
+      Meine Forderungen
+    </div>
+    <div class="nav-item" data-view="alle" onclick="switchView('alle')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 21V9"/></svg>
+      Alle Forderungen
+    </div>
+    <div class="nav-item" data-view="neu" onclick="switchView('neu')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      Neu anlegen
+    </div>
+    <div class="nav-item" data-view="import" onclick="switchView('import')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      Import
+    </div>
+    <div class="nav-item" data-view="rules" onclick="switchView('rules')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      Zuweisen
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-footer">
+      <div id="whoami"></div>
+      <div id="whoami-role"></div>
+      <button class="btn btn-outline btn-sm" style="width:100%;" onclick="doLogout()">Abmelden</button>
+    </div>
+  </div>
+
+  <div id="main-content">
+    <div id="main-message"></div>
+
+    <!-- DASHBOARD -->
+    <div id="view-dashboard" class="view hidden">
+      <div class="view-header"><h1>Dashboard</h1></div>
+      <div id="dashboard-content"><p class="muted">Lade…</p></div>
+    </div>
+
+    <!-- MEINE FORDERUNGEN (Kanban) -->
+    <div id="view-meine" class="view hidden">
+      <div class="view-header"><h1>Meine Forderungen</h1></div>
+      <div id="meine-content"><p class="muted">Lade…</p></div>
+    </div>
+
+    <!-- ALLE FORDERUNGEN -->
+    <div id="view-alle" class="view hidden">
+      <div class="view-header">
+        <h1>Alle Forderungen</h1>
+        <input id="alle-search" placeholder="Suchen…" style="width:240px;" oninput="renderAlleTable()">
+      </div>
+      <div id="alle-content"><p class="muted">Lade…</p></div>
+    </div>
+
+    <!-- NEU ANLEGEN -->
+    <div id="view-neu" class="view hidden">
+      <div class="view-header"><h1>Neue Forderung anlegen</h1></div>
+      <div class="card">
+        <div id="neu-error" class="msg msg-error hidden"></div>
+        <div class="form-row form-row-2">
+          <div class="form-group"><label>Debitor *</label><input id="neu-debitor"></div>
+          <div class="form-group"><label>Rechnungsnummer *</label><input id="neu-rechnungsnummer"></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div class="form-group"><label>Kunde</label><input id="neu-kundenname"></div>
+          <div class="form-group"><label>Kundentyp</label><input id="neu-kundentyp"></div>
+        </div>
+        <div class="form-row form-row-3">
+          <div class="form-group"><label>Verkaufsbüro</label><input id="neu-verkaufsbuero"></div>
+          <div class="form-group"><label>Service Leiter</label><input id="neu-serviceLeiter"></div>
+          <div class="form-group"><label>Auftrag/Vertrag</label><input id="neu-auftragVertrag"></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div class="form-group"><label>Equipment</label><input id="neu-equipment"></div>
+          <div class="form-group"><label>Reklamationsgrund</label><input id="neu-reklamationsgrund"></div>
+        </div>
+        <div class="form-group"><label>Text</label><textarea id="neu-text" rows="2"></textarea></div>
+        <div class="form-row form-row-3">
+          <div class="form-group"><label>Fällige Forderung (€)</label><input id="neu-faelligeForderung" type="number" step="0.01"></div>
+          <div class="form-group"><label>davon &gt;180 Tage (€)</label><input id="neu-altforderungen180" type="number" step="0.01"></div>
+          <div class="form-group"><label>PWB Monatsende (€)</label><input id="neu-pwbMonatsende" type="number" step="0.01"></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div class="form-group"><label>Resolver</label><input id="neu-resolver"></div>
+          <div class="form-group"><label>Status (Quelle, optional)</label><input id="neu-aktionsstatus"></div>
+        </div>
+        <div class="form-group"><label>Zuständig</label><select id="neu-assignedLeitungId"><option value="">— nicht zugewiesen —</option></select></div>
+        <div class="form-group"><label>Notizen</label><textarea id="neu-notizen" rows="2"></textarea></div>
+        <button class="btn btn-primary" onclick="submitCreateRecord()">Forderung anlegen</button>
+      </div>
+    </div>
+
+    <!-- IMPORT -->
+    <div id="view-import" class="view hidden">
+      <div class="view-header"><h1>Excel-Import</h1></div>
+      <div class="card">
+        <p class="muted" style="margin-bottom:14px;">Datei mit den Spalten „Debitor" und „Rechnungsnummer" (mind. eines der bekannten Tabellenblätter) auswählen. Bekannte Forderungen werden mit den neuesten Werten aktualisiert, neue werden angelegt. Zeilen, die im Import fehlen, werden nicht gelöscht, sondern markiert.</p>
+        <div id="import-error" class="msg msg-error hidden"></div>
+        <div class="dropzone" id="import-dropzone" onclick="document.getElementById('import-file').click()">
+          <div id="import-dropzone-text">Excel-Datei hierher ziehen oder klicken zum Auswählen</div>
+        </div>
+        <input type="file" id="import-file" accept=".xlsx,.xls" class="hidden">
+        <div id="import-result"></div>
+      </div>
+      <div class="card">
+        <h2>Letzter Import</h2>
+        <div id="import-last-info"><p class="muted">Lade…</p></div>
+      </div>
+    </div>
+
+    <!-- ZUWEISEN (Regeln) -->
+    <div id="view-rules" class="view hidden">
+      <div class="view-header">
+        <h1>Zuweisen</h1>
+        <button class="btn btn-primary btn-sm" onclick="openRuleForm(null)">+ Neue Regel</button>
+      </div>
+      <p class="muted" style="margin-bottom:16px;">Regeln weisen Forderungen automatisch zu oder setzen ihren Status, wenn eine Bedingung zutrifft. <strong>Dauerhafte</strong> Regeln laufen bei jedem Excel-Import über die neu importierten/aktualisierten Zeilen. <strong>Einmalige</strong> Regeln lösen nur aus, wenn Sie „Jetzt ausführen" klicken — beide Arten können Sie jederzeit manuell ausführen.</p>
+      <div id="rules-content"><p class="muted">Lade…</p></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// Session handoff — an already-logged-in admin/leitung account arriving via
+// the "Forderungen" icon in the main app (App.tsx) carries its token as a
+// URL param, since this is a separate origin and can't read that app's
+// localStorage directly. Consume it into our own storage and strip it from
+// the URL immediately, before anything else runs.
+// ═══════════════════════════════════════════════════════════════════════
+(function consumeHandoffToken() {
+  const params = new URLSearchParams(window.location.search);
+  const handoff = params.get('token');
+  if (!handoff) return;
+  localStorage.setItem('frd-token', handoff);
+  params.delete('token');
+  const rest = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash);
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════
+let token = localStorage.getItem('frd-token') || '';
+let me = null; // { name, role, adminUserId, organizationId, organizationName }
+let leitungen = [];
+let allRecords = [];
+let meineRecords = [];
+
+const KANBAN_LABELS = { offen: 'Offen', in_arbeit: 'In Arbeit', done: 'Done', archiviert: 'Archiviert' };
+const KANBAN_ORDER = ['offen', 'in_arbeit', 'done', 'archiviert'];
+
+const SOURCE_FIELD_LABELS = {
+  verkaufsbuero: 'Verkaufsbüro', serviceLeiter: 'Service Leiter', debitor: 'Debitor',
+  kundentyp: 'Kundentyp', kundenname: 'Kunde', rechnungsnummer: 'Rechnungsnummer',
+  auftragVertrag: 'Auftrag/Vertrag', equipment: 'Equipment', text: 'Text',
+  reklamationsgrund: 'Reklamationsgrund', resolver: 'Resolver', aktionsstatus: 'Status (Quelle)',
+  faelligeForderung: 'Fällige Forderung', altforderungen180: '>180 Tage', pwbMonatsende: 'PWB Monatsende',
+};
+/** Fields a rule condition can compare a number against — everyone else compares strings. */
+const NUMERIC_RULE_FIELDS = new Set(['faelligeForderung', 'altforderungen180', 'pwbMonatsende']);
+
+// ═══════════════════════════════════════════════════════════════════════
+// Utils
+// ═══════════════════════════════════════════════════════════════════════
+function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
+function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function formatCurrency(v) { return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(Number(v) || 0); }
+function formatDate(iso) { if (!iso) return '–'; try { return new Date(iso).toLocaleString('de-DE'); } catch { return iso; } }
+function daysSince(iso) { if (!iso) return null; const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000); return d >= 0 ? d : null; }
+
+/** Everyone a claim can be assigned to — `leitungen` now holds both Leitung and Forderung accounts (see /api/forderung/leitungen), so a Forderung account shows up as an assignable option, including to themselves. */
+function assignableOptions() {
+  return leitungen.map(l => ({ id: l.id, name: me && l.id === me.adminUserId ? `${l.name} (ich)` : l.name }));
+}
+
+function showMessage(text, type) {
+  const c = document.getElementById('main-message');
+  c.innerHTML = `<div class="msg msg-${type}">${escapeHtml(text)}</div>`;
+  setTimeout(() => { c.innerHTML = ''; }, 5000);
+}
+
+async function api(path, options) {
+  const resp = await fetch(path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options && options.headers) },
+  });
+  if (resp.status === 401) { doLogout(); throw new Error('Unauthorized'); }
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || 'Fehler');
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Auth
+// ═══════════════════════════════════════════════════════════════════════
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  hideEl('login-error');
+  if (!email || !password) return;
+  try {
+    const resp = await fetch('/api/admin/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      document.getElementById('login-error').textContent = data.error || 'Anmeldung fehlgeschlagen';
+      showEl('login-error');
+      return;
+    }
+    if (data.role !== 'admin' && data.role !== 'leitung' && data.role !== 'forderung') {
+      document.getElementById('login-error').textContent = 'Dieser Zugang hat keinen Zugriff auf das Forderungen-Tool.';
+      showEl('login-error');
+      return;
+    }
+    token = data.token;
+    localStorage.setItem('frd-token', token);
+    if (data.mustChangePassword) {
+      hideEl('login-view');
+      document.getElementById('force-pw-new').value = '';
+      document.getElementById('force-pw-confirm').value = '';
+      hideEl('force-pw-error');
+      showEl('force-password-view');
+    } else {
+      boot();
+    }
+  } catch {
+    document.getElementById('login-error').textContent = 'Verbindungsfehler';
+    showEl('login-error');
+  }
+}
+document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+function doLogout() {
+  token = ''; me = null;
+  localStorage.removeItem('frd-token');
+  hideEl('app-shell'); hideEl('force-password-view'); hideEl('forgot-password-view');
+  showEl('login-view');
+}
+
+async function submitForcedPasswordChange() {
+  const newPassword = document.getElementById('force-pw-new').value;
+  const confirmPassword = document.getElementById('force-pw-confirm').value;
+  const errEl = document.getElementById('force-pw-error');
+  hideEl('force-pw-error');
+  if (!newPassword || newPassword.length < 6) { errEl.textContent = 'Passwort muss mindestens 6 Zeichen haben.'; showEl('force-pw-error'); return; }
+  if (newPassword !== confirmPassword) { errEl.textContent = 'Passwörter stimmen nicht überein.'; showEl('force-pw-error'); return; }
+  try {
+    const resp = await fetch('/api/admin/change-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ newPassword }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { errEl.textContent = data.error || 'Fehler'; showEl('force-pw-error'); return; }
+    hideEl('force-password-view');
+    boot();
+  } catch {
+    errEl.textContent = 'Verbindungsfehler';
+    showEl('force-pw-error');
+  }
+}
+
+function showForgotView() {
+  hideEl('login-view');
+  document.getElementById('forgot-email').value = document.getElementById('login-email').value.trim();
+  hideEl('forgot-error'); hideEl('forgot-done'); showEl('forgot-form-fields');
+  const btn = document.getElementById('forgot-submit-btn');
+  btn.disabled = false; btn.textContent = 'Einmalpasswort senden';
+  showEl('forgot-password-view');
+}
+function leaveForgotView() { hideEl('forgot-password-view'); showEl('login-view'); }
+
+async function submitForgotPassword() {
+  const email = document.getElementById('forgot-email').value.trim();
+  const errEl = document.getElementById('forgot-error');
+  hideEl('forgot-error');
+  if (!email) { errEl.textContent = 'Bitte E-Mail-Adresse eingeben.'; showEl('forgot-error'); return; }
+  const btn = document.getElementById('forgot-submit-btn');
+  btn.disabled = true; btn.textContent = 'Wird gesendet…';
+  try {
+    const resp = await fetch('/api/admin/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) { errEl.textContent = data.error || 'Anfrage fehlgeschlagen.'; showEl('forgot-error'); btn.disabled = false; btn.textContent = 'Einmalpasswort senden'; return; }
+    hideEl('forgot-form-fields');
+    const doneEl = document.getElementById('forgot-done');
+    doneEl.textContent = data.message || 'Einmalpasswort wurde gesendet.';
+    showEl('forgot-done');
+  } catch {
+    errEl.textContent = 'Verbindungsfehler'; showEl('forgot-error');
+    btn.disabled = false; btn.textContent = 'Einmalpasswort senden';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Boot / navigation
+// ═══════════════════════════════════════════════════════════════════════
+async function boot() {
+  if (!token) { showEl('login-view'); return; }
+  try {
+    me = await api('/api/forderung/me');
+  } catch {
+    doLogout();
+    return;
+  }
+  hideEl('login-view'); hideEl('force-password-view'); hideEl('forgot-password-view');
+  showEl('app-shell');
+  document.getElementById('whoami').textContent = me.name;
+  const roleLabels = { admin: 'Admin', leitung: 'Leitung', forderung: 'Forderung' };
+  document.getElementById('whoami-role').textContent = `${roleLabels[me.role] || me.role} · ${me.organizationName}`;
+
+  // Role-based nav visibility. "Alle Forderungen"/"Dashboard" are shared,
+  // org-wide overviews every role sees (Leitung included — they just can't
+  // edit claims assigned to someone else); "Neu anlegen"/"Import" stay
+  // Forderung/Admin work. "Meine Forderungen" used to be hidden for
+  // Forderung accounts, back when only a Leitung could be assigned a claim —
+  // now that Forderung can self-assign (see assignableOptions()), they get
+  // their own worklist here too.
+  const canManage = me.role === 'admin' || me.role === 'forderung';
+  document.querySelector('.nav-item[data-view="meine"]').classList.toggle('hidden', false);
+  document.querySelector('.nav-item[data-view="alle"]').classList.toggle('hidden', false);
+  document.querySelector('.nav-item[data-view="dashboard"]').classList.toggle('hidden', false);
+  document.querySelector('.nav-item[data-view="neu"]').classList.toggle('hidden', !canManage);
+  document.querySelector('.nav-item[data-view="import"]').classList.toggle('hidden', !canManage);
+  document.querySelector('.nav-item[data-view="rules"]').classList.toggle('hidden', !canManage);
+
+  try { leitungen = await api('/api/forderung/leitungen'); } catch { leitungen = []; }
+  if (canManage) {
+    const sel = document.getElementById('neu-assignedLeitungId');
+    sel.innerHTML = '<option value="">— nicht zugewiesen —</option>' + assignableOptions().map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
+  }
+
+  const savedView = localStorage.getItem('frd-view') || (me.role === 'leitung' ? 'meine' : 'alle');
+  switchView(me.role === 'leitung' ? 'meine' : savedView);
+}
+
+function switchView(view) {
+  document.querySelectorAll('.view').forEach(el => el.classList.add('hidden'));
+  document.getElementById(`view-${view}`).classList.remove('hidden');
+  document.querySelectorAll('#sidebar .nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+  localStorage.setItem('frd-view', view);
+  if (view === 'dashboard') loadDashboard();
+  if (view === 'meine') loadMeineForderungen();
+  if (view === 'alle') loadAlleForderungen();
+  if (view === 'import') loadImportLast();
+  if (view === 'rules') loadRules();
+}
+
+(function boot_() { boot(); })();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Dashboard — client-side aggregation over /api/forderung/records (every
+// role with Forderungen access already gets the full org list from that
+// endpoint, so no new backend aggregation route is needed).
+// ═══════════════════════════════════════════════════════════════════════
+
+let vizTooltipEl = null;
+function vizTooltip() {
+  if (!vizTooltipEl) {
+    vizTooltipEl = document.createElement('div');
+    vizTooltipEl.className = 'viz-tooltip hidden';
+    document.body.appendChild(vizTooltipEl);
+  }
+  return vizTooltipEl;
+}
+// Values are untrusted-ish (source Excel import) — set via textContent, never innerHTML.
+function showVizTooltip(e, value, label) {
+  const el = vizTooltip();
+  el.innerHTML = '<div class="vt-value"></div><div class="vt-label"></div>';
+  el.querySelector('.vt-value').textContent = value;
+  el.querySelector('.vt-label').textContent = label;
+  el.classList.remove('hidden');
+  const pad = 14;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  const rect = el.getBoundingClientRect();
+  if (x + rect.width > window.innerWidth - 8) x = e.clientX - rect.width - pad;
+  if (y + rect.height > window.innerHeight - 8) y = e.clientY - rect.height - pad;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+function hideVizTooltip() { if (vizTooltipEl) vizTooltipEl.classList.add('hidden'); }
+
+/** The table-view toggle every chart carries — the WCAG-clean, always-reachable twin of the bars/segments. */
+function wireVizTableToggle(container) {
+  const btn = container.querySelector('[data-role="toggle"]');
+  const chart = container.querySelector('[data-role="chart"]');
+  const table = container.querySelector('[data-role="table"]');
+  if (!btn || !chart || !table) return;
+  btn.addEventListener('click', () => {
+    const showTableNext = table.classList.contains('hidden');
+    table.classList.toggle('hidden', !showTableNext);
+    chart.classList.toggle('hidden', showTableNext);
+    btn.textContent = showTableNext ? 'Als Diagramm' : 'Als Tabelle';
+  });
+}
+
+/**
+ * Horizontal bar chart for magnitude comparisons — one sequential hue by
+ * default (bars are categories of the SAME measure, not distinct series, so
+ * no legend). Pass items[].color for an ordinal ramp instead (aging buckets).
+ */
+function renderBarChart(container, opts) {
+  const items = opts.items || [];
+  if (items.length === 0 || items.every(i => i.value === 0)) {
+    container.innerHTML = `
+      <div class="viz-card-head"><div><h3>${escapeHtml(opts.title)}</h3>${opts.subtitle ? `<div class="viz-subtitle">${escapeHtml(opts.subtitle)}</div>` : ''}</div></div>
+      <div class="viz-empty">${escapeHtml(opts.emptyText || 'Keine Daten.')}</div>`;
+    return;
+  }
+  const max = Math.max(...items.map(i => i.value), 0) || 1;
+  container.innerHTML = `
+    <div class="viz-card-head">
+      <div><h3>${escapeHtml(opts.title)}</h3>${opts.subtitle ? `<div class="viz-subtitle">${escapeHtml(opts.subtitle)}</div>` : ''}</div>
+      <button type="button" class="viz-toggle" data-role="toggle">Als Tabelle</button>
+    </div>
+    <div class="hbar-list" data-role="chart">
+      ${items.map((it, i) => `
+        <div class="hbar-row">
+          <div class="hbar-label" title="${escapeHtml(it.label)}">${escapeHtml(it.label)}</div>
+          <div class="hbar-track"><div class="hbar-fill" data-idx="${i}" tabindex="0" style="width:${Math.max((it.value / max) * 100, it.value > 0 ? 1.5 : 0)}%;${it.color ? ` background:${it.color};` : ''}"></div></div>
+          <div class="hbar-value">${escapeHtml(opts.formatValue(it.value))}</div>
+        </div>`).join('')}
+    </div>
+    <table class="viz-table hidden" data-role="table">
+      <thead><tr><th>${escapeHtml(opts.dimensionLabel || 'Kategorie')}</th><th>Wert</th></tr></thead>
+      <tbody>${items.map(it => `<tr><td>${escapeHtml(it.label)}</td><td class="num">${escapeHtml(opts.formatValue(it.value))}</td></tr>`).join('')}</tbody>
+    </table>
+  `;
+  wireVizTableToggle(container);
+  container.querySelectorAll('.hbar-fill').forEach(fillEl => {
+    const it = items[Number(fillEl.dataset.idx)];
+    const tip = e => showVizTooltip(e, opts.formatValue(it.value), it.tooltipLabel || it.label);
+    fillEl.addEventListener('pointermove', tip);
+    fillEl.addEventListener('pointerenter', tip);
+    fillEl.addEventListener('pointerleave', hideVizTooltip);
+    fillEl.addEventListener('focus', () => { const r = fillEl.getBoundingClientRect(); tip({ clientX: r.right, clientY: r.top }); });
+    fillEl.addEventListener('blur', hideVizTooltip);
+  });
+}
+
+/** Part-to-whole stacked bar for the Kanban pipeline — an ordinal ramp (lighter = earlier stage), not categorical, since the three stages are an ordered progression, not independent identities. */
+function renderStatusChart(container, records) {
+  const colors = { offen: 'var(--viz-seq-250)', in_arbeit: 'var(--viz-seq-450)', done: 'var(--viz-seq-650)' };
+  const total = records.length || 1;
+  const segs = KANBAN_ORDER.map(status => {
+    const inStatus = records.filter(r => r.kanbanStatus === status);
+    const sum = inStatus.reduce((s, r) => s + (r.faelligeForderung || 0), 0);
+    return { status, count: inStatus.length, sum, pct: (inStatus.length / total) * 100 };
+  });
+  container.innerHTML = `
+    <div class="viz-card-head">
+      <div><h3>Kanban-Status</h3><div class="viz-subtitle">Verteilung aller Forderungen (Anzahl)</div></div>
+      <button type="button" class="viz-toggle" data-role="toggle">Als Tabelle</button>
+    </div>
+    <div data-role="chart">
+      <div class="stackbar">
+        ${segs.filter(s => s.pct > 0).map(s => `<div class="stackbar-seg" data-status="${s.status}" tabindex="0" style="width:${s.pct}%; background:${colors[s.status]};"></div>`).join('')}
+      </div>
+      <div class="viz-legend">
+        ${segs.map(s => `<span class="viz-legend-item"><span class="viz-legend-swatch" style="background:${colors[s.status]}"></span>${escapeHtml(KANBAN_LABELS[s.status])} · ${s.count} (${s.pct.toFixed(0)}%)</span>`).join('')}
+      </div>
+    </div>
+    <table class="viz-table hidden" data-role="table">
+      <thead><tr><th>Status</th><th>Anzahl</th><th>Anteil</th><th>Summe</th></tr></thead>
+      <tbody>${segs.map(s => `<tr><td>${escapeHtml(KANBAN_LABELS[s.status])}</td><td class="num">${s.count}</td><td class="num">${s.pct.toFixed(1)}%</td><td class="num">${formatCurrency(s.sum)}</td></tr>`).join('')}</tbody>
+    </table>
+  `;
+  wireVizTableToggle(container);
+  container.querySelectorAll('.stackbar-seg').forEach(segEl => {
+    const s = segs.find(x => x.status === segEl.dataset.status);
+    const tip = e => showVizTooltip(e, String(s.count), `${KANBAN_LABELS[s.status]} · ${s.pct.toFixed(1)}% · ${formatCurrency(s.sum)}`);
+    segEl.addEventListener('pointermove', tip);
+    segEl.addEventListener('pointerenter', tip);
+    segEl.addEventListener('pointerleave', hideVizTooltip);
+  });
+}
+
+function topNWithOther(map, topN) {
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  if (entries.length <= topN) return entries.map(([label, value]) => ({ label, value }));
+  const restSum = entries.slice(topN).reduce((s, [, v]) => s + v, 0);
+  return [...entries.slice(0, topN).map(([label, value]) => ({ label, value })), { label: 'Sonstige', value: restSum }];
+}
+function groupSum(records, field, topN) {
+  const map = new Map();
+  for (const r of records) {
+    const key = (r[field] || '').toString().trim() || '(ohne Angabe)';
+    map.set(key, (map.get(key) || 0) + (r.faelligeForderung || 0));
+  }
+  return topNWithOther(map, topN);
+}
+function groupCount(records, field, topN) {
+  const map = new Map();
+  for (const r of records) {
+    const key = (r[field] || '').toString().trim() || '(ohne Angabe)';
+    map.set(key, (map.get(key) || 0) + 1);
+  }
+  return topNWithOther(map, topN);
+}
+/** Workload per assignee — `leitungen` holds Leitung + Forderung accounts (see assignableOptions()), so a self-assigned Forderung claim resolves to a real name here too, not just "unknown". */
+function groupByAssignee(openRecords) {
+  const map = new Map();
+  for (const r of openRecords) {
+    const key = r.assignedLeitungId || '__none__';
+    map.set(key, (map.get(key) || 0) + (r.faelligeForderung || 0));
+  }
+  const nameFor = id => {
+    if (id === '__none__') return 'Nicht zugewiesen';
+    const u = leitungen.find(l => l.id === id);
+    return u ? u.name : 'Unbekannt';
+  };
+  return [...map.entries()].sort((a, b) => b[1] - a[1]).map(([id, value]) => ({ label: nameFor(id), value }));
+}
+
+function kpiTile(label, value, sub, alert) {
+  return `<div class="kpi-tile${alert ? ' kpi-alert' : ''}">
+    <div class="kpi-label">${escapeHtml(label)}</div>
+    <div class="kpi-value">${escapeHtml(value)}</div>
+    ${sub ? `<div class="kpi-sub">${escapeHtml(sub)}</div>` : ''}
+  </div>`;
+}
+
+function renderTopTable(container, openRecords) {
+  const top = [...openRecords].sort((a, b) => (b.faelligeForderung || 0) - (a.faelligeForderung || 0)).slice(0, 10);
+  if (top.length === 0) {
+    container.innerHTML = '<h3>Größte offene Forderungen</h3><div class="viz-empty">Keine offenen Forderungen.</div>';
+    return;
+  }
+  container.innerHTML = `
+    <h3>Größte offene Forderungen</h3>
+    <div class="viz-subtitle">Top ${top.length} nach fälliger Summe</div>
+    <div class="top-table-wrap"><table class="top-table"><thead><tr>
+      <th>Kunde</th><th>Debitor</th><th>Verkaufsbüro</th><th>Betrag</th><th>Status</th><th>Zuständig</th><th>Tage offen</th>
+    </tr></thead><tbody>${top.map(r => `
+      <tr onclick="openDetail('${escapeHtml(r.id)}')">
+        <td>${escapeHtml(r.kundenname || '–')}</td>
+        <td>${escapeHtml(r.debitor)}</td>
+        <td>${escapeHtml(r.verkaufsbuero || '–')}</td>
+        <td class="num">${formatCurrency(r.faelligeForderung)}</td>
+        <td><span class="badge badge-${r.kanbanStatus}">${KANBAN_LABELS[r.kanbanStatus]}</span></td>
+        <td>${escapeHtml(leitungName(r.assignedLeitungId) || '–')}</td>
+        <td class="num">${daysSince(r.updatedAt) ?? '–'}</td>
+      </tr>`).join('')}</tbody></table></div>
+  `;
+}
+
+async function loadDashboard() {
+  const el = document.getElementById('dashboard-content');
+  // Same reasoning as loadAlleForderungen(): only wipe to "Lade…" on the
+  // very first load. A refresh after assigning a claim from the "Größte
+  // offene Forderungen" table should update the charts/KPIs in place, not
+  // flash the whole dashboard away first.
+  if (!el.querySelector('.kpi-row')) el.innerHTML = '<p class="muted">Lade…</p>';
+  try {
+    const records = await api('/api/forderung/records');
+    renderDashboard(records);
+  } catch {
+    el.innerHTML = '<p class="msg msg-error">Fehler beim Laden.</p>';
+  }
+}
+
+function renderDashboard(records) {
+  const el = document.getElementById('dashboard-content');
+  if (records.length === 0) {
+    el.innerHTML = '<div class="empty-state">Noch keine Forderungen vorhanden.</div>';
+    return;
+  }
+  const open = records.filter(r => r.kanbanStatus !== 'done' && r.kanbanStatus !== 'archiviert');
+  const totalSum = records.reduce((s, r) => s + (r.faelligeForderung || 0), 0);
+  const openSum = open.reduce((s, r) => s + (r.faelligeForderung || 0), 0);
+  const oldSum = records.reduce((s, r) => s + (r.altforderungen180 || 0), 0);
+  const pwbSum = records.reduce((s, r) => s + (r.pwbMonatsende || 0), 0);
+  const ages = open.map(r => daysSince(r.updatedAt)).filter(d => d !== null);
+  const avgAge = ages.length ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : 0;
+  const missingCount = records.filter(r => r.missingInLastImport).length;
+
+  el.innerHTML = `
+    <div class="kpi-row">
+      ${kpiTile('Gesamtforderung', formatCurrency(totalSum), `${records.length} Forderungen gesamt`)}
+      ${kpiTile('Offene Forderungssumme', formatCurrency(openSum), `${open.length} offen · ${records.length - open.length} erledigt`)}
+      ${kpiTile('Davon > 180 Tage', formatCurrency(oldSum), totalSum > 0 ? `${((oldSum / totalSum) * 100).toFixed(1)}% der Gesamtsumme` : '', oldSum > 0)}
+      ${kpiTile('PWB Monatsende', formatCurrency(pwbSum), 'Wertberichtigung')}
+      ${kpiTile('Ø Bearbeitungsalter', ages.length ? `${avgAge} Tg.` : '–', 'offene Forderungen, seit letzter Bearbeitung')}
+      ${kpiTile('Fehlt im letzten Import', String(missingCount), missingCount > 0 ? 'ggf. bereits erledigt — bitte prüfen' : 'alles aktuell', missingCount > 0)}
+    </div>
+    <div class="dashboard-grid">
+      <div class="viz-card" id="dash-status"></div>
+      <div class="viz-card" id="dash-aging"></div>
+      <div class="viz-card" id="dash-verkaufsbuero"></div>
+      <div class="viz-card" id="dash-zustaendig"></div>
+      <div class="viz-card" id="dash-kundentyp"></div>
+      <div class="viz-card" id="dash-reklamation"></div>
+    </div>
+    <div class="viz-card" id="dash-top-table"></div>
+  `;
+
+  renderStatusChart(document.getElementById('dash-status'), records);
+
+  const agingBuckets = [
+    { label: '0–7 Tage', min: 0, max: 7, color: 'var(--viz-seq-250)' },
+    { label: '8–30 Tage', min: 8, max: 30, color: 'var(--viz-seq-350)' },
+    { label: '31–90 Tage', min: 31, max: 90, color: 'var(--viz-seq-450)' },
+    { label: '91–180 Tage', min: 91, max: 180, color: 'var(--viz-seq-550)' },
+    { label: '> 180 Tage', min: 181, max: Infinity, color: 'var(--viz-seq-650)' },
+  ];
+  for (const b of agingBuckets) { b.count = 0; b.sum = 0; }
+  for (const r of open) {
+    const age = daysSince(r.updatedAt) ?? 0;
+    const bucket = agingBuckets.find(b => age >= b.min && age <= b.max);
+    if (bucket) { bucket.count++; bucket.sum += r.faelligeForderung || 0; }
+  }
+  renderBarChart(document.getElementById('dash-aging'), {
+    title: 'Bearbeitungsalter',
+    subtitle: 'Offene Forderungen nach Tagen seit letzter Bearbeitung',
+    items: agingBuckets.map(b => ({ label: b.label, value: b.count, color: b.color, tooltipLabel: `${b.label} · ${formatCurrency(b.sum)}` })),
+    formatValue: v => String(v),
+    dimensionLabel: 'Zeitraum',
+    emptyText: 'Keine offenen Forderungen.',
+  });
+
+  renderBarChart(document.getElementById('dash-verkaufsbuero'), {
+    title: 'Top Verkaufsbüros',
+    subtitle: 'Offene Forderungssumme',
+    items: groupSum(open, 'verkaufsbuero', 8),
+    formatValue: formatCurrency,
+    dimensionLabel: 'Verkaufsbüro',
+    emptyText: 'Keine offenen Forderungen.',
+  });
+
+  renderBarChart(document.getElementById('dash-zustaendig'), {
+    title: 'Auslastung je Zuständigkeit',
+    subtitle: 'Offene Forderungssumme',
+    items: groupByAssignee(open),
+    formatValue: formatCurrency,
+    dimensionLabel: 'Zuständig',
+    emptyText: 'Keine offenen Forderungen.',
+  });
+
+  renderBarChart(document.getElementById('dash-kundentyp'), {
+    title: 'Nach Kundentyp',
+    subtitle: 'Offene Forderungssumme',
+    items: groupSum(open, 'kundentyp', 8),
+    formatValue: formatCurrency,
+    dimensionLabel: 'Kundentyp',
+    emptyText: 'Keine offenen Forderungen.',
+  });
+
+  renderBarChart(document.getElementById('dash-reklamation'), {
+    title: 'Top Reklamationsgründe',
+    subtitle: 'Anzahl offener Forderungen',
+    items: groupCount(open, 'reklamationsgrund', 8),
+    formatValue: v => String(v),
+    dimensionLabel: 'Reklamationsgrund',
+    emptyText: 'Keine offenen Forderungen.',
+  });
+
+  renderTopTable(document.getElementById('dash-top-table'), open);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Meine Forderungen (Kanban)
+// ═══════════════════════════════════════════════════════════════════════
+function priorityScore(r) {
+  return (r.altforderungen180 || 0) * 3 + (r.faelligeForderung || 0) + (daysSince(r.updatedAt) || 0) * 50;
+}
+
+async function loadMeineForderungen() {
+  const el = document.getElementById('meine-content');
+  // Same reasoning as loadAlleForderungen()/loadDashboard(): only show the
+  // placeholder on the very first load, not on a refresh after e.g. editing
+  // a claim via the detail modal.
+  if (!el.querySelector('.kanban-board')) el.innerHTML = '<p class="muted">Lade…</p>';
+  try {
+    meineRecords = await fetchMeineForderungen();
+    renderKanban(meineRecords);
+  } catch {
+    el.innerHTML = '<p class="msg msg-error">Fehler beim Laden.</p>';
+  }
+}
+
+async function fetchMeineForderungen() {
+  const records = await api('/api/forderung/records');
+  // /api/forderung/records now returns every claim in the org (Leitung
+  // included, so "Alle Forderungen" works for them too) — this board is
+  // specifically the signed-in person's own worklist, so filter here.
+  return records.filter(r => r.assignedLeitungId === me.adminUserId);
+}
+
+function renderKanban(records) {
+  const el = document.getElementById('meine-content');
+  if (records.length === 0) {
+    el.innerHTML = '<div class="empty-state">Ihnen sind aktuell keine Forderungen zugewiesen.</div>';
+    return;
+  }
+  const byStatus = { offen: [], in_arbeit: [], done: [], archiviert: [] };
+  for (const r of records) (byStatus[r.kanbanStatus] || byStatus.offen).push(r);
+  byStatus.offen.sort((a, b) => priorityScore(b) - priorityScore(a));
+
+  el.innerHTML = `<div class="kanban-board">${KANBAN_ORDER.map(status => `
+    <div class="kanban-col" data-status="${status}">
+      <div class="kanban-col-head"><h2>${KANBAN_LABELS[status]}</h2><span class="kanban-count">${byStatus[status].length}</span></div>
+      <div class="kanban-cards">${byStatus[status].length === 0 ? '<div class="empty-state" style="padding:16px;">Keine</div>' : byStatus[status].map(r => kanbanCardHtml(r, status)).join('')}</div>
+    </div>
+  `).join('')}</div>`;
+  bindKanbanDnd(el);
+}
+
+function kanbanCardHtml(r, status) {
+  const age = daysSince(r.updatedAt);
+  return `
+    <div class="kanban-card" draggable="true" data-id="${escapeHtml(r.id)}" data-status="${escapeHtml(status)}" onclick="openDetail('${escapeHtml(r.id)}')">
+      <div class="kc-title">${escapeHtml(r.kundenname || r.debitor)}</div>
+      <div class="kc-sub">Debitor ${escapeHtml(r.debitor)} · Rechnung ${escapeHtml(r.rechnungsnummer)}</div>
+      <div class="kc-amount">${formatCurrency(r.faelligeForderung)}</div>
+      ${r.altforderungen180 > 0 ? `<div class="kc-old">davon &gt;180 Tage: ${formatCurrency(r.altforderungen180)}</div>` : ''}
+      ${age !== null ? `<div class="kc-sub" style="margin:4px 0 0;">seit ${age} Tg. unbearbeitet</div>` : ''}
+      ${r.missingInLastImport ? '<div style="margin-top:6px;"><span class="badge badge-missing">nicht mehr im Import</span></div>' : ''}
+    </div>`;
+}
+
+// Native HTML5 drag-and-drop for the kanban board. Delegated on the
+// container (not the cards) so it survives the innerHTML re-render that
+// happens on every load/move — bound once per container via the dataset flag.
+function bindKanbanDnd(el) {
+  if (el.dataset.dndBound) return;
+  el.dataset.dndBound = '1';
+
+  el.addEventListener('dragstart', e => {
+    const card = e.target.closest('.kanban-card');
+    if (!card) return;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', card.dataset.id);
+  });
+
+  el.addEventListener('dragend', e => {
+    e.target.closest('.kanban-card')?.classList.remove('dragging');
+    el.querySelectorAll('.kanban-col.drag-over').forEach(c => c.classList.remove('drag-over'));
+  });
+
+  el.addEventListener('dragover', e => {
+    const col = e.target.closest('.kanban-col');
+    if (!col) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    col.classList.add('drag-over');
+  });
+
+  el.addEventListener('dragleave', e => {
+    const col = e.target.closest('.kanban-col');
+    if (col && !col.contains(e.relatedTarget)) col.classList.remove('drag-over');
+  });
+
+  el.addEventListener('drop', e => {
+    const col = e.target.closest('.kanban-col');
+    if (!col) return;
+    e.preventDefault();
+    col.classList.remove('drag-over');
+    const id = e.dataTransfer.getData('text/plain');
+    const newStatus = col.dataset.status;
+    const card = el.querySelector(`.kanban-card[data-id="${cssEscape(id)}"]`);
+    if (!id || !newStatus || !card || card.dataset.status === newStatus) return;
+    moveTask(id, newStatus);
+  });
+}
+
+function cssEscape(s) {
+  return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+}
+
+async function moveTask(id, newStatus) {
+  const record = meineRecords.find(r => r.id === id);
+  if (!record) return;
+  const prevStatus = record.kanbanStatus;
+  // Apply the move locally first so the card lands in its new column
+  // immediately — no "Lade…" wipe while the request is in flight.
+  record.kanbanStatus = newStatus;
+  renderKanban(meineRecords);
+  try {
+    await api(`/api/forderung/records/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ kanbanStatus: newStatus }) });
+    // Silent background refresh to pick up server-derived fields (updatedAt,
+    // "offen" priority order) — no loading state, so nothing flickers.
+    meineRecords = await fetchMeineForderungen();
+    renderKanban(meineRecords);
+  } catch (e) {
+    record.kanbanStatus = prevStatus;
+    renderKanban(meineRecords);
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Alle Forderungen (table)
+// ═══════════════════════════════════════════════════════════════════════
+async function loadAlleForderungen() {
+  const el = document.getElementById('alle-content');
+  // Only show the loading placeholder on the very first load — a refresh
+  // after e.g. saving the detail modal should update in place, not wipe the
+  // table back to "Lade…" first (that read as a full page reload).
+  if (!el.querySelector('table')) el.innerHTML = '<p class="muted">Lade…</p>';
+  try {
+    allRecords = await api('/api/forderung/records');
+    renderAlleTable();
+  } catch {
+    el.innerHTML = '<p class="msg msg-error">Fehler beim Laden.</p>';
+  }
+}
+
+function leitungName(id) {
+  const l = leitungen.find(x => x.id === id);
+  return l ? l.name : null;
+}
+
+function renderAlleTable() {
+  const el = document.getElementById('alle-content');
+  const term = (document.getElementById('alle-search').value || '').trim().toLowerCase();
+  const filtered = term ? allRecords.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : allRecords;
+
+  if (allRecords.length === 0) { el.innerHTML = '<div class="empty-state">Noch keine Forderungen vorhanden. Über „Neu anlegen" oder „Import" hinzufügen.</div>'; return; }
+  if (filtered.length === 0) { el.innerHTML = '<p class="muted" style="padding:16px 4px;">Keine Treffer.</p>'; return; }
+
+  const canManage = me.role === 'admin' || me.role === 'forderung';
+  const leitungOptions = l => `<option value="">— nicht zugewiesen —</option>` + leitungen.map(x => `<option value="${x.id}" ${x.id === l ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('');
+
+  el.innerHTML = `<div class="frd-table-wrap"><table class="frd-table"><thead><tr>
+    <th>Debitor</th><th>Kunde</th><th>Rechnung</th><th>Verkaufsbüro</th><th>Fällig</th><th>Status</th><th>Zugewiesen</th>${canManage ? '<th></th>' : ''}
+  </tr></thead><tbody>${filtered.map(r => `
+    <tr onclick="openDetail('${escapeHtml(r.id)}')">
+      <td>${escapeHtml(r.debitor)}</td>
+      <td>${escapeHtml(r.kundenname || '–')}</td>
+      <td>${escapeHtml(r.rechnungsnummer)}</td>
+      <td>${escapeHtml(r.verkaufsbuero || '–')}</td>
+      <td>${formatCurrency(r.faelligeForderung)}</td>
+      <td><span class="badge badge-${r.kanbanStatus}">${KANBAN_LABELS[r.kanbanStatus]}</span>${r.missingInLastImport ? ' <span class="badge badge-missing">fehlt im Import</span>' : ''}</td>
+      ${canManage ? `
+      <td onclick="event.stopPropagation()">
+        <select onchange="assignRecord('${escapeHtml(r.id)}', this.value)">${leitungOptions(r.assignedLeitungId)}</select>
+      </td>
+      <td onclick="event.stopPropagation()"><button class="btn btn-danger-outline btn-sm" onclick="deleteRecordRow('${escapeHtml(r.id)}')">Löschen</button></td>
+      ` : `<td>${r.assignedLeitungId ? escapeHtml(leitungName(r.assignedLeitungId) || '–') : '<span class="muted">nicht zugewiesen</span>'}</td>`}
+    </tr>
+  `).join('')}</tbody></table></div>`;
+}
+
+async function assignRecord(id, leitungId) {
+  const record = allRecords.find(r => r.id === id);
+  if (!record) return;
+  const prevAssignee = record.assignedLeitungId;
+  const nextAssignee = leitungId || null;
+  // Apply locally first so the table doesn't flash back to "Lade…" for what
+  // is, from the user's side, a single-field edit — background PUT reverts
+  // it on failure instead of gating the UI on the round-trip.
+  record.assignedLeitungId = nextAssignee;
+  renderAlleTable();
+  try {
+    await api(`/api/forderung/records/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ assignedLeitungId: nextAssignee }) });
+    showMessage('Zuweisung gespeichert.', 'success');
+  } catch (e) {
+    record.assignedLeitungId = prevAssignee;
+    renderAlleTable();
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+async function deleteRecordRow(id) {
+  if (!confirm('Diese Forderung endgültig löschen?')) return;
+  try {
+    await api(`/api/forderung/records/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    showMessage('Forderung gelöscht.', 'success');
+    loadAlleForderungen();
+  } catch (e) {
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Neu anlegen
+// ═══════════════════════════════════════════════════════════════════════
+async function submitCreateRecord() {
+  const errEl = document.getElementById('neu-error');
+  hideEl('neu-error');
+  const payload = {
+    debitor: document.getElementById('neu-debitor').value.trim(),
+    rechnungsnummer: document.getElementById('neu-rechnungsnummer').value.trim(),
+    kundenname: document.getElementById('neu-kundenname').value.trim(),
+    kundentyp: document.getElementById('neu-kundentyp').value.trim(),
+    verkaufsbuero: document.getElementById('neu-verkaufsbuero').value.trim(),
+    serviceLeiter: document.getElementById('neu-serviceLeiter').value.trim(),
+    auftragVertrag: document.getElementById('neu-auftragVertrag').value.trim(),
+    equipment: document.getElementById('neu-equipment').value.trim(),
+    reklamationsgrund: document.getElementById('neu-reklamationsgrund').value.trim(),
+    text: document.getElementById('neu-text').value.trim(),
+    faelligeForderung: parseFloat(document.getElementById('neu-faelligeForderung').value) || 0,
+    altforderungen180: parseFloat(document.getElementById('neu-altforderungen180').value) || 0,
+    pwbMonatsende: parseFloat(document.getElementById('neu-pwbMonatsende').value) || 0,
+    resolver: document.getElementById('neu-resolver').value.trim(),
+    aktionsstatus: document.getElementById('neu-aktionsstatus').value.trim(),
+    assignedLeitungId: document.getElementById('neu-assignedLeitungId').value || null,
+    notizen: document.getElementById('neu-notizen').value.trim(),
+  };
+  if (!payload.debitor || !payload.rechnungsnummer) {
+    errEl.textContent = 'Debitor und Rechnungsnummer sind erforderlich.'; showEl('neu-error'); return;
+  }
+  try {
+    await api('/api/forderung/records', { method: 'POST', body: JSON.stringify(payload) });
+    showMessage('Forderung angelegt.', 'success');
+    ['debitor','rechnungsnummer','kundenname','kundentyp','verkaufsbuero','serviceLeiter','auftragVertrag','equipment','reklamationsgrund','text','faelligeForderung','altforderungen180','pwbMonatsende','resolver','aktionsstatus','notizen'].forEach(k => { document.getElementById('neu-' + k).value = ''; });
+    document.getElementById('neu-assignedLeitungId').value = '';
+  } catch (e) {
+    errEl.textContent = e.message || 'Fehler beim Anlegen.'; showEl('neu-error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Detail modal (edit + comments)
+// ═══════════════════════════════════════════════════════════════════════
+let pendingCommentFiles = [];
+
+async function openDetail(id) {
+  try {
+    const record = await api(`/api/forderung/records/${encodeURIComponent(id)}`);
+    pendingCommentFiles = [];
+    renderDetailModal(record);
+    showEl('detail-modal');
+  } catch (e) {
+    showMessage(e.message || 'Fehler beim Laden.', 'error');
+  }
+}
+function closeDetailModal() { hideEl('detail-modal'); }
+
+function fieldRow(label, value) {
+  return `<div><div class="detail-field__label">${escapeHtml(label)}</div><div class="detail-field__value">${value !== '' && value != null ? escapeHtml(String(value)) : '–'}</div></div>`;
+}
+
+function renderDetailModal(r) {
+  const canManage = me.role === 'admin' || me.role === 'forderung';
+  // Leitung can now VIEW every claim ("Alle Forderungen"), but only ever
+  // EDITS/comments on the one currently assigned to them — matches the
+  // server-side canEditForderungRecord check in server/index.ts.
+  const canEdit = canManage || (me.role === 'leitung' && r.assignedLeitungId === me.adminUserId);
+  const age180 = r.altforderungen180 > 0;
+  const leitungOptionsHtml = `<option value="">— nicht zugewiesen —</option>` + assignableOptions().map(o => `<option value="${o.id}" ${o.id === r.assignedLeitungId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('');
+
+  const content = `
+    <div class="modal-head">
+      <div>
+        <h1>${escapeHtml(r.kundenname || r.debitor || 'Forderung')}</h1>
+        <p class="muted">Debitor ${escapeHtml(r.debitor)} · Rechnung ${escapeHtml(r.rechnungsnummer)}</p>
+      </div>
+      <button class="modal-close" onclick="closeDetailModal()">✕</button>
+    </div>
+    ${r.missingInLastImport ? `<div class="msg msg-warning">Diese Forderung war im letzten Excel-Import nicht mehr enthalten (seit ${formatDate(r.missingSince)}). Ggf. bereits erledigt — bitte prüfen.</div>` : ''}
+
+    <div class="detail-grid">
+      ${fieldRow('Verkaufsbüro', r.verkaufsbuero)}
+      ${fieldRow('Service Leiter', r.serviceLeiter)}
+      ${fieldRow('Kundentyp', r.kundentyp)}
+      ${fieldRow('Auftrag/Vertrag', r.auftragVertrag)}
+      ${fieldRow('Equipment', r.equipment)}
+      ${fieldRow('Reklamationsgrund', r.reklamationsgrund)}
+      ${fieldRow('Resolver', r.resolver)}
+      ${fieldRow('Status (Quelle)', r.aktionsstatus)}
+      ${fieldRow('Fällige Forderung', formatCurrency(r.faelligeForderung))}
+      ${fieldRow('davon >180 Tage', age180 ? formatCurrency(r.altforderungen180) : formatCurrency(0))}
+      ${fieldRow('PWB (Monatsende)', formatCurrency(r.pwbMonatsende))}
+    </div>
+    ${r.text ? `<div style="margin-bottom:10px;">${fieldRow('Text', r.text)}</div>` : ''}
+
+    <h3>Bearbeitung</h3>
+    ${!canEdit ? '<p class="muted" style="margin-bottom:10px;">Nur die zuständige Leitung (oder Admin/Forderung) kann diese Forderung bearbeiten oder kommentieren.</p>' : ''}
+    <div class="form-row form-row-2">
+      <div class="form-group">
+        <label>Kanban-Status</label>
+        <select id="detail-status" ${canEdit ? '' : 'disabled'}>${KANBAN_ORDER.map(s => `<option value="${s}" ${s === r.kanbanStatus ? 'selected' : ''}>${KANBAN_LABELS[s]}</option>`).join('')}</select>
+      </div>
+      <div class="form-group">
+        <label>Zuständig</label>
+        <select id="detail-assigned" ${canManage ? '' : 'disabled'}>${leitungOptionsHtml}</select>
+      </div>
+    </div>
+    <div class="form-group"><label>Notizen</label><textarea id="detail-notizen" rows="3" ${canEdit ? '' : 'disabled'}>${escapeHtml(r.notizen)}</textarea></div>
+    <button class="btn btn-primary" onclick="saveDetail('${escapeHtml(r.id)}')" ${canEdit ? '' : 'disabled'}>Speichern</button>
+
+    <hr class="sep">
+    <h3>Kommentare (${r.comments.length})</h3>
+    <div class="comment-list" id="detail-comments">
+      ${r.comments.length === 0 ? '<div class="empty-state">Noch keine Kommentare.</div>' : r.comments.map(c => `
+        <div class="comment-bubble">
+          <div class="cb-meta">${escapeHtml(c.authorName)} · ${formatDate(c.createdAt)}</div>
+          ${c.text ? `<div class="cb-text">${escapeHtml(c.text)}</div>` : ''}
+          ${c.attachmentIds && c.attachmentIds.length > 0 ? `<div class="cb-attachments">${c.attachmentIds.map(attId => `<span class="cb-att-slot" id="att-${escapeHtml(attId)}"><span class="att-loading">Lädt…</span></span>`).join('')}</div>` : ''}
+        </div>`).join('')}
+    </div>
+    ${canEdit ? `
+    <div class="comment-input-row">
+      <textarea id="detail-comment-input" rows="2" placeholder="Kommentar schreiben…"></textarea>
+      <div class="comment-file-chips" id="comment-file-chips"></div>
+      <div class="comment-input-footer">
+        <button type="button" class="btn-attach" onclick="document.getElementById('comment-file-input').click()">📎 Datei anhängen</button>
+        <input type="file" id="comment-file-input" accept="image/*,application/pdf" multiple class="hidden" onchange="onCommentFilesPicked(event)">
+        <button class="btn btn-primary btn-sm" onclick="submitComment('${escapeHtml(r.id)}')">Senden</button>
+      </div>
+    </div>` : ''}
+
+    <hr class="sep">
+    <h3>Verlauf (${r.history.length})</h3>
+    <div>
+      ${r.history.length === 0 ? '<div class="empty-state">Noch keine Einträge.</div>' : [...r.history].reverse().map(h => `
+        <div class="history-item">
+          <div class="history-item__meta">${formatDate(h.at)} · ${escapeHtml(h.actorName)}</div>
+          <div class="history-item__action">${escapeHtml(h.action)}</div>
+          ${h.detail ? `<div class="history-item__detail">${escapeHtml(h.detail)}</div>` : ''}
+        </div>`).join('')}
+    </div>
+  `;
+  document.getElementById('detail-modal-content').innerHTML = content;
+  renderCommentFileChips();
+  loadCommentAttachments(r);
+}
+
+function onCommentFilesPicked(e) {
+  const picked = Array.from(e.target.files || []);
+  pendingCommentFiles = [...pendingCommentFiles, ...picked].slice(0, 5);
+  e.target.value = '';
+  renderCommentFileChips();
+}
+
+function removeCommentFile(idx) {
+  pendingCommentFiles.splice(idx, 1);
+  renderCommentFileChips();
+}
+
+function renderCommentFileChips() {
+  const el = document.getElementById('comment-file-chips');
+  if (!el) return;
+  el.innerHTML = pendingCommentFiles.map((f, i) => `
+    <span class="file-chip">${escapeHtml(f.name)}<button type="button" onclick="removeCommentFile(${i})">×</button></span>
+  `).join('');
+}
+
+/** Fetches each comment's attachments as a blob (auth header required, so a plain <img src> won't work) and fills in the placeholder slot — mirrors AttachmentPreview in src/components/boards/TaskDetailPopup.tsx. */
+async function loadCommentAttachments(record) {
+  for (const c of record.comments) {
+    for (const attId of c.attachmentIds || []) {
+      const slot = document.getElementById(`att-${attId}`);
+      if (!slot) continue;
+      try {
+        const resp = await fetch(`/api/forderung/attachments/${encodeURIComponent(attId)}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!resp.ok) { slot.innerHTML = '<span class="att-error">Datei nicht verfügbar</span>'; continue; }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        slot.innerHTML = blob.type.startsWith('image/')
+          ? `<a href="${url}" target="_blank" rel="noreferrer"><img src="${url}" class="att-thumb" alt="Anhang"></a>`
+          : `<a href="${url}" target="_blank" rel="noreferrer" class="att-file">📄 Datei öffnen</a>`;
+      } catch {
+        slot.innerHTML = '<span class="att-error">Datei nicht verfügbar</span>';
+      }
+    }
+  }
+}
+
+async function saveDetail(id) {
+  const patch = {
+    kanbanStatus: document.getElementById('detail-status').value,
+    notizen: document.getElementById('detail-notizen').value,
+  };
+  const assignedSelect = document.getElementById('detail-assigned');
+  if (!assignedSelect.disabled) patch.assignedLeitungId = assignedSelect.value || null;
+  try {
+    await api(`/api/forderung/records/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) });
+    showMessage('Forderung aktualisiert.', 'success');
+    closeDetailModal();
+    refreshCurrentView();
+  } catch (e) {
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+async function submitComment(id) {
+  const input = document.getElementById('detail-comment-input');
+  const text = input.value.trim();
+  if (!text && pendingCommentFiles.length === 0) return;
+  // Raw fetch instead of api(): that helper always sends Content-Type:
+  // application/json, which would break the multipart boundary FormData
+  // needs for the attached files.
+  const form = new FormData();
+  form.append('text', text);
+  pendingCommentFiles.forEach(f => form.append('files', f));
+  try {
+    const resp = await fetch(`/api/forderung/records/${encodeURIComponent(id)}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (resp.status === 401) { doLogout(); throw new Error('Unauthorized'); }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'Fehler beim Kommentieren.');
+    pendingCommentFiles = [];
+    renderDetailModal(data.record);
+  } catch (e) {
+    showMessage(e.message || 'Fehler beim Kommentieren.', 'error');
+  }
+}
+
+function refreshCurrentView() {
+  const active = document.querySelector('#sidebar .nav-item.active');
+  const view = active ? active.dataset.view : 'meine';
+  if (view === 'dashboard') loadDashboard();
+  if (view === 'meine') loadMeineForderungen();
+  if (view === 'alle') loadAlleForderungen();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Zuweisen (Regeln) — condition/action automation. `ruleForm` only drives
+// what gets RENDERED (row structure, which options are pre-selected); the
+// actual values submitted on save are always read straight from the DOM
+// (see saveRuleForm) so a text input never loses what the user typed
+// because some other control's onchange triggered a re-render.
+// ═══════════════════════════════════════════════════════════════════════
+const RULE_OPERATOR_LABELS = {
+  eq: 'ist gleich', neq: 'ist ungleich', contains: 'enthält',
+  empty: 'ist leer', not_empty: 'ist nicht leer',
+  gt: 'größer als', lt: 'kleiner als', gte: 'größer/gleich', lte: 'kleiner/gleich',
+};
+const TEXT_RULE_OPERATORS = ['eq', 'neq', 'contains', 'empty', 'not_empty'];
+const NUMERIC_RULE_OPERATORS = ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'empty', 'not_empty'];
+function operatorsFor(field) { return NUMERIC_RULE_FIELDS.has(field) ? NUMERIC_RULE_OPERATORS : TEXT_RULE_OPERATORS; }
+
+let allRules = [];
+let ruleForm = null; // { id: null|string, name, mode, conditions: [{field,operator,value}], actionType, assignedLeitungId, kanbanStatus }
+
+async function loadRules() {
+  ruleForm = null;
+  const el = document.getElementById('rules-content');
+  el.innerHTML = '<p class="muted">Lade…</p>';
+  try {
+    allRules = await api('/api/forderung/rules');
+    renderRulesView();
+  } catch (e) {
+    el.innerHTML = `<p class="msg msg-error">${escapeHtml(e.message || 'Fehler beim Laden.')}</p>`;
+  }
+}
+
+function assigneeName(id) {
+  if (!id) return null;
+  const u = leitungen.find(l => l.id === id);
+  return u ? u.name : null;
+}
+
+function ruleConditionText(c) {
+  const label = SOURCE_FIELD_LABELS[c.field] || c.field;
+  const op = RULE_OPERATOR_LABELS[c.operator] || c.operator;
+  if (c.operator === 'empty' || c.operator === 'not_empty') return `<code>${escapeHtml(label)}</code> ${op}`;
+  return `<code>${escapeHtml(label)}</code> ${op} <code>${escapeHtml(c.value)}</code>`;
+}
+
+function ruleActionText(rule) {
+  if (rule.action.type === 'assign') {
+    if (!rule.action.assignedLeitungId) return '→ Zuweisung entfernen';
+    const name = assigneeName(rule.action.assignedLeitungId);
+    return `→ zuweisen an <code>${escapeHtml(name || 'unbekannt')}</code>`;
+  }
+  return `→ Status setzen auf <code>${escapeHtml(KANBAN_LABELS[rule.action.kanbanStatus] || rule.action.kanbanStatus)}</code>`;
+}
+
+function renderRulesView() {
+  const el = document.getElementById('rules-content');
+  if (ruleForm) { renderRuleFormInto(el); return; }
+
+  if (allRules.length === 0) {
+    el.innerHTML = '<div class="empty-state">Noch keine Regeln angelegt. Über „+ Neue Regel" starten.</div>';
+    return;
+  }
+  el.innerHTML = `<div class="rule-list">${allRules.map(r => `
+    <div class="rule-card${!r.active ? ' rule-inactive' : ''}">
+      <div class="rule-card-head">
+        <h3>${escapeHtml(r.name)}</h3>
+        <span class="rule-badge-mode ${r.mode}">${r.mode === 'permanent' ? 'Dauerhaft' : 'Einmalig'}</span>
+      </div>
+      <div class="rule-summary">
+        ${r.conditions.map(ruleConditionText).join('<div class="cond-and">und</div>')}
+        <div style="margin-top:6px; font-weight:600; color:var(--gray-800);">${ruleActionText(r)}</div>
+      </div>
+      <div class="rule-meta">
+        Erstellt von ${escapeHtml(r.createdBy)} am ${formatDate(r.createdAt)}${r.lastRunAt ? ` · zuletzt ausgeführt ${formatDate(r.lastRunAt)}: ${r.lastRunMatchCount} Treffer, ${r.lastRunChangedCount} geändert` : ' · noch nie ausgeführt'}
+      </div>
+      <div class="rule-actions">
+        <button class="btn btn-outline btn-sm" onclick="openRuleForm('${escapeHtml(r.id)}')">Bearbeiten</button>
+        ${r.mode === 'permanent' ? `<button class="btn btn-outline btn-sm" onclick="toggleRuleActive('${escapeHtml(r.id)}', ${!r.active})">${r.active ? 'Deaktivieren' : 'Aktivieren'}</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="triggerRuleRun('${escapeHtml(r.id)}')">Jetzt ausführen</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="deleteRule('${escapeHtml(r.id)}')">Löschen</button>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function openRuleForm(ruleId) {
+  const existing = ruleId ? allRules.find(r => r.id === ruleId) : null;
+  ruleForm = existing ? {
+    id: existing.id,
+    conditions: existing.conditions.map(c => ({ ...c })),
+    actionType: existing.action.type,
+    assignedLeitungId: existing.action.assignedLeitungId || '',
+    kanbanStatus: existing.action.kanbanStatus || 'offen',
+  } : {
+    id: null,
+    conditions: [{ field: 'serviceLeiter', operator: 'eq', value: '' }],
+    actionType: 'assign',
+    assignedLeitungId: '',
+    kanbanStatus: 'offen',
+  };
+  renderRulesView();
+}
+
+function closeRuleForm() {
+  ruleForm = null;
+  renderRulesView();
+}
+
+/** Pulls the current on-screen condition-row values back into ruleForm before a re-render, so editing one row never wipes text already typed into another. */
+function syncConditionsFromDom() {
+  const rows = document.querySelectorAll('#rf-conditions .cond-row');
+  if (!ruleForm || rows.length !== ruleForm.conditions.length) return;
+  rows.forEach((row, i) => {
+    const valueInput = row.querySelector('.cond-value');
+    if (valueInput) ruleForm.conditions[i].value = valueInput.value;
+  });
+}
+
+function updateRuleCondition(i, key, value) {
+  syncConditionsFromDom();
+  const c = ruleForm.conditions[i];
+  c[key] = value;
+  if (key === 'field') {
+    const ops = operatorsFor(value);
+    if (!ops.includes(c.operator)) c.operator = ops[0];
+  }
+  renderRuleFormInto(document.getElementById('rules-content'));
+}
+
+function addRuleCondition() {
+  syncConditionsFromDom();
+  ruleForm.conditions.push({ field: 'serviceLeiter', operator: 'eq', value: '' });
+  renderRuleFormInto(document.getElementById('rules-content'));
+}
+
+function removeRuleCondition(i) {
+  if (ruleForm.conditions.length <= 1) return;
+  syncConditionsFromDom();
+  ruleForm.conditions.splice(i, 1);
+  renderRuleFormInto(document.getElementById('rules-content'));
+}
+
+function setRuleActionType(type) {
+  ruleForm.actionType = type;
+  document.getElementById('rf-action-value').innerHTML = actionValueHtml();
+}
+
+function actionValueHtml() {
+  const f = ruleForm;
+  if (f.actionType === 'assign') {
+    return `<select id="rf-assignee">
+      <option value="">— nicht zugewiesen —</option>
+      ${assignableOptions().map(o => `<option value="${o.id}" ${o.id === f.assignedLeitungId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}
+    </select>`;
+  }
+  return `<select id="rf-status">
+    ${KANBAN_ORDER.map(s => `<option value="${s}" ${s === f.kanbanStatus ? 'selected' : ''}>${escapeHtml(KANBAN_LABELS[s])}</option>`).join('')}
+  </select>`;
+}
+
+function conditionRowHtml(c, i) {
+  const ops = operatorsFor(c.field);
+  const showValue = c.operator !== 'empty' && c.operator !== 'not_empty';
+  return `
+    <div class="cond-row">
+      <select class="cond-field" onchange="updateRuleCondition(${i}, 'field', this.value)">
+        ${Object.keys(SOURCE_FIELD_LABELS).map(k => `<option value="${k}" ${c.field === k ? 'selected' : ''}>${escapeHtml(SOURCE_FIELD_LABELS[k])}</option>`).join('')}
+      </select>
+      <select class="cond-operator" onchange="updateRuleCondition(${i}, 'operator', this.value)">
+        ${ops.map(op => `<option value="${op}" ${c.operator === op ? 'selected' : ''}>${escapeHtml(RULE_OPERATOR_LABELS[op])}</option>`).join('')}
+      </select>
+      ${showValue ? `<input class="cond-value" value="${escapeHtml(c.value)}" placeholder="Wert">` : '<div></div>'}
+      <button type="button" class="cond-remove" onclick="removeRuleCondition(${i})" title="Bedingung entfernen">✕</button>
+    </div>
+  `;
+}
+
+function renderRuleFormInto(el) {
+  const f = ruleForm;
+  const existing = f.id ? allRules.find(r => r.id === f.id) : null;
+  el.innerHTML = `
+    <div class="card">
+      <h2>${f.id ? 'Regel bearbeiten' : 'Neue Regel'}</h2>
+      <div class="form-row form-row-2">
+        <div class="form-group">
+          <label>Name</label>
+          <input id="rf-name" value="${escapeHtml(existing ? existing.name : '')}" placeholder="z. B. Auto-Zuweisung Team Nord">
+        </div>
+        <div class="form-group">
+          <label>Modus</label>
+          <select id="rf-mode">
+            <option value="permanent" ${(existing ? existing.mode : 'permanent') === 'permanent' ? 'selected' : ''}>Dauerhaft — läuft bei jedem Import</option>
+            <option value="once" ${(existing ? existing.mode : 'permanent') === 'once' ? 'selected' : ''}>Einmalig — nur manuell per „Jetzt ausführen"</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Bedingungen (alle müssen zutreffen)</label>
+        <div id="rf-conditions">${f.conditions.map((c, i) => conditionRowHtml(c, i)).join('')}</div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="addRuleCondition()">+ Bedingung</button>
+      </div>
+
+      <div class="form-group">
+        <label>Aktion</label>
+        <div class="action-row">
+          <select id="rf-action-type" onchange="setRuleActionType(this.value)">
+            <option value="assign" ${f.actionType === 'assign' ? 'selected' : ''}>Zuweisen an</option>
+            <option value="set_status" ${f.actionType === 'set_status' ? 'selected' : ''}>Status setzen auf</option>
+          </select>
+          <div id="rf-action-value">${actionValueHtml()}</div>
+        </div>
+      </div>
+
+      <div id="rf-error"></div>
+      <div style="margin-top:6px; display:flex; gap:8px;">
+        <button class="btn btn-primary" onclick="saveRuleForm()">Regel speichern</button>
+        <button class="btn btn-outline" onclick="closeRuleForm()">Abbrechen</button>
+      </div>
+    </div>
+  `;
+}
+
+async function saveRuleForm() {
+  const errEl = document.getElementById('rf-error');
+  errEl.innerHTML = '';
+  const name = document.getElementById('rf-name').value.trim();
+  const mode = document.getElementById('rf-mode').value;
+  const rows = [...document.querySelectorAll('#rf-conditions .cond-row')];
+  const conditions = rows.map(row => ({
+    field: row.querySelector('.cond-field').value,
+    operator: row.querySelector('.cond-operator').value,
+    value: row.querySelector('.cond-value') ? row.querySelector('.cond-value').value.trim() : '',
+  }));
+  const actionType = document.getElementById('rf-action-type').value;
+  const action = actionType === 'assign'
+    ? { type: 'assign', assignedLeitungId: document.getElementById('rf-assignee').value || null }
+    : { type: 'set_status', kanbanStatus: document.getElementById('rf-status').value };
+
+  const payload = { name, mode, conditions, action };
+  try {
+    if (ruleForm.id) {
+      await api(`/api/forderung/rules/${encodeURIComponent(ruleForm.id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      showMessage('Regel aktualisiert.', 'success');
+    } else {
+      await api('/api/forderung/rules', { method: 'POST', body: JSON.stringify(payload) });
+      showMessage('Regel angelegt.', 'success');
+    }
+    loadRules();
+  } catch (e) {
+    errEl.innerHTML = `<div class="msg msg-error" style="margin-top:10px;">${escapeHtml(e.message || 'Fehler beim Speichern.')}</div>`;
+  }
+}
+
+async function toggleRuleActive(id, nextActive) {
+  try {
+    await api(`/api/forderung/rules/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ active: nextActive }) });
+    loadRules();
+  } catch (e) {
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+async function deleteRule(id) {
+  if (!confirm('Diese Regel wirklich löschen?')) return;
+  try {
+    await api(`/api/forderung/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    loadRules();
+  } catch (e) {
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+async function triggerRuleRun(id) {
+  const rule = allRules.find(r => r.id === id);
+  const name = rule ? rule.name : '';
+  if (!confirm(`Regel „${name}" jetzt auf alle passenden Forderungen anwenden? Das kann bestehende Zuweisungen oder Status überschreiben.`)) return;
+  try {
+    const result = await api(`/api/forderung/rules/${encodeURIComponent(id)}/run`, { method: 'POST' });
+    showMessage(`${result.matchCount} Treffer, ${result.changedCount} Forderungen geändert.`, 'success');
+    loadRules();
+  } catch (e) {
+    showMessage(e.message || 'Fehler', 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Excel import — column-detection heuristic mirrors /beispiel's
+// js/model.js + js/excelImport.js (SheetJS, two-stage sheet scan so huge
+// unrelated pivot sheets are never fully parsed).
+// ═══════════════════════════════════════════════════════════════════════
+const IMPORT_FIELD_MATCHERS = [
+  { key: 'verkaufsbuero', type: 'text', match: h => h.includes('verkauf') },
+  { key: 'serviceLeiter', type: 'text', match: h => h.includes('service') },
+  { key: 'debitor', type: 'text', match: h => h.includes('debitor') },
+  { key: 'kundentyp', type: 'text', match: h => h.includes('kundentyp') },
+  { key: 'kundenname', type: 'text', match: h => h.includes('kunde') && !h.includes('kundentyp') },
+  { key: 'rechnungsnummer', type: 'text', match: h => h.includes('rechnung') },
+  { key: 'auftragVertrag', type: 'text', match: h => h.includes('auftrag') || h.includes('vertrag') },
+  { key: 'equipment', type: 'text', match: h => h.includes('equipment') },
+  { key: 'text', type: 'text', match: h => h === 'text' },
+  { key: 'reklamationsgrund', type: 'text', match: h => h.includes('reklamation') },
+  { key: 'resolver', type: 'text', match: h => h.includes('resolver') },
+  { key: 'aktionsstatus', type: 'text', match: h => h.includes('aktion') && h.includes('status') },
+  { key: 'faelligeForderung', type: 'number', match: h => h.includes('fallig') },
+  { key: 'altforderungen180', type: 'number', match: h => h.includes('altforder') },
+  { key: 'pwbMonatsende', type: 'number', match: h => h.includes('pwb') },
+];
+
+function normalizeHeader(h) {
+  return String(h || '').trim().toLowerCase()
+    .replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ß/g, 'ss');
+}
+
+function detectFieldMap(headerRow) {
+  const map = {}; // header -> matcher
+  const unresolved = [];
+  for (const header of headerRow) {
+    const norm = normalizeHeader(header);
+    if (!norm) continue;
+    const matcher = IMPORT_FIELD_MATCHERS.find(m => !Object.values(map).some(mm => mm === m) && m.match(norm));
+    if (matcher) map[header] = matcher;
+    else unresolved.push(header);
+  }
+  const qualifies = Object.values(map).some(m => m.key === 'debitor') && Object.values(map).some(m => m.key === 'rechnungsnummer');
+  return { map, unresolved, qualifies };
+}
+
+function parseNumberLoose(raw) {
+  if (typeof raw === 'number') return raw;
+  const s = String(raw ?? '').trim();
+  if (!s) return 0;
+  return parseFloat(s.replace(/\./g, '').replace(',', '.')) || parseFloat(s) || 0;
+}
+
+function readHeaderRow(sheet) {
+  if (!sheet || !sheet['!ref']) return [];
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const headers = [];
+  for (let col = range.s.c; col <= range.e.c; col++) {
+    const addr = XLSX.utils.encode_cell({ r: range.s.r, c: col });
+    const cell = sheet[addr];
+    headers.push(cell ? (cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : '')) : '');
+  }
+  return headers;
+}
+
+function normalizeRow(rawRow, fieldMap) {
+  const out = {};
+  for (const [header, matcher] of Object.entries(fieldMap)) {
+    const raw = rawRow[header];
+    out[matcher.key] = matcher.type === 'number' ? parseNumberLoose(raw) : String(raw ?? '').trim();
+  }
+  return out;
+}
+
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function importExcelFile(file) {
+  if (typeof XLSX === 'undefined') throw new Error('Excel-Bibliothek konnte nicht geladen werden. Internetzugriff prüfen.');
+  const buffer = await readFileAsArrayBuffer(file);
+  const scanWb = XLSX.read(buffer, { type: 'array', sheetRows: 1 });
+  const scanned = scanWb.SheetNames.map(name => {
+    const headerRow = readHeaderRow(scanWb.Sheets[name]);
+    const { map, unresolved, qualifies } = detectFieldMap(headerRow);
+    return { name, map, unresolved, qualifies };
+  });
+  const qualifying = scanned.filter(s => s.qualifies);
+  if (!qualifying.length) {
+    throw new Error(`In keinem Tabellenblatt wurden „Debitor" und „Rechnungsnummer" gemeinsam gefunden (geprüft: ${scanned.map(s => `"${s.name}"`).join(', ')}).`);
+  }
+
+  const wbFull = XLSX.read(buffer, { type: 'array', cellDates: true, sheets: qualifying.map(s => s.name) });
+  const allRows = [];
+  const perSheet = [];
+  for (const s of qualifying) {
+    const sheet = wbFull.Sheets[s.name];
+    const { map } = sheet ? detectFieldMap(readHeaderRow(sheet)) : { map: s.map };
+    const rawRows = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true }) : [];
+    const normalized = rawRows.map(r => normalizeRow(r, map));
+    allRows.push(...normalized);
+    perSheet.push({ name: s.name, rows: rawRows.length, unresolved: s.unresolved });
+  }
+
+  const data = await api('/api/forderung/import', { method: 'POST', body: JSON.stringify({ rows: allRows }) });
+  return { summary: data.summary, sheets: perSheet, ignoredSheets: scanned.filter(s => !s.qualifies).map(s => s.name) };
+}
+
+document.getElementById('import-file').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (file) await runImport(file);
+});
+const importDropzone = document.getElementById('import-dropzone');
+importDropzone.addEventListener('dragover', e => { e.preventDefault(); importDropzone.classList.add('dropzone--over'); });
+importDropzone.addEventListener('dragleave', () => importDropzone.classList.remove('dropzone--over'));
+importDropzone.addEventListener('drop', async e => {
+  e.preventDefault();
+  importDropzone.classList.remove('dropzone--over');
+  const file = e.dataTransfer.files[0];
+  if (file) await runImport(file);
+});
+
+async function runImport(file) {
+  hideEl('import-error');
+  document.getElementById('import-dropzone-text').textContent = `Importiere „${file.name}"…`;
+  document.getElementById('import-result').innerHTML = '';
+  try {
+    const result = await importExcelFile(file);
+    document.getElementById('import-dropzone-text').textContent = 'Excel-Datei hierher ziehen oder klicken zum Auswählen';
+    renderImportResult(result);
+    showMessage('Import abgeschlossen.', 'success');
+    allRecords = [];
+    loadImportLast();
+  } catch (e) {
+    document.getElementById('import-dropzone-text').textContent = 'Excel-Datei hierher ziehen oder klicken zum Auswählen';
+    document.getElementById('import-error').textContent = e.message || 'Import fehlgeschlagen.';
+    showEl('import-error');
+  }
+  document.getElementById('import-file').value = '';
+}
+
+function renderImportResult(result) {
+  const s = result.summary;
+  const el = document.getElementById('import-result');
+  el.innerHTML = `
+    <div class="import-summary-grid">
+      <div class="import-stat"><div class="num">${s.createdCount}</div><div class="lbl">Neu</div></div>
+      <div class="import-stat"><div class="num">${s.updatedCount}</div><div class="lbl">Aktualisiert</div></div>
+      <div class="import-stat"><div class="num">${s.reappearedCount}</div><div class="lbl">Wieder da</div></div>
+      <div class="import-stat"><div class="num">${s.missingCount}</div><div class="lbl">Fehlen jetzt</div></div>
+      <div class="import-stat"><div class="num">${s.skippedCount}</div><div class="lbl">Übersprungen</div></div>
+      <div class="import-stat"><div class="num">${s.rulesAppliedCount}</div><div class="lbl">Durch Regeln geändert</div></div>
+    </div>
+    <p class="muted">Blätter: ${result.sheets.map(sh => `„${escapeHtml(sh.name)}" (${sh.rows} Zeilen${sh.unresolved.length ? `, unbekannte Spalten: ${sh.unresolved.map(escapeHtml).join(', ')}` : ''})`).join(' · ') || '–'}</p>
+    ${result.ignoredSheets.length ? `<p class="muted">Ignorierte Blätter (keine Debitor/Rechnungsnummer-Spalten): ${result.ignoredSheets.map(escapeHtml).join(', ')}</p>` : ''}
+  `;
+}
+
+async function loadImportLast() {
+  const el = document.getElementById('import-last-info');
+  try {
+    const info = await api('/api/forderung/import/last');
+    if (!info.at) { el.innerHTML = '<p class="muted">Noch kein Import durchgeführt.</p>'; return; }
+    const s = info.summary;
+    el.innerHTML = `<p class="muted">${formatDate(info.at)} — ${s.createdCount} neu, ${s.updatedCount} aktualisiert, ${s.reappearedCount} wieder da, ${s.missingCount} fehlen aktuell, ${s.skippedCount} übersprungen.</p>`;
+  } catch {
+    el.innerHTML = '<p class="muted">Fehler beim Laden.</p>';
+  }
+}
+</script>
+</body>
+</html>

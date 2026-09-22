@@ -15,12 +15,10 @@ import { currentOrgId } from './orgContext.js';
 import { orgDataDir } from './db.js';
 import { listAdminUsers } from './adminAuth.js';
 import type { Board, BoardComment, BoardSection, BoardSubtask, BoardTask, BoardVisibility } from '../src/types.js';
+import { AttachmentMeta, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENTS_PER_COMMENT, isAllowedAttachmentType, sanitizeFilename } from './attachments.js';
 
-export interface AttachmentMeta {
-  filename: string;
-  mimeType: string;
-  size: number;
-}
+export type { AttachmentMeta };
+export { MAX_ATTACHMENT_SIZE, MAX_ATTACHMENTS_PER_COMMENT, isAllowedAttachmentType };
 
 interface BoardsData {
   boards: Board[];
@@ -332,17 +330,6 @@ export function deleteSubtask(boardId: string, taskId: string, subtaskId: string
 }
 
 // ── Comments & attachments ───────────────────────────────────────────────
-
-const ALLOWED_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf']);
-export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024; // 10MB
-export const MAX_ATTACHMENTS_PER_COMMENT = 5;
-export function isAllowedAttachmentType(mime: string): boolean {
-  return ALLOWED_ATTACHMENT_TYPES.has(mime);
-}
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'datei';
-}
 
 export function addComment(
   boardId: string,

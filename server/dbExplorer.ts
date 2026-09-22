@@ -36,6 +36,7 @@ import { deleteAdminUser } from './adminAuth.js';
 import { deleteVacation } from './adminVacations.js';
 import { deletePlatformUser } from './platformAuth.js';
 import { attachmentFilePath } from './boards.js';
+import { listRecords as listForderungRecords, deleteRecordRow as deleteForderungRecord } from './forderungen.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -270,6 +271,15 @@ export const DB_SCHEMA: DbCollectionMeta[] = [
     relations: [{ field: 'id', target: 'organizations' }],
     deletable: false,
   },
+  {
+    id: 'forderungen',
+    label: 'Forderungen',
+    scope: 'org',
+    source: 'data/orgs/<org>/forderungen.json → records',
+    description: 'Forderungen-Tool (forderung.schichtapp.de): Debitoren-/Rechnungs-Reklamationen, ihr Kanban-Status, Zuweisung, Kommentare und Verlauf.',
+    relations: [{ field: 'assignedLeitungId', target: 'adminUsers' }],
+    deletable: true,
+  },
 ];
 
 export function getCollectionMeta(id: string): DbCollectionMeta | null {
@@ -443,6 +453,10 @@ function rowsBoardAttachments(orgId: string): any[] {
   return Object.entries(data.attachments || {}).map(([id, meta]: [string, any]) => ({ id, ...meta }));
 }
 
+function rowsForderungen(orgId: string): any[] {
+  return listForderungRecords(orgId);
+}
+
 // ─── Row deletion (one function per org-scoped collection that isn't ─────
 // already covered by an existing business-logic delete function) ─────────
 
@@ -555,6 +569,7 @@ const ORG_DELETERS: Record<string, (orgId: string, id: string) => boolean> = {
   boards: deleteBoardRow,
   boardTasks: deleteBoardTaskRow,
   boardAttachments: deleteBoardAttachmentRow,
+  forderungen: (orgId, id) => deleteForderungRecord(orgId, id),
 };
 
 /**
@@ -603,6 +618,7 @@ const ORG_READERS: Record<string, (orgId: string) => any[]> = {
   boardTasks: rowsBoardTasks,
   boardAttachments: rowsBoardAttachments,
   orgSettings: rowsOrgSettings,
+  forderungen: rowsForderungen,
 };
 
 const PLATFORM_READERS: Record<string, () => any[]> = {
